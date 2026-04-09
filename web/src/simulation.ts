@@ -13,6 +13,7 @@ import {
 } from "./tax.js";
 
 export type SimulationPercentile = 5 | 10 | 25 | 50 | 75 | 90;
+export const VARIABLE_SWEEP_STEP_COUNT = 10;
 
 export interface SimulationAssetInput {
   name: string;
@@ -219,6 +220,25 @@ export function randomStandardNormal(): number {
   }
 
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+export function buildVariableSweepValues(
+  minValue: number,
+  maxValue: number,
+  stepCount: number = VARIABLE_SWEEP_STEP_COUNT
+): number[] {
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
+    throw new Error("Variable sweep bounds must be finite.");
+  }
+
+  if (!Number.isInteger(stepCount) || stepCount < 2) {
+    throw new Error("Variable sweep step count must be an integer greater than 1.");
+  }
+
+  return Array.from({ length: stepCount }, (_, index) => {
+    const ratio = index / (stepCount - 1);
+    return minValue + (maxValue - minValue) * ratio;
+  });
 }
 
 export function createCorrelatedNormals(

@@ -589,6 +589,63 @@ label {
   width: min(100%, 240px);
 }
 
+.checkbox-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.simulation-sweep-config,
+.simulation-sweep-results {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(45, 31, 22, 0.08);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.simulation-sweep-fields {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: end;
+}
+
+.simulation-sweep-results-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.simulation-sweep-slider-field {
+  display: grid;
+  gap: 8px;
+}
+
+.simulation-sweep-slider-field input[type="range"] {
+  width: 100%;
+}
+
+.simulation-sweep-slider-values {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  color: var(--muted);
+}
+
+.simulation-sweep-slider-values strong {
+  justify-self: center;
+  color: var(--ink);
+}
+
+.simulation-sweep-slider-values span:last-child {
+  justify-self: end;
+}
+
 .simulation-input-table input[type="number"] {
   min-width: 8rem;
 }
@@ -1079,10 +1136,12 @@ label {
   }
 
   .split-fields,
+  .simulation-sweep-slider-values,
   .workspace-item-header,
   .workspace-item-stats,
   .asset-metrics,
   .simulation-chart-header,
+  .simulation-sweep-results-header,
   .event-buttons,
   .event-entry-header,
   .action-header,

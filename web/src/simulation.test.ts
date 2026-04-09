@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildVariableSweepValues,
   buildSimulationDetails,
   buildSimulationScenarios,
   selectRepresentativeSimulationScenario,
@@ -40,6 +41,10 @@ function oneYearFromAnnualReturn(returnRate: number): number {
 }
 
 describe("buildSimulationScenarios", () => {
+  it("builds 10 inclusive variable sweep values by default", () => {
+    expect(buildVariableSweepValues(100, 190)).toEqual([100, 110, 120, 130, 140, 150, 160, 170, 180, 190]);
+  });
+
   it("selects percentile scenarios from a single simulation run", () => {
     const scenarios = buildSimulationScenarios({
       attempts: 20,

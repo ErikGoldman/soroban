@@ -142,6 +142,12 @@ export interface SavedPlannerState {
   startYear: string;
   yearsToShow: number;
   simulationHorizonYears?: number;
+  simulationVariableSweep?: {
+    enabled?: boolean;
+    variableName?: string;
+    minValue?: number;
+    maxValue?: number;
+  };
   updatedAt: string;
 }
 
@@ -297,6 +303,7 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
     startYear,
     yearsToShow,
     simulationHorizonYears,
+    simulationVariableSweep,
   }: Omit<SavedPlannerState, "updatedAt">): Promise<SavedPlannerState> {
     const record: SavedPlannerState = {
       userId,
@@ -311,6 +318,7 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
       startYear,
       yearsToShow,
       simulationHorizonYears,
+      simulationVariableSweep,
       updatedAt: new Date().toISOString(),
     };
 

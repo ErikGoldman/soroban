@@ -2,6 +2,8 @@ import { formatCurrency } from "./calculator.js";
 import { StubAuthService, type UserIdentity } from "./auth.js";
 import { createPlanningStorage, type SavedPlannerState } from "./storage.js";
 import {
+  VARIABLE_SWEEP_STEP_COUNT,
+  buildVariableSweepValues,
   buildSimulationScenariosFromDetails,
   getAssetCorrelationValue,
   selectRepresentativeSimulationScenario,
@@ -211,19 +213,54 @@ interface SimulationAssetDraft extends AssetDraft {
   sellProportion: string;
 }
 
+interface VariableSweepDraft {
+  enabled: boolean;
+  variableName: string;
+  minValue: string;
+  maxValue: string;
+}
+
 interface SimulationDraft {
   startYear: string;
   attempts: number;
   horizonYears: number;
   taxPreset: TaxPreset;
   assetRows: SimulationAssetDraft[];
+  variableSweep: VariableSweepDraft;
 }
 
 interface SimulationRunState {
   completedAttempts: number;
   totalAttempts: number;
   workerCount: number;
+  completedSweepSteps: number;
+  totalSweepSteps: number;
   errorMessage: string | null;
+}
+
+interface SimulationSweepStepResult {
+  index: number;
+  value: number;
+  results: Map<SimulationPercentile, SimulationScenario>;
+  details: SimulationDetailScenario[];
+}
+
+interface SimulationSweepResult {
+  variableName: string;
+  steps: SimulationSweepStepResult[];
+}
+
+interface SimulationVariableOverride {
+  variableName: string;
+  value: number;
+}
+
+interface SimulationTaskDefinition {
+  id: number;
+  sweepIndex: number;
+  chunkIndex: number;
+  attemptCount: number;
+  input: SimulationWorkerRunInput;
 }
 
 interface FormulaValidationResult {
@@ -244,6 +281,9 @@ interface FormulaEditorBinding {
 type SummaryTab = "variables" | "assets" | "taxes";
 type PlannerBoardTab = "setup" | "simulation";
 type TaxPreset = "nyc";
+const VARIABLE_SWEEP_STORAGE_KEY_PREFIX = "soroban:simulation-variable-sweep:";
+// When true, each active worker is assigned a distinct sweep value before any sweep is split into chunks.
+const ENABLE_VARIABLE_SWEEP_WORKER_FANOUT = true;
 
 const auth = new StubAuthService();
 const storage = createPlanningStorage();
@@ -255,6 +295,10 @@ function requireElement<T extends Element>(element: T | null, selector: string):
   }
 
   return element;
+}
+
+function getVariableSweepStorageKey(userId: string): string {
+  return `${VARIABLE_SWEEP_STORAGE_KEY_PREFIX}${userId}`;
 }
 
 const mountedAppRoot = requireElement(appRoot, "#app");
@@ -306,6 +350,8 @@ let activeInlineAssetValueEditName: string | null = null;
 let selectedSimulationPercentile: SimulationPercentile = 50;
 let simulationResults: Map<SimulationPercentile, SimulationScenario> | null = null;
 let simulationDetailResults: SimulationDetailScenario[] | null = null;
+let simulationSweepResults: SimulationSweepResult | null = null;
+let selectedSimulationSweepStepIndex = 0;
 let expandedSimulationExampleKeys = new Set<string>();
 let simulationRunState: SimulationRunState | null = null;
 let activeSimulationWorkers: Worker[] = [];
@@ -369,6 +415,12 @@ function createSimulationDraft(): SimulationDraft {
     horizonYears: 10,
     taxPreset: "nyc",
     assetRows: [],
+    variableSweep: {
+      enabled: false,
+      variableName: "",
+      minValue: "0",
+      maxValue: "0",
+    },
   };
 }
 
@@ -924,16 +976,28 @@ function addAmountToHouseholdTaxInput(
   }
 }
 
-function buildSnapshots(startYearInput: string, yearsToShow: number): YearlySnapshot[] {
+function buildSnapshotsFromPlannerData({
+  startYearInput,
+  yearsToShow,
+  variables: variableDefinitions,
+  flows: flowDefinitions,
+  events,
+}: {
+  startYearInput: string;
+  yearsToShow: number;
+  variables: readonly VariableDefinition[];
+  flows: readonly FlowDefinition[];
+  events: readonly Event[];
+}): YearlySnapshot[] {
   const startYear = parseYearInput(normalizeYearInput(startYearInput));
   const snapshots: YearlySnapshot[] = [];
 
   for (let offset = 0; offset < yearsToShow; offset += 1) {
-    const variables = cloneVariables(plannerState.variables);
-    const flows = cloneFlows(plannerState.flows);
+    const variables = cloneVariables(variableDefinitions);
+    const flows = cloneFlows(flowDefinitions);
 
     for (let step = 0; step <= offset; step += 1) {
-      applyEventsForYear(plannerState.events, addYears(startYear, step), { variables, flows });
+      applyEventsForYear(events, addYears(startYear, step), { variables, flows });
     }
 
     const currentYear = addYears(startYear, offset);
@@ -969,6 +1033,16 @@ function buildSnapshots(startYearInput: string, yearsToShow: number): YearlySnap
   return snapshots;
 }
 
+function buildSnapshots(startYearInput: string, yearsToShow: number): YearlySnapshot[] {
+  return buildSnapshotsFromPlannerData({
+    startYearInput,
+    yearsToShow,
+    variables: plannerState.variables,
+    flows: plannerState.flows,
+    events: plannerState.events,
+  });
+}
+
 function buildExpenseRows(startYearInput: string): Array<{ flow: FlowDefinition; yearlyAmount: number }> {
   const firstSnapshot = buildSnapshots(startYearInput, 1)[0];
   if (!firstSnapshot) {
@@ -1000,11 +1074,188 @@ function syncSimulationDraftAssetRows(): void {
   }
 }
 
+function syncSimulationVariableSweepDraft(): void {
+  const variables = plannerState.variables;
+  const selectedVariable =
+    variables.find((variable) => variable.name === simulationDraft.variableSweep.variableName) ?? variables[0] ?? null;
+
+  if (!selectedVariable) {
+    simulationDraft.variableSweep.enabled = false;
+    simulationDraft.variableSweep.variableName = "";
+    simulationDraft.variableSweep.minValue = "0";
+    simulationDraft.variableSweep.maxValue = "0";
+    return;
+  }
+
+  simulationDraft.variableSweep.variableName = selectedVariable.name;
+
+  if (!Number.isFinite(parseEditableNumber(simulationDraft.variableSweep.minValue))) {
+    simulationDraft.variableSweep.minValue = formatEditableNumber(selectedVariable.value);
+  }
+
+  if (!Number.isFinite(parseEditableNumber(simulationDraft.variableSweep.maxValue))) {
+    simulationDraft.variableSweep.maxValue = formatEditableNumber(selectedVariable.value);
+  }
+}
+
 function clearSimulationOutputs(): void {
   simulationResults = null;
   simulationDetailResults = null;
+  simulationSweepResults = null;
+  selectedSimulationSweepStepIndex = 0;
   selectedSimulationPercentile = 50;
   expandedSimulationExampleKeys = new Set();
+}
+
+function buildSimulationVariableDefinitions(
+  variableOverride?: SimulationVariableOverride
+): VariableDefinition[] {
+  if (!variableOverride) {
+    return [...plannerState.variables];
+  }
+
+  let matchedVariable = false;
+  const variables = plannerState.variables.map((variable) => {
+    if (variable.name !== variableOverride.variableName) {
+      return variable;
+    }
+
+    matchedVariable = true;
+    return {
+      ...variable,
+      value: variableOverride.value,
+    };
+  });
+
+  if (!matchedVariable) {
+    throw new Error(`Unknown variable "${variableOverride.variableName}".`);
+  }
+
+  return variables;
+}
+
+function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverride): SimulationWorkerRunInput {
+  const selectedTaxPreset = getSimulationTaxPresetDefinition(
+    simulationDraft.taxPreset,
+    plannerState.taxProfile.filingStatus
+  );
+  const yearlySnapshots = buildSnapshotsFromPlannerData({
+    startYearInput: simulationDraft.startYear,
+    yearsToShow: simulationDraft.horizonYears,
+    variables: buildSimulationVariableDefinitions(variableOverride),
+    flows: plannerState.flows,
+    events: plannerState.events,
+  }).map((snapshot) => ({
+    label: snapshot.label,
+    netAmount: snapshot.netAmount,
+    totalExpenses: snapshot.totalExpenses,
+    flowAmounts: new Map(snapshot.flowAmounts),
+    householdTaxInput: { ...snapshot.householdTaxInput },
+  }));
+
+  return {
+    attempts: simulationDraft.attempts,
+    horizonYears: simulationDraft.horizonYears,
+    yearlySnapshots,
+    assets: simulationDraft.assetRows.map((asset) => ({
+      name: asset.name,
+      startingValue: Number(asset.startingValue),
+      expectedReturn: Number(asset.expectedReturn),
+      volatility: Number(asset.volatility),
+      sellProportion: Number(asset.sellProportion) / 100,
+      ...(asset.cashGenerationEnabled
+        ? {
+            cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
+              name: cashGeneration.name.trim(),
+              rate: Number(cashGeneration.rate),
+              volatility: Number(cashGeneration.volatility),
+              taxTreatment: cashGeneration.taxTreatment,
+            })),
+          }
+        : {}),
+      ...(asset.saleTaxEnabled
+        ? {
+            saleTax: {
+              costBasis: Number(asset.saleTaxCostBasis),
+              taxTreatment: asset.saleTaxTreatment,
+            },
+          }
+        : {}),
+    })),
+    taxes: selectedTaxPreset.taxes,
+    householdTaxProfile: selectedTaxPreset.householdTaxProfile,
+    assetCorrelations: plannerState.assetCorrelations,
+  };
+}
+
+function getSimulationSweepVariableValues(): number[] {
+  if (!simulationDraft.variableSweep.enabled) {
+    return [];
+  }
+
+  return buildVariableSweepValues(
+    parseEditableNumber(simulationDraft.variableSweep.minValue),
+    parseEditableNumber(simulationDraft.variableSweep.maxValue)
+  );
+}
+
+function findNearestSweepStepIndex(values: readonly number[], targetValue: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  let closestIndex = 0;
+  let closestDistance = Math.abs(values[0] - targetValue);
+  for (let index = 1; index < values.length; index += 1) {
+    const distance = Math.abs(values[index] - targetValue);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = index;
+    }
+  }
+
+  return closestIndex;
+}
+
+function persistVariableSweepDraftToLocalStorage(userId: string): void {
+  try {
+    window.localStorage.setItem(
+      getVariableSweepStorageKey(userId),
+      JSON.stringify({
+        enabled: simulationDraft.variableSweep.enabled,
+        variableName: simulationDraft.variableSweep.variableName,
+        minValue: simulationDraft.variableSweep.minValue,
+        maxValue: simulationDraft.variableSweep.maxValue,
+      })
+    );
+  } catch {
+    // Ignore storage write failures and fall back to IndexedDB persistence.
+  }
+}
+
+function applyVariableSweepDraftFromLocalStorage(userId: string): void {
+  try {
+    const rawValue = window.localStorage.getItem(getVariableSweepStorageKey(userId));
+    if (!rawValue) {
+      return;
+    }
+
+    const parsedValue = JSON.parse(rawValue) as Partial<VariableSweepDraft>;
+    if (typeof parsedValue.enabled === "boolean") {
+      simulationDraft.variableSweep.enabled = parsedValue.enabled;
+    }
+    if (typeof parsedValue.variableName === "string") {
+      simulationDraft.variableSweep.variableName = parsedValue.variableName;
+    }
+    if (typeof parsedValue.minValue === "string") {
+      simulationDraft.variableSweep.minValue = parsedValue.minValue;
+    }
+    if (typeof parsedValue.maxValue === "string") {
+      simulationDraft.variableSweep.maxValue = parsedValue.maxValue;
+    }
+  } catch {
+    // Ignore storage read failures and continue with IndexedDB-backed state.
+  }
 }
 
 function cancelActiveSimulationRun(): void {
@@ -1423,6 +1674,7 @@ function getSimulationTaxPresetDefinition(
 
 function renderPlanner(user: UserIdentity): void {
   syncSimulationDraftAssetRows();
+  syncSimulationVariableSweepDraft();
   const expenseRows = buildExpenseRows(simulationDraft.startYear);
 
   mountedAppRoot.innerHTML = `
@@ -1677,21 +1929,60 @@ function renderExpenseTaxTreatmentOptions(selectedValue: FlowTaxTreatment): stri
     .join("");
 }
 
-function getSimulationSellProportionState(): { disabled: boolean; reason: string } {
+function getSimulationSubmitState(): { disabled: boolean; reason: string } {
   const sellProportionTotal = simulationDraft.assetRows.reduce(
     (total, asset) => total + (Number(asset.sellProportion) || 0),
     0
   );
-  const reason =
-    simulationDraft.assetRows.length === 0
-      ? "Create at least one asset to run a simulation."
-      : Math.abs(sellProportionTotal - 100) > 0.000001
-        ? `Sell proportions must add up to 100%. Current total: ${sellProportionTotal.toFixed(2)}%.`
-        : "";
+  if (simulationDraft.assetRows.length === 0) {
+    return {
+      disabled: true,
+      reason: "Create at least one asset to run a simulation.",
+    };
+  }
+
+  if (Math.abs(sellProportionTotal - 100) > 0.000001) {
+    return {
+      disabled: true,
+      reason: `Sell proportions must add up to 100%. Current total: ${sellProportionTotal.toFixed(2)}%.`,
+    };
+  }
+
+  if (simulationDraft.variableSweep.enabled) {
+    if (plannerState.variables.length === 0) {
+      return {
+        disabled: true,
+        reason: "Create at least one variable before running a variable sweep.",
+      };
+    }
+
+    if (!plannerState.variables.some((variable) => variable.name === simulationDraft.variableSweep.variableName)) {
+      return {
+        disabled: true,
+        reason: "Choose a valid variable to sweep.",
+      };
+    }
+
+    const minValue = parseEditableNumber(simulationDraft.variableSweep.minValue);
+    const maxValue = parseEditableNumber(simulationDraft.variableSweep.maxValue);
+    if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
+      return {
+        disabled: true,
+        reason: "Variable sweep min and max values must be finite numbers.",
+      };
+    }
+
+    if (maxValue < minValue) {
+      return {
+        disabled: true,
+        reason: "Variable sweep max must be greater than or equal to min.",
+      };
+    }
+  }
 
   return {
-    disabled: reason.length > 0,
-    reason,
+    disabled: false,
+    reason: "",
   };
 }
 
@@ -2199,18 +2490,99 @@ function renderSimulationChart(results: Map<SimulationPercentile, SimulationScen
   `;
 }
 
+function getSelectedSimulationSweepStep(): SimulationSweepStepResult | null {
+  if (!simulationSweepResults) {
+    return null;
+  }
+
+  return (
+    simulationSweepResults.steps[selectedSimulationSweepStepIndex] ?? simulationSweepResults.steps[0] ?? null
+  );
+}
+
+function getDisplayedSimulationResults(): Map<SimulationPercentile, SimulationScenario> | null {
+  return getSelectedSimulationSweepStep()?.results ?? simulationResults;
+}
+
+function getDisplayedSimulationDetailResults(): SimulationDetailScenario[] | null {
+  return getSelectedSimulationSweepStep()?.details ?? simulationDetailResults;
+}
+
+function renderSimulationSweepResults(): string {
+  if (!simulationSweepResults) {
+    return "";
+  }
+
+  const selectedStep = getSelectedSimulationSweepStep();
+  if (!selectedStep) {
+    return "";
+  }
+
+  const minimumValue = simulationSweepResults.steps[0]?.value ?? selectedStep.value;
+  const maximumValue =
+    simulationSweepResults.steps[simulationSweepResults.steps.length - 1]?.value ?? selectedStep.value;
+
+  return `
+    <section class="simulation-sweep-results">
+      <div class="simulation-sweep-results-header">
+        <div>
+          <strong>Variable sweep</strong>
+          <p class="helper-copy">
+            Viewing ${escapeHtml(simulationSweepResults.variableName)} at ${escapeHtml(formatEditableNumber(selectedStep.value))}.
+            Sweep range: ${escapeHtml(formatEditableNumber(minimumValue))} to ${escapeHtml(formatEditableNumber(maximumValue))}
+            across ${simulationSweepResults.steps.length} runs.
+          </p>
+        </div>
+        <span class="pill">
+          ${selectedStep.index + 1} / ${simulationSweepResults.steps.length}
+        </span>
+      </div>
+      <label class="simulation-sweep-slider-field" for="simulation-sweep-step">
+        Sweep position
+        <input
+          id="simulation-sweep-step"
+          name="simulationSweepStep"
+          type="range"
+          min="0"
+          max="${simulationSweepResults.steps.length - 1}"
+          step="1"
+          value="${selectedStep.index}"
+        />
+      </label>
+      <div class="simulation-sweep-slider-values" aria-hidden="true">
+        <span>${escapeHtml(formatEditableNumber(minimumValue))}</span>
+        <strong>${escapeHtml(formatEditableNumber(selectedStep.value))}</strong>
+        <span>${escapeHtml(formatEditableNumber(maximumValue))}</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSimulationBoard(): string {
-  const selectedScenario = simulationResults?.get(selectedSimulationPercentile) ?? null;
+  const displayedSimulationResults = getDisplayedSimulationResults();
+  const displayedSimulationDetails = getDisplayedSimulationDetailResults();
+  const selectedScenario = displayedSimulationResults?.get(selectedSimulationPercentile) ?? null;
   const selectedDetailScenario =
-    selectedScenario && simulationDetailResults
-      ? selectRepresentativeSimulationScenario(simulationDetailResults, selectedScenario.rows)
+    selectedScenario && displayedSimulationDetails
+      ? selectRepresentativeSimulationScenario(displayedSimulationDetails, selectedScenario.rows)
       : null;
   const rows = selectedScenario?.rows ?? [];
-  const simulationSellProportionState = getSimulationSellProportionState();
+  const simulationSubmitState = getSimulationSubmitState();
   const isSimulationRunning = simulationRunState !== null && simulationRunState.errorMessage === null;
   const simulationProgressPercent = simulationRunState
     ? Math.max(0, Math.min(100, (simulationRunState.completedAttempts / Math.max(1, simulationRunState.totalAttempts)) * 100))
     : 0;
+  const sweepVariableOptions = plannerState.variables
+    .map(
+      (variable) => `
+        <option value="${escapeAttribute(variable.name)}" ${
+          simulationDraft.variableSweep.variableName === variable.name ? "selected" : ""
+        }>
+          ${escapeHtml(variable.name)}
+        </option>
+      `
+    )
+    .join("");
 
   return `
     <div class="simulation-panel">
@@ -2230,6 +2602,53 @@ function renderSimulationBoard(): string {
             <span class="summary-meta">${simulationDraft.attempts.toLocaleString("en-US")} attempts</span>
           </label>
         </div>
+
+        <section class="simulation-sweep-config">
+          <label class="checkbox-field">
+            <input
+              name="simulationVariableSweepEnabled"
+              type="checkbox"
+              ${simulationDraft.variableSweep.enabled ? "checked" : ""}
+              ${plannerState.variables.length === 0 ? "disabled" : ""}
+            />
+            <span>Enable variable sweep</span>
+          </label>
+          ${
+            plannerState.variables.length === 0
+              ? `<p class="helper-copy">Create a variable in Setup before using a sweep.</p>`
+              : simulationDraft.variableSweep.enabled
+                ? `
+          <p class="helper-copy">Run ${VARIABLE_SWEEP_STEP_COUNT} simulations with one variable interpolated from min to max.</p>
+          <div class="simulation-sweep-fields">
+            <label>
+              Variable
+              <select name="simulationVariableSweepVariableName">
+                ${sweepVariableOptions}
+              </select>
+            </label>
+            <label>
+              Min value
+              <input
+                name="simulationVariableSweepMinValue"
+                type="number"
+                step="any"
+                value="${escapeHtml(simulationDraft.variableSweep.minValue)}"
+              />
+            </label>
+            <label>
+              Max value
+              <input
+                name="simulationVariableSweepMaxValue"
+                type="number"
+                step="any"
+                value="${escapeHtml(simulationDraft.variableSweep.maxValue)}"
+              />
+            </label>
+          </div>
+                `
+                : ""
+          }
+        </section>
 
         ${
           simulationDraft.assetRows.length === 0
@@ -2291,15 +2710,15 @@ function renderSimulationBoard(): string {
               ${
                 simulationRunState.errorMessage
                   ? escapeHtml(simulationRunState.errorMessage)
-                  : `${simulationRunState.completedAttempts.toLocaleString("en-US")} of ${simulationRunState.totalAttempts.toLocaleString("en-US")} attempts across ${simulationRunState.workerCount.toLocaleString("en-US")} worker${simulationRunState.workerCount === 1 ? "" : "s"}`
+                  : `${simulationRunState.totalSweepSteps > 1 ? `${simulationRunState.completedSweepSteps.toLocaleString("en-US")} of ${simulationRunState.totalSweepSteps.toLocaleString("en-US")} sweep values complete. ` : ""}${simulationRunState.completedAttempts.toLocaleString("en-US")} of ${simulationRunState.totalAttempts.toLocaleString("en-US")} attempts across ${simulationRunState.workerCount.toLocaleString("en-US")} worker${simulationRunState.workerCount === 1 ? "" : "s"}`
               }
             </span>
           </div>
               `
               : ""
           }
-          <span id="simulation-submit-wrapper" title="${escapeAttribute(simulationSellProportionState.reason)}">
-            <button id="simulation-submit-button" type="submit" ${simulationSellProportionState.disabled || isSimulationRunning ? "disabled" : ""}>
+          <span id="simulation-submit-wrapper" title="${escapeAttribute(simulationSubmitState.reason)}">
+            <button id="simulation-submit-button" type="submit" ${simulationSubmitState.disabled || isSimulationRunning ? "disabled" : ""}>
               ${isSimulationRunning ? "Simulating..." : "Simulate"}
             </button>
           </span>
@@ -2309,7 +2728,8 @@ function renderSimulationBoard(): string {
       ${
         selectedScenario
           ? `
-      ${renderSimulationChart(simulationResults!)}
+      ${renderSimulationSweepResults()}
+      ${renderSimulationChart(displayedSimulationResults!)}
       <div class="tab-strip" role="tablist" aria-label="Simulation percentiles">
         ${simulationPercentiles
           .map(
@@ -2405,7 +2825,7 @@ function syncSimulationSubmitState(): void {
     return;
   }
 
-  const state = getSimulationSellProportionState();
+  const state = getSimulationSubmitState();
   submitButton.disabled = state.disabled;
   submitWrapper.title = state.reason;
 }
@@ -3329,79 +3749,113 @@ function bindHandlers(user: UserIdentity): void {
       return;
     } else if (target.name === "simulationTaxPreset") {
       simulationDraft.taxPreset = target.value as TaxPreset;
+    } else if (target.name === "simulationVariableSweepEnabled" && target instanceof HTMLInputElement) {
+      simulationDraft.variableSweep.enabled = target.checked;
+      if (target.checked) {
+        syncSimulationVariableSweepDraft();
+      }
+      invalidateSimulationState();
+      renderPlanner(user);
+      void persistPlannerState(user);
+      return;
+    } else if (target.name === "simulationVariableSweepVariableName") {
+      simulationDraft.variableSweep.variableName = target.value;
+    } else if (target.name === "simulationVariableSweepMinValue") {
+      simulationDraft.variableSweep.minValue = target.value;
+    } else if (target.name === "simulationVariableSweepMaxValue") {
+      simulationDraft.variableSweep.maxValue = target.value;
     }
 
     invalidateSimulationState();
+    syncSimulationSubmitState();
     void persistPlannerState(user);
   });
 
   simulationForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitState = getSimulationSubmitState();
+    if (submitState.disabled) {
+      syncSimulationSubmitState();
+      return;
+    }
+
     await persistPlannerState(user);
-    const selectedTaxPreset = getSimulationTaxPresetDefinition(
-      simulationDraft.taxPreset,
-      plannerState.taxProfile.filingStatus
-    );
-    const yearlySnapshots = buildSnapshots(simulationDraft.startYear, simulationDraft.horizonYears).map(
-      (snapshot) => ({
-        label: snapshot.label,
-        netAmount: snapshot.netAmount,
-        totalExpenses: snapshot.totalExpenses,
-        flowAmounts: new Map(snapshot.flowAmounts),
-        householdTaxInput: { ...snapshot.householdTaxInput },
-      })
-    );
-    const simulationInput: SimulationWorkerRunInput = {
-      attempts: simulationDraft.attempts,
-      horizonYears: simulationDraft.horizonYears,
-      yearlySnapshots,
-      assets: simulationDraft.assetRows.map((asset) => ({
-        name: asset.name,
-        startingValue: Number(asset.startingValue),
-        expectedReturn: Number(asset.expectedReturn),
-        volatility: Number(asset.volatility),
-        sellProportion: Number(asset.sellProportion) / 100,
-        ...(asset.cashGenerationEnabled
-          ? {
-              cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
-                name: cashGeneration.name.trim(),
-                rate: Number(cashGeneration.rate),
-                volatility: Number(cashGeneration.volatility),
-                taxTreatment: cashGeneration.taxTreatment,
-              })),
-            }
-          : {}),
-        ...(asset.saleTaxEnabled
-          ? {
-              saleTax: {
-                costBasis: Number(asset.saleTaxCostBasis),
-                taxTreatment: asset.saleTaxTreatment,
-              },
-            }
-          : {}),
-      })),
-      taxes: selectedTaxPreset.taxes,
-      householdTaxProfile: selectedTaxPreset.householdTaxProfile,
-      assetCorrelations: plannerState.assetCorrelations,
-    };
+    const sweepValues = getSimulationSweepVariableValues();
+    const sweepVariableName = simulationDraft.variableSweep.enabled
+      ? simulationDraft.variableSweep.variableName
+      : null;
+    const simulationRuns = sweepVariableName
+      ? sweepValues.map((value, index) => ({
+          index,
+          value,
+          input: buildSimulationWorkerInput({
+            variableName: sweepVariableName,
+            value,
+          }),
+          taskIds: [] as number[],
+        }))
+      : [
+          {
+            index: 0,
+            value: null,
+            input: buildSimulationWorkerInput(),
+            taskIds: [] as number[],
+          },
+        ];
+
     cancelActiveSimulationRun();
     clearSimulationOutputs();
     activeSimulationRequestId += 1;
     const requestId = activeSimulationRequestId;
     const hardwareConcurrency = Math.max(1, window.navigator.hardwareConcurrency ?? 1);
-    const workerCount = Math.max(1, Math.min(hardwareConcurrency, 4, simulationInput.attempts));
-    const workerAttemptCounts = Array.from({ length: workerCount }, (_, index) =>
-      Math.floor(simulationInput.attempts / workerCount) + (index < simulationInput.attempts % workerCount ? 1 : 0)
-    ).filter((attempts) => attempts > 0);
-    const completedAttemptsByWorker = new Map<number, number>();
-    const detailResultsByWorker = new Map<number, SimulationDetailScenario[]>();
-    let pendingWorkers = workerAttemptCounts.length;
+    const maxWorkerCount = Math.min(10, hardwareConcurrency);
+    const taskDefinitions: SimulationTaskDefinition[] = [];
+    let nextTaskId = 1;
+    const potentialWorkerCount = Math.max(1, Math.min(maxWorkerCount, simulationRuns.length));
+    const useVariableSweepWorkerFanout =
+      ENABLE_VARIABLE_SWEEP_WORKER_FANOUT &&
+      sweepVariableName !== null &&
+      potentialWorkerCount >= simulationRuns.length;
+    for (const run of simulationRuns) {
+      const chunkCount = Math.max(1, Math.min(maxWorkerCount, run.input.attempts));
+      const taskAttemptCounts = useVariableSweepWorkerFanout
+        ? [run.input.attempts]
+        : Array.from({ length: chunkCount }, (_, index) =>
+            Math.floor(run.input.attempts / chunkCount) + (index < run.input.attempts % chunkCount ? 1 : 0)
+          ).filter((attemptCount) => attemptCount > 0);
+      run.taskIds = taskAttemptCounts.map((attemptCount, chunkIndex) => {
+        const taskId = nextTaskId;
+        nextTaskId += 1;
+        taskDefinitions.push({
+          id: taskId,
+          sweepIndex: run.index,
+          chunkIndex,
+          attemptCount,
+          input: {
+            ...run.input,
+            attempts: attemptCount,
+          },
+        });
+        return taskId;
+      });
+    }
+
+    const taskById = new Map(taskDefinitions.map((task) => [task.id, task]));
+    const totalAttempts = simulationRuns.reduce((total, run) => total + run.input.attempts, 0);
+    const workerCount = Math.max(1, Math.min(maxWorkerCount, taskDefinitions.length));
+    const completedAttemptsByTask = new Map<number, number>();
+    const detailResultsByTask = new Map<number, SimulationDetailScenario[]>();
+    const completedTaskCountsByRun = simulationRuns.map(() => 0);
+    let pendingTasks = taskDefinitions.length;
+    let nextTaskIndex = 0;
     let hasSettled = false;
 
     simulationRunState = {
       completedAttempts: 0,
-      totalAttempts: simulationInput.attempts,
-      workerCount: workerAttemptCounts.length,
+      totalAttempts,
+      workerCount,
+      completedSweepSteps: 0,
+      totalSweepSteps: simulationRuns.length,
       errorMessage: null,
     };
 
@@ -3411,9 +3865,13 @@ function bindHandlers(user: UserIdentity): void {
       }
 
       simulationRunState = {
-        completedAttempts: [...completedAttemptsByWorker.values()].reduce((total, attempts) => total + attempts, 0),
-        totalAttempts: simulationInput.attempts,
-        workerCount: workerAttemptCounts.length,
+        completedAttempts: [...completedAttemptsByTask.values()].reduce((total, attempts) => total + attempts, 0),
+        totalAttempts,
+        workerCount,
+        completedSweepSteps: completedTaskCountsByRun.filter(
+          (completedCount, index) => completedCount === simulationRuns[index]?.taskIds.length
+        ).length,
+        totalSweepSteps: simulationRuns.length,
         errorMessage: null,
       };
       renderPlanner(user);
@@ -3428,15 +3886,17 @@ function bindHandlers(user: UserIdentity): void {
       cancelActiveSimulationRun();
       simulationRunState = {
         completedAttempts: 0,
-        totalAttempts: simulationInput.attempts,
-        workerCount: workerAttemptCounts.length,
+        totalAttempts,
+        workerCount,
+        completedSweepSteps: 0,
+        totalSweepSteps: simulationRuns.length,
         errorMessage: message,
       };
       renderPlanner(user);
     };
 
     const finalizeSimulationRun = (): void => {
-      if (activeSimulationRequestId !== requestId || hasSettled || pendingWorkers > 0) {
+      if (activeSimulationRequestId !== requestId || hasSettled || pendingTasks > 0) {
         return;
       }
 
@@ -3445,70 +3905,123 @@ function bindHandlers(user: UserIdentity): void {
         worker.terminate();
       }
       activeSimulationWorkers = [];
-      const mergedDetails = [...detailResultsByWorker.entries()]
-        .sort((left, right) => left[0] - right[0])
-        .flatMap(([, details]) => details);
-      simulationDetailResults = mergedDetails;
-      simulationResults = buildSimulationScenariosFromDetails({
-        attempts: simulationInput.attempts,
-        horizonYears: simulationInput.horizonYears,
-        yearlySnapshots: simulationInput.yearlySnapshots,
-        details: mergedDetails,
+      const finalizedRuns = simulationRuns.map((run) => {
+        const mergedDetails = run.taskIds
+          .map((taskId) => taskById.get(taskId))
+          .filter((task): task is SimulationTaskDefinition => Boolean(task))
+          .sort((left, right) => left.chunkIndex - right.chunkIndex)
+          .flatMap((task) => detailResultsByTask.get(task.id) ?? []);
+
+        return {
+          ...run,
+          details: mergedDetails,
+          results: buildSimulationScenariosFromDetails({
+            attempts: run.input.attempts,
+            horizonYears: run.input.horizonYears,
+            yearlySnapshots: run.input.yearlySnapshots,
+            details: mergedDetails,
+          }),
+        };
       });
+
+      if (sweepVariableName) {
+        simulationResults = null;
+        simulationDetailResults = null;
+        simulationSweepResults = {
+          variableName: sweepVariableName,
+          steps: finalizedRuns.map((run) => ({
+            index: run.index,
+            value: run.value ?? 0,
+            results: run.results,
+            details: run.details,
+          })),
+        };
+        const baseVariableValue =
+          plannerState.variables.find((variable) => variable.name === sweepVariableName)?.value ??
+          finalizedRuns[0]?.value ??
+          0;
+        selectedSimulationSweepStepIndex = findNearestSweepStepIndex(sweepValues, baseVariableValue);
+      } else {
+        simulationSweepResults = null;
+        simulationResults = finalizedRuns[0]?.results ?? null;
+        simulationDetailResults = finalizedRuns[0]?.details ?? null;
+        selectedSimulationSweepStepIndex = 0;
+      }
+
       selectedSimulationPercentile = 50;
       expandedSimulationExampleKeys = new Set();
       simulationRunState = null;
       renderPlanner(user);
     };
 
-    activeSimulationWorkers = workerAttemptCounts.map((attemptCount, workerIndex) => {
+    const dispatchNextTask = (worker: Worker): void => {
+      const task = taskDefinitions[nextTaskIndex];
+      nextTaskIndex += 1;
+      if (!task) {
+        finalizeSimulationRun();
+        return;
+      }
+
+      completedAttemptsByTask.set(task.id, 0);
+      worker.postMessage({
+        type: "run",
+        requestId: task.id,
+        input: task.input,
+      });
+    };
+
+    activeSimulationWorkers = Array.from({ length: workerCount }, () => {
       const worker = new Worker(new URL("./simulation-worker.ts", import.meta.url), { type: "module" });
-      completedAttemptsByWorker.set(workerIndex, 0);
       worker.addEventListener("message", (messageEvent: MessageEvent<SimulationWorkerResponse>) => {
         const message = messageEvent.data;
-        if (!message || message.requestId !== requestId || hasSettled) {
+        if (!message || hasSettled) {
+          return;
+        }
+
+        const task = taskById.get(message.requestId);
+        if (!task || activeSimulationRequestId !== requestId) {
           return;
         }
 
         if (message.type === "progress") {
-          completedAttemptsByWorker.set(workerIndex, message.completedAttempts);
+          completedAttemptsByTask.set(task.id, message.completedAttempts);
           updateSimulationProgress();
           return;
         }
-
-        worker.terminate();
 
         if (message.type === "error") {
           failSimulationRun(message.message);
           return;
         }
 
-        completedAttemptsByWorker.set(workerIndex, attemptCount);
-        detailResultsByWorker.set(workerIndex, message.details);
-        pendingWorkers -= 1;
+        completedAttemptsByTask.set(task.id, task.attemptCount);
+        detailResultsByTask.set(task.id, message.details);
+        completedTaskCountsByRun[task.sweepIndex] += 1;
+        pendingTasks -= 1;
         updateSimulationProgress();
-        finalizeSimulationRun();
+        if (pendingTasks <= 0) {
+          finalizeSimulationRun();
+          return;
+        }
+
+        dispatchNextTask(worker);
       });
       worker.addEventListener("error", () => {
         failSimulationRun("Simulation failed.");
       });
-      worker.postMessage({
-        type: "run",
-        requestId,
-        input: {
-          ...simulationInput,
-          attempts: attemptCount,
-        },
-      });
       return worker;
     });
+
+    for (const worker of activeSimulationWorkers) {
+      dispatchNextTask(worker);
+    }
     renderPlanner(user);
   });
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-simulation-percentile]")) {
     button.addEventListener("click", () => {
       const percentile = Number(button.dataset.simulationPercentile) as SimulationPercentile;
-      if (!simulationResults?.has(percentile)) {
+      if (!getDisplayedSimulationResults()?.has(percentile)) {
         return;
       }
 
@@ -3516,6 +4029,20 @@ function bindHandlers(user: UserIdentity): void {
       renderPlanner(user);
     });
   }
+
+  const simulationSweepSlider = document.querySelector<HTMLInputElement>("#simulation-sweep-step");
+  simulationSweepSlider?.addEventListener("input", () => {
+    if (!simulationSweepResults) {
+      return;
+    }
+
+    selectedSimulationSweepStepIndex = Math.max(
+      0,
+      Math.min(simulationSweepResults.steps.length - 1, Number(simulationSweepSlider.value) || 0)
+    );
+    expandedSimulationExampleKeys = new Set();
+    renderPlanner(user);
+  });
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-toggle-simulation-example]")) {
     button.addEventListener("click", () => {
@@ -3537,10 +4064,12 @@ function bindHandlers(user: UserIdentity): void {
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-export-simulation-example]")) {
     button.addEventListener("click", () => {
       const percentile = Number(button.dataset.exportSimulationExample) as SimulationPercentile;
-      const scenario = simulationResults?.get(percentile) ?? null;
+      const displayedSimulationResults = getDisplayedSimulationResults();
+      const displayedSimulationDetails = getDisplayedSimulationDetailResults();
+      const scenario = displayedSimulationResults?.get(percentile) ?? null;
       const detailScenario =
-        scenario && simulationDetailResults
-          ? selectRepresentativeSimulationScenario(simulationDetailResults, scenario.rows)
+        scenario && displayedSimulationDetails
+          ? selectRepresentativeSimulationScenario(displayedSimulationDetails, scenario.rows)
           : null;
 
       if (!scenario || !detailScenario) {
@@ -5803,12 +6332,31 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
     typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
       ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
       : createSimulationDraft().horizonYears;
+  simulationDraft.variableSweep.enabled = partialState.simulationVariableSweep?.enabled === true;
+  simulationDraft.variableSweep.variableName =
+    typeof partialState.simulationVariableSweep?.variableName === "string"
+      ? partialState.simulationVariableSweep.variableName
+      : createSimulationDraft().variableSweep.variableName;
+  simulationDraft.variableSweep.minValue =
+    typeof partialState.simulationVariableSweep?.minValue === "number" &&
+    Number.isFinite(partialState.simulationVariableSweep.minValue)
+      ? formatEditableNumber(partialState.simulationVariableSweep.minValue)
+      : createSimulationDraft().variableSweep.minValue;
+  simulationDraft.variableSweep.maxValue =
+    typeof partialState.simulationVariableSweep?.maxValue === "number" &&
+    Number.isFinite(partialState.simulationVariableSweep.maxValue)
+      ? formatEditableNumber(partialState.simulationVariableSweep.maxValue)
+      : createSimulationDraft().variableSweep.maxValue;
   syncTaxProfileDraft();
   syncSimulationDraftAssetRows();
+  syncSimulationVariableSweepDraft();
 }
 
 async function persistPlannerState(user: UserIdentity): Promise<void> {
   const snapshot = createPlannerSnapshot();
+  const sweepMinValue = parseEditableNumber(simulationDraft.variableSweep.minValue);
+  const sweepMaxValue = parseEditableNumber(simulationDraft.variableSweep.maxValue);
+  persistVariableSweepDraftToLocalStorage(user.id);
   await storage.savePlannerState({
     userId: user.id,
     email: user.email,
@@ -5851,6 +6399,12 @@ async function persistPlannerState(user: UserIdentity): Promise<void> {
     startYear: plannerState.startYear,
     yearsToShow: plannerState.yearsToShow,
     simulationHorizonYears: simulationDraft.horizonYears,
+    simulationVariableSweep: {
+      enabled: simulationDraft.variableSweep.enabled,
+      variableName: simulationDraft.variableSweep.variableName,
+      ...(Number.isFinite(sweepMinValue) ? { minValue: sweepMinValue } : {}),
+      ...(Number.isFinite(sweepMaxValue) ? { maxValue: sweepMaxValue } : {}),
+    },
   });
 }
 
@@ -5953,6 +6507,8 @@ async function bootstrap(): Promise<void> {
   } else {
     await persistPlannerState(user);
   }
+  applyVariableSweepDraftFromLocalStorage(user.id);
+  syncSimulationVariableSweepDraft();
   renderPlanner(user);
 }
 
