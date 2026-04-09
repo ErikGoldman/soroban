@@ -42,14 +42,26 @@ export interface PersistedAssetDefinition {
     name?: string;
     rate: number;
     volatility: number;
-    taxTreatment?: "ordinary-income" | "qualified-dividends" | "tax-exempt-income" | "not-taxable";
+    taxTreatment?:
+      | "ordinary-income"
+      | "qualified-dividends"
+      | "tax-exempt-income"
+      | "state-local-exempt"
+      | "triple-exempt"
+      | "not-taxable";
     taxNames?: string[];
   };
   cashGenerations?: {
     name?: string;
     rate: number;
     volatility: number;
-    taxTreatment?: "ordinary-income" | "qualified-dividends" | "tax-exempt-income" | "not-taxable";
+    taxTreatment?:
+      | "ordinary-income"
+      | "qualified-dividends"
+      | "tax-exempt-income"
+      | "state-local-exempt"
+      | "triple-exempt"
+      | "not-taxable";
     taxNames?: string[];
   }[];
   saleTax?: {
@@ -129,6 +141,7 @@ export interface SavedPlannerState {
   events: PersistedEventDefinition[];
   startYear: string;
   yearsToShow: number;
+  simulationHorizonYears?: number;
   updatedAt: string;
 }
 
@@ -283,6 +296,7 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
     events,
     startYear,
     yearsToShow,
+    simulationHorizonYears,
   }: Omit<SavedPlannerState, "updatedAt">): Promise<SavedPlannerState> {
     const record: SavedPlannerState = {
       userId,
@@ -296,6 +310,7 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
       events,
       startYear,
       yearsToShow,
+      simulationHorizonYears,
       updatedAt: new Date().toISOString(),
     };
 

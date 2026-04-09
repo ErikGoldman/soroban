@@ -43,6 +43,8 @@ export type AssetCashTaxTreatment =
   | "ordinary-income"
   | "qualified-dividends"
   | "tax-exempt-income"
+  | "state-local-exempt"
+  | "triple-exempt"
   | "not-taxable";
 
 export type AssetSaleTaxTreatment =
@@ -792,16 +794,16 @@ function tokenize(formula: string): Token[] {
 
     if (/[0-9.]/.test(char)) {
       let end = index + 1;
-      while (end < formula.length && /[0-9.]/.test(formula[end])) {
+      while (end < formula.length && /[0-9.,]/.test(formula[end])) {
         end += 1;
       }
 
       const value = formula.slice(index, end);
-      if (!/^\d+(\.\d+)?$|^\.\d+$/.test(value)) {
+      if (!/^\d+(\.\d+)?$|^\d{1,3}(,\d{3})+(\.\d+)?$|^\.\d+$/.test(value)) {
         throw new Error(`Invalid number "${value}".`);
       }
 
-      tokens.push({ type: "number", value });
+      tokens.push({ type: "number", value: value.replaceAll(",", "") });
       index = end;
       continue;
     }

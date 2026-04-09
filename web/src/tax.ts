@@ -48,6 +48,8 @@ export interface HouseholdTaxInput {
   shortTermCapitalGains: number;
   longTermCapitalGains: number;
   taxExemptIncome: number;
+  stateLocalExemptIncome: number;
+  tripleExemptIncome: number;
   deductibleExpenses: number;
 }
 
@@ -288,29 +290,57 @@ export function computeHouseholdTaxes(
   const qualifiedDividends = sanitizeAmount(input.qualifiedDividends);
   const shortTermCapitalGains = sanitizeAmount(input.shortTermCapitalGains);
   const longTermCapitalGains = sanitizeAmount(input.longTermCapitalGains);
+  const taxExemptIncome = sanitizeAmount(input.taxExemptIncome);
+  const stateLocalExemptIncome = sanitizeAmount(input.stateLocalExemptIncome);
   const deductibleExpenses = sanitizeAmount(input.deductibleExpenses);
   const federalDeduction = getFederalDeduction(profile);
 
-  const ordinaryTaxBase = Math.max(0, wages + ordinaryIncome + shortTermCapitalGains - deductibleExpenses);
+  const ordinaryTaxBase = Math.max(
+    0,
+    wages + ordinaryIncome + stateLocalExemptIncome + shortTermCapitalGains - deductibleExpenses
+  );
   const preferentialIncome = Math.max(0, qualifiedDividends + longTermCapitalGains);
   const federalTaxableIncome = Math.max(0, ordinaryTaxBase + preferentialIncome - federalDeduction);
   const federalPreferentialIncome = Math.min(preferentialIncome, federalTaxableIncome);
   const federalOrdinaryTaxableIncome = Math.max(0, federalTaxableIncome - federalPreferentialIncome);
   const stateTaxableIncome = Math.max(
     0,
-    ordinaryTaxBase + preferentialIncome - sanitizeAmount(profile.stateTaxableIncomeAdjustment)
+    wages +
+      ordinaryIncome +
+      shortTermCapitalGains +
+      preferentialIncome +
+      taxExemptIncome -
+      deductibleExpenses -
+      sanitizeAmount(profile.stateTaxableIncomeAdjustment)
   );
   const localTaxableIncome = Math.max(
     0,
-    ordinaryTaxBase + preferentialIncome - sanitizeAmount(profile.localTaxableIncomeAdjustment)
+    wages +
+      ordinaryIncome +
+      shortTermCapitalGains +
+      preferentialIncome +
+      taxExemptIncome -
+      deductibleExpenses -
+      sanitizeAmount(profile.localTaxableIncomeAdjustment)
   );
   const netInvestmentIncome = Math.max(
     0,
-    ordinaryIncome + qualifiedDividends + shortTermCapitalGains + longTermCapitalGains - deductibleExpenses
+    ordinaryIncome +
+      stateLocalExemptIncome +
+      qualifiedDividends +
+      shortTermCapitalGains +
+      longTermCapitalGains -
+      deductibleExpenses
   );
   const modifiedAdjustedGrossIncome = Math.max(
     0,
-    wages + ordinaryIncome + qualifiedDividends + shortTermCapitalGains + longTermCapitalGains - deductibleExpenses
+    wages +
+      ordinaryIncome +
+      stateLocalExemptIncome +
+      qualifiedDividends +
+      shortTermCapitalGains +
+      longTermCapitalGains -
+      deductibleExpenses
   );
   const niitIncomeAboveThreshold = Math.max(0, modifiedAdjustedGrossIncome - sanitizeAmount(profile.niitThreshold));
   const niitTaxableIncome = Math.max(0, Math.min(netInvestmentIncome, niitIncomeAboveThreshold));

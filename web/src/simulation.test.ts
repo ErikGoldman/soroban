@@ -29,6 +29,8 @@ function createEmptyHouseholdTaxInput() {
     shortTermCapitalGains: 0,
     longTermCapitalGains: 0,
     taxExemptIncome: 0,
+    stateLocalExemptIncome: 0,
+    tripleExemptIncome: 0,
     deductibleExpenses: 0,
   };
 }
@@ -470,6 +472,80 @@ describe("buildSimulationScenarios", () => {
     expect(row?.flowTotals.get("Stocks sale proceeds")).toBeCloseTo(20.833333248, 5);
     expect(row?.flowTotals.get("Stocks realized gain")).toBeCloseTo(8.33333248, 6);
     expect(row?.assetValues.get("Stocks")).toBeCloseTo(79.166666752, 5);
+  });
+
+  it("falls back to other assets when the preferred sale bucket is exhausted", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -150,
+          totalExpenses: 150,
+          flowAmounts: new Map([["Living expenses", -150]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Municipal bonds",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          name: "Stocks",
+          startingValue: 200,
+          expectedReturn: 10,
+          volatility: 0,
+          sellProportion: 0,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Municipal bonds sale proceeds")).toBeCloseTo(100, 6);
+    expect(row?.flowTotals.get("Stocks sale proceeds")).toBeCloseTo(50, 6);
+    expect(row?.assetReturns.get("Stocks")?.amount).toBeCloseTo(15, 6);
+    expect(row?.taxableGains).toBeCloseTo(0, 6);
+    expect(row?.endingAssets).toBeCloseTo(165, 6);
+    expect(row?.totalGains).toBeCloseTo(15, 6);
+  });
+
+  it("does not backfill unfunded withdrawals into total gains when the portfolio is depleted", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -150,
+          totalExpenses: 150,
+          flowAmounts: new Map([["Living expenses", -150]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Portfolio",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Portfolio sale proceeds")).toBeCloseTo(100, 6);
+    expect(row?.endingAssets).toBeCloseTo(0, 6);
+    expect(row?.totalGains).toBeCloseTo(0, 6);
   });
 
   it("applies NIIT using the lesser of net investment income and MAGI above the threshold", () => {

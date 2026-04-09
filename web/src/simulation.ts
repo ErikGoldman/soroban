@@ -554,6 +554,9 @@ function runSimulationAttempts({
         });
         totalCashRaised += saleResult.preTaxCashBalance;
         totalTaxableGains += saleResult.taxableGains;
+        if (saleResult.preTaxCashBalance <= 0.000001) {
+          break;
+        }
         taxBreakdown =
           householdTaxProfile === null
             ? emptyHouseholdTaxBreakdown()
@@ -566,7 +569,9 @@ function runSimulationAttempts({
       }
 
       const totalExpenses = snapshot.totalExpenses + taxBreakdown.totalTax;
-      const postTaxSurplus = baseCashBalance + totalCashRaised - taxBreakdown.totalTax;
+      const postTaxCashBalance = baseCashBalance + totalCashRaised - taxBreakdown.totalTax;
+      const postTaxShortfall = Math.max(0, -postTaxCashBalance);
+      const postTaxSurplus = Math.max(0, postTaxCashBalance);
       if (postTaxSurplus > 0 && normalizedAssets.length > 0) {
         const reinvestmentAmounts = buildSurplusReinvestmentAmounts(postTaxSurplus, contributionAmounts, assetNames);
         for (const [assetName, reinvestmentAmount] of reinvestmentAmounts) {
@@ -595,7 +600,7 @@ function runSimulationAttempts({
         normalizedAssets.map((asset) => [asset.name, saleResult.assetValues.get(asset.name) ?? 0])
       );
       const finalTotalAssets = [...yearAssetValues.values()].reduce((total, value) => total + value, 0);
-      const totalGains = finalTotalAssets - startingTotalAssets + totalExpenses;
+      const totalGains = finalTotalAssets - startingTotalAssets + totalExpenses - postTaxShortfall;
       assetValues = saleResult.assetValues;
       assetCostBases = saleResult.assetCostBases;
       yearlyTotals[yearIndex]?.push(finalTotalAssets);
@@ -760,18 +765,29 @@ function resolveSalesForCashNeed({
   }
 
   while (remainingCashNeed > 0.000001) {
-    const sellableAssets = assets.filter(
+    const weightedSellableAssets = assets.filter(
       (asset) => asset.sellProportion > 0 && (nextAssetValues.get(asset.name) ?? 0) > 0
     );
-    const totalSellWeight = sellableAssets.reduce((total, asset) => total + asset.sellProportion, 0);
-    if (totalSellWeight <= 0) {
+    const totalSellWeight = weightedSellableAssets.reduce((total, asset) => total + asset.sellProportion, 0);
+    const sellableAssets =
+      totalSellWeight > 0
+        ? weightedSellableAssets
+        : assets.filter((asset) => (nextAssetValues.get(asset.name) ?? 0) > 0);
+    const totalFallbackValue =
+      totalSellWeight > 0
+        ? 0
+        : sellableAssets.reduce((total, asset) => total + (nextAssetValues.get(asset.name) ?? 0), 0);
+
+    if (sellableAssets.length === 0 || (totalSellWeight <= 0 && totalFallbackValue <= 0.000001)) {
       break;
     }
 
     let grossProceedsThisRound = 0;
     for (const asset of sellableAssets) {
       const currentValue = nextAssetValues.get(asset.name) ?? 0;
-      const amountSold = Math.min(currentValue, remainingCashNeed * (asset.sellProportion / totalSellWeight));
+      const saleWeight =
+        totalSellWeight > 0 ? asset.sellProportion / totalSellWeight : currentValue / Math.max(totalFallbackValue, 1);
+      const amountSold = Math.min(currentValue, remainingCashNeed * saleWeight);
       if (amountSold <= 0.000001) {
         continue;
       }
@@ -870,6 +886,8 @@ function applyTaxTreatmentAmount(
     | "short-term-capital-gains"
     | "long-term-capital-gains"
     | "tax-exempt-income"
+    | "state-local-exempt"
+    | "triple-exempt"
     | "deductible-expense"
     | "nondeductible-expense"
     | "not-taxable",
@@ -893,6 +911,12 @@ function applyTaxTreatmentAmount(
       break;
     case "tax-exempt-income":
       taxInput.taxExemptIncome += amount;
+      break;
+    case "state-local-exempt":
+      taxInput.stateLocalExemptIncome += amount;
+      break;
+    case "triple-exempt":
+      taxInput.tripleExemptIncome += amount;
       break;
     case "deductible-expense":
       taxInput.deductibleExpenses += amount;

@@ -40,8 +40,29 @@ describe("evaluateFormula", () => {
     expect(evaluateFormula("-bonus + +offset", { bonus: 300, offset: 25 })).toBe(-275);
   });
 
+  it("accepts comma-separated numeric literals", () => {
+    expect(evaluateFormula("50,000 + 1,250.75")).toBe(51250.75);
+  });
+
+  it("evaluates nested percentage expressions across adjacent parenthesized terms", () => {
+    expect(
+      evaluateFormula(
+        "HomePurchasePrice*(1+(AdditionalHomePurchaseCostPct/100))*(1-(HomeMortgagePct/100))",
+        {
+          HomePurchasePrice: 500000,
+          AdditionalHomePurchaseCostPct: 3,
+          HomeMortgagePct: 80,
+        }
+      )
+    ).toBeCloseTo(103000);
+  });
+
   it("throws when a variable is missing", () => {
     expect(() => evaluateFormula("salary + tax")).toThrow('Unknown variable "salary".');
+  });
+
+  it("rejects malformed comma-separated numeric literals", () => {
+    expect(() => evaluateFormula("50,00 + 1")).toThrow('Invalid number "50,00".');
   });
 });
 

@@ -704,6 +704,16 @@ function formatPercentage(value: number): string {
   }).format(value) + "%";
 }
 
+function formatEditableNumber(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function parseEditableNumber(value: string): number {
+  return Number(value.replaceAll(",", "").trim());
+}
+
 function getExpenseInflationSummary(flow: Pick<FlowDefinition, "type" | "inflationAdjusted">): string {
   return isFlowInflationAdjusted(flow)
     ? `Inflates at ${formatPercentage(DEFAULT_EXPENSE_INFLATION_RATE * 100)} annually`
@@ -749,8 +759,50 @@ function renderAssetCashTaxTreatmentOptions(selected: AssetCashTaxTreatment): st
     <option value="ordinary-income" ${selected === "ordinary-income" ? "selected" : ""}>Ordinary income</option>
     <option value="qualified-dividends" ${selected === "qualified-dividends" ? "selected" : ""}>Qualified dividends</option>
     <option value="tax-exempt-income" ${selected === "tax-exempt-income" ? "selected" : ""}>Tax-exempt income</option>
+    <option value="state-local-exempt" ${selected === "state-local-exempt" ? "selected" : ""}>State+local exempt</option>
+    <option value="triple-exempt" ${selected === "triple-exempt" ? "selected" : ""}>Triple exempt</option>
     <option value="not-taxable" ${selected === "not-taxable" ? "selected" : ""}>Not taxable</option>
   `;
+}
+
+function assetCashTaxTreatmentLabel(taxTreatment: AssetCashTaxTreatment): string {
+  switch (taxTreatment) {
+    case "qualified-dividends":
+      return "qualified";
+    case "tax-exempt-income":
+      return "federal exempt";
+    case "state-local-exempt":
+      return "state+local exempt";
+    case "triple-exempt":
+      return "triple exempt";
+    case "not-taxable":
+      return "not taxable";
+    case "ordinary-income":
+    default:
+      return "ordinary";
+  }
+}
+
+function renderAssetCashGenerationSummary(asset: AssetDefinition): string {
+  const cashGenerations =
+    asset.cashGenerations && asset.cashGenerations.length > 0
+      ? asset.cashGenerations
+      : asset.cashGeneration
+        ? [asset.cashGeneration]
+        : [];
+
+  if (cashGenerations.length === 0) {
+    return "";
+  }
+
+  return cashGenerations
+    .map((cashGeneration) => {
+      const rate = formatPercentage(cashGeneration.rate);
+      const taxTreatment = assetCashTaxTreatmentLabel(cashGeneration.taxTreatment ?? "ordinary-income");
+      const streamName = cashGeneration.name?.trim();
+      return streamName ? `${streamName}: ${rate} ${taxTreatment}` : `${rate} ${taxTreatment}`;
+    })
+    .join(" | ");
 }
 
 function parseYearInput(value: string): EventYear {
@@ -834,6 +886,8 @@ function createEmptyHouseholdTaxInput(): HouseholdTaxInput {
     shortTermCapitalGains: 0,
     longTermCapitalGains: 0,
     taxExemptIncome: 0,
+    stateLocalExemptIncome: 0,
+    tripleExemptIncome: 0,
     deductibleExpenses: 0,
   };
 }
@@ -1153,6 +1207,7 @@ function renderSetupAssetArea(): string {
                   <button type="button" class="link-button workspace-item-title" data-edit-asset="${escapeHtml(asset.name)}">
                     ${escapeHtml(asset.name)}
                   </button>
+                  ${renderAssetCashGenerationSummary(asset) ? `<p class="workspace-item-copy">${escapeHtml(renderAssetCashGenerationSummary(asset))}</p>` : ""}
                 </div>
                 ${
                   activeInlineAssetValueEditName === asset.name
@@ -1161,9 +1216,9 @@ function renderSetupAssetArea(): string {
                     <input
                       class="inline-asset-value-input"
                       name="startingValue"
-                      type="number"
-                      step="0.01"
-                      value="${escapeAttribute(String(asset.startingValue))}"
+                      type="text"
+                      inputmode="decimal"
+                      value="${escapeAttribute(formatEditableNumber(asset.startingValue))}"
                     />
                     <button type="submit" class="secondary-button">Save</button>
                     <button
@@ -1285,9 +1340,9 @@ function renderVariablesCard(): string {
                 <span class="workspace-variable-name">${escapeHtml(variable.name)}</span>
                 <input
                   name="value"
-                  type="number"
-                  step="0.01"
-                  value="${escapeHtml(String(variable.value))}"
+                  type="text"
+                  inputmode="decimal"
+                  value="${escapeHtml(formatEditableNumber(variable.value))}"
                 />
               </label>
             `
@@ -1456,7 +1511,7 @@ function renderExpensesBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAm
                         : `<div class="expense-row-meta"><span class="summary-meta">${escapeHtml(getExpenseInflationSummary(flow))}</span></div>`
                     }
                   </th>
-                  <td><code>${escapeHtml(flow.formula)}</code></td>
+                  <td><code>${escapeHtml(formatFormulaText(flow.formula))}</code></td>
                   <td>
                     ${
                       changes.length === 0 && !hasOneTimeReset
@@ -1466,7 +1521,7 @@ function renderExpensesBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAm
                               (event) =>
                                 `${escapeHtml(yearLabel(event.schedule[0].year))}: <code>${escapeHtml(
                                   event.schedule[0].actions[0].kind === "set-flow-formula"
-                                    ? event.schedule[0].actions[0].formula
+                                    ? formatFormulaText(event.schedule[0].actions[0].formula)
                                     : ""
                                 )}</code>`
                             ),
@@ -1767,6 +1822,126 @@ function renderSimulationAssetSales(saleEntries: readonly [string, number][]): s
       </table>
     </div>
   `;
+}
+
+function buildSimulationExampleExport(
+  percentile: SimulationPercentile,
+  scenario: SimulationScenario,
+  detailScenario: SimulationDetailScenario | null
+): string {
+  const exportedRows = scenario.rows.map((row) => {
+    const exampleYear = getExampleSimulationYear(detailScenario, row.yearNumber);
+    const visibleFlowTotals = exampleYear
+      ? [...exampleYear.flowTotals.entries()]
+          .filter(([, amount]) => Math.abs(amount) > 0.000001)
+          .sort((left, right) => compareSignedAmounts(left[1], right[1]))
+      : [];
+    const saleEntries = visibleFlowTotals.filter(
+      ([entryName]) => entryName.endsWith(" sale proceeds") || entryName.endsWith(" realized gain")
+    );
+    const operatingEntries = visibleFlowTotals.filter(
+      ([entryName]) => !entryName.endsWith(" sale proceeds") && !entryName.endsWith(" realized gain")
+    );
+    const assetReturns = exampleYear
+      ? [...exampleYear.assetReturns.entries()]
+          .filter(
+            ([, assetReturn]) =>
+              Math.abs(assetReturn.amount) > 0.000001 || Math.abs(assetReturn.percentage) > 0.000001
+          )
+          .map(([assetName, assetReturn]) => ({
+            asset: assetName,
+            amount: assetReturn.amount,
+            percentage: assetReturn.percentage,
+          }))
+      : [];
+    const example = exampleYear
+      ? {
+          yearNumber: exampleYear.yearNumber,
+          label: exampleYear.label,
+          startingAssets: exampleYear.startingAssets,
+          endingAssets: exampleYear.endingAssets,
+          expenses: Math.max(0, exampleYear.totalExpenses - exampleYear.taxAmount),
+          totalExpenses: exampleYear.totalExpenses,
+          totalGains: exampleYear.totalGains,
+          taxableGains: exampleYear.taxableGains,
+          taxAmount: exampleYear.taxAmount,
+          totalAssets: exampleYear.totalAssets,
+          depletionProbability: exampleYear.depletionProbability,
+          cashFlows: operatingEntries.map(([label, amount]) => ({ label, amount })),
+          assetReturns,
+          taxInputs: {
+            wages: exampleYear.householdTaxInput.wages,
+            ordinaryIncome: exampleYear.householdTaxInput.ordinaryIncome,
+            qualifiedDividends: exampleYear.householdTaxInput.qualifiedDividends,
+            shortTermCapitalGains: exampleYear.householdTaxInput.shortTermCapitalGains,
+            longTermCapitalGains: exampleYear.householdTaxInput.longTermCapitalGains,
+            taxExemptIncome: exampleYear.householdTaxInput.taxExemptIncome,
+            stateLocalExemptIncome: exampleYear.householdTaxInput.stateLocalExemptIncome,
+            tripleExemptIncome: exampleYear.householdTaxInput.tripleExemptIncome,
+            deductibleExpenses: exampleYear.householdTaxInput.deductibleExpenses,
+          },
+          taxBreakdown: {
+            federalTaxableIncome: exampleYear.taxBreakdown.federalTaxableIncome,
+            federalOrdinaryTaxableIncome: exampleYear.taxBreakdown.federalOrdinaryTaxableIncome,
+            federalPreferentialIncome: exampleYear.taxBreakdown.federalPreferentialIncome,
+            deductionUsed: exampleYear.taxBreakdown.deductionUsed,
+            stateTaxableIncome: exampleYear.taxBreakdown.stateTaxableIncome,
+            localTaxableIncome: exampleYear.taxBreakdown.localTaxableIncome,
+            modifiedAdjustedGrossIncome: exampleYear.taxBreakdown.modifiedAdjustedGrossIncome,
+            netInvestmentIncome: exampleYear.taxBreakdown.netInvestmentIncome,
+            niitIncomeAboveThreshold: exampleYear.taxBreakdown.niitIncomeAboveThreshold,
+            niitTaxableIncome: exampleYear.taxBreakdown.niitTaxableIncome,
+            totalTax: exampleYear.taxBreakdown.totalTax,
+            taxesPaid: [...exampleYear.taxBreakdown.taxByName.entries()]
+              .sort((left, right) => right[1] - left[1])
+              .map(([name, amount]) => ({ name, amount })),
+          },
+          assetSales: saleEntries.map(([label, amount]) => ({ label, amount })),
+          assetValues: [...exampleYear.assetValues.entries()].map(([asset, amount]) => ({ asset, amount })),
+          flowTotals: visibleFlowTotals.map(([label, amount]) => ({ label, amount })),
+        }
+      : null;
+
+    return {
+      yearNumber: row.yearNumber,
+      label: row.label,
+      percentileAssets: row.totalAssets,
+      depletionProbability: row.depletionProbability,
+      example,
+    };
+  });
+
+  return JSON.stringify(
+    {
+      exportedAt: new Date().toISOString(),
+      percentile,
+      finalPercentileAssets: scenario.finalTotalAssets,
+      years: exportedRows,
+    },
+    null,
+    2
+  );
+}
+
+function downloadSimulationExampleExport(
+  percentile: SimulationPercentile,
+  scenario: SimulationScenario,
+  detailScenario: SimulationDetailScenario | null
+): void {
+  const fileContents = buildSimulationExampleExport(percentile, scenario, detailScenario);
+  const blob = new Blob([fileContents], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+  link.href = url;
+  link.download = `simulation-example-${percentile}th-percentile-${timestamp}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
 }
 
 function getExampleSimulationYear(
@@ -2150,6 +2325,16 @@ function renderSimulationBoard(): string {
           )
           .join("")}
       </div>
+      <div class="simulation-actions simulation-results-actions">
+        <button
+          type="button"
+          class="secondary-button"
+          data-export-simulation-example="${selectedSimulationPercentile}"
+          ${selectedDetailScenario ? "" : "disabled"}
+        >
+          Export example
+        </button>
+      </div>
       <div class="board-scroll simulation-results">
         <table class="flow-table">
           <thead>
@@ -2278,7 +2463,13 @@ function renderAssetComposer(): string {
           </label>
           <label>
             Starting value
-            <input name="startingValue" type="number" step="0.01" value="${escapeHtml(assetDraft.startingValue)}" required />
+            <input
+              name="startingValue"
+              type="text"
+              inputmode="decimal"
+              value="${escapeHtml(assetDraft.startingValue === "" ? "" : formatEditableNumber(parseEditableNumber(assetDraft.startingValue)))}"
+              required
+            />
           </label>
           <div class="split-fields">
             <label>
@@ -2345,7 +2536,13 @@ function renderAssetEditor(): string {
           </label>
           <label>
             Starting value
-            <input name="startingValue" type="number" step="0.01" value="${escapeHtml(assetEditDraft.startingValue)}" required />
+            <input
+              name="startingValue"
+              type="text"
+              inputmode="decimal"
+              value="${escapeHtml(assetEditDraft.startingValue === "" ? "" : formatEditableNumber(parseEditableNumber(assetEditDraft.startingValue)))}"
+              required
+            />
           </label>
           <div class="split-fields">
             <label>
@@ -2487,7 +2684,14 @@ function renderAssetTaxModelFields(draft: AssetDraft): string {
           ? `
         <label>
           Starting cost basis
-          <input name="saleTaxCostBasis" type="number" min="0" step="0.01" value="${escapeHtml(draft.saleTaxCostBasis)}" />
+          <input
+            name="saleTaxCostBasis"
+            type="text"
+            inputmode="decimal"
+            value="${escapeHtml(
+              draft.saleTaxCostBasis === "" ? "" : formatEditableNumber(parseEditableNumber(draft.saleTaxCostBasis))
+            )}"
+          />
         </label>
         <label>
           Realized gain tax treatment
@@ -2844,12 +3048,17 @@ function renderFlowEvents(flowName: string): string {
                 <td>
                   ${
                     isEditingFormula
-                      ? `<input class="flow-event-inline-input flow-event-inline-formula" data-inline-flow-event-formula="${escapeAttribute(
-                          eventName ?? "__new__"
-                        )}" type="text" value="${escapeHtml(formulaValue)}" placeholder="rent * 1.05" />`
+                      ? `<div data-inline-flow-event-formula-editor="${escapeAttribute(eventName ?? "__new__")}">
+                          ${renderFormulaEditor({
+                            inputName: "flowEventFormula",
+                            value: formulaValue,
+                            placeholder: "rent * 1.05",
+                            variablesScope: "planner",
+                          })}
+                        </div>`
                       : `<button type="button" class="link-button flow-event-inline-button flow-event-inline-formula" data-start-edit-flow-event-formula="${escapeAttribute(
                           eventName ?? "__new__"
-                        )}"><code>${escapeHtml(formulaValue || "Formula")}</code></button>`
+                        )}"><code>${escapeHtml(formulaValue ? formatFormulaText(formulaValue) : "Formula")}</code></button>`
                   }
                 </td>
                 <td>
@@ -3102,6 +3311,7 @@ function bindHandlers(user: UserIdentity): void {
         );
         invalidateSimulationState();
         syncSimulationSubmitState();
+        void persistPlannerState(user);
       }
       return;
     }
@@ -3122,6 +3332,7 @@ function bindHandlers(user: UserIdentity): void {
     }
 
     invalidateSimulationState();
+    void persistPlannerState(user);
   });
 
   simulationForm?.addEventListener("submit", async (event) => {
@@ -3323,6 +3534,23 @@ function bindHandlers(user: UserIdentity): void {
     });
   }
 
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-export-simulation-example]")) {
+    button.addEventListener("click", () => {
+      const percentile = Number(button.dataset.exportSimulationExample) as SimulationPercentile;
+      const scenario = simulationResults?.get(percentile) ?? null;
+      const detailScenario =
+        scenario && simulationDetailResults
+          ? selectRepresentativeSimulationScenario(simulationDetailResults, scenario.rows)
+          : null;
+
+      if (!scenario || !detailScenario) {
+        return;
+      }
+
+      downloadSimulationExampleExport(percentile, scenario, detailScenario);
+    });
+  }
+
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-edit-asset]")) {
     button.addEventListener("click", () => {
       const assetName = button.dataset.editAsset;
@@ -3428,7 +3656,14 @@ function bindHandlers(user: UserIdentity): void {
         return;
       }
 
-      const nextValue = Number(input.value);
+      const nextValue = parseEditableNumber(input.value);
+      if (!Number.isFinite(nextValue)) {
+        input.value = formatEditableNumber(
+          plannerState.variables.find((variable) => variable.name === variableName)?.value ?? 0
+        );
+        return;
+      }
+
       updateInitialVariableValue(variableName, nextValue);
       invalidateSimulationState();
       await persistPlannerState(user);
@@ -3469,7 +3704,7 @@ function bindHandlers(user: UserIdentity): void {
         return;
       }
 
-      const nextValue = Number(input.value);
+      const nextValue = parseEditableNumber(input.value);
       if (!Number.isFinite(nextValue)) {
         return;
       }
@@ -3543,8 +3778,10 @@ function bindFormulaEditors(): void {
     let activeSuggestionIndex = 0;
 
     const syncEditor = (preferredCaretOffset?: number) => {
-      const formula = normalizeEditorText(editor.textContent ?? "");
-      const caretOffset = preferredCaretOffset ?? getCaretCharacterOffset(editor);
+      const rawFormula = normalizeEditorText(editor.textContent ?? "");
+      const rawCaretOffset = preferredCaretOffset ?? getCaretCharacterOffset(editor);
+      const formula = formatFormulaText(rawFormula);
+      const caretOffset = formatFormulaText(rawFormula.slice(0, rawCaretOffset)).length;
       hiddenInput.value = formula;
       renderFormulaEditorTokens(binding, formula, caretOffset);
       syncFormulaDraftField(wrapper, formula);
@@ -3762,6 +3999,26 @@ function normalizeEditorText(value: string): string {
   return value.replace(/\u00a0/g, " ").replace(/\n/g, "").trim();
 }
 
+function formatFormulaText(formula: string): string {
+  return (formula.match(/[A-Za-z_][A-Za-z0-9_]*|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+|\s+|./g) ?? [])
+    .map((token) =>
+      /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$|^\d+(?:\.\d+)?$|^\.\d+$/.test(token)
+        ? formatFormulaNumberToken(token)
+        : token
+    )
+    .join("");
+}
+
+function formatFormulaNumberToken(token: string): string {
+  if (token.startsWith(".")) {
+    return token;
+  }
+
+  const [integerPart, fractionalPart] = token.replaceAll(",", "").split(".");
+  const groupedIntegerPart = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return fractionalPart === undefined ? groupedIntegerPart : `${groupedIntegerPart}.${fractionalPart}`;
+}
+
 function validateFormula(formula: string, availableVariables: readonly string[]): FormulaValidationResult {
   if (!formula.trim()) {
     return {
@@ -3825,7 +4082,8 @@ function renderFormulaEditorTokens(
   preferredCaretOffset: number
 ): void {
   const variables = new Set(binding.getVariables());
-  const tokens = formula.match(/[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|\.\d+|\s+|./g) ?? [];
+  const tokens =
+    formula.match(/[A-Za-z_][A-Za-z0-9_]*|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+|\s+|./g) ?? [];
 
   binding.editor.innerHTML = tokens
     .map((token) => {
@@ -3838,8 +4096,8 @@ function renderFormulaEditorTokens(
         return token.replaceAll(" ", "&nbsp;");
       }
 
-      if (/^\d/.test(token) || token === ".") {
-        return `<span class="formula-token formula-token-number">${escapeHtml(token)}</span>`;
+      if (/^\d{1,3}(?:,\d{3})+(?:\.\d+)?$|^\d+(?:\.\d+)?$|^\.\d+$/.test(token)) {
+        return `<span class="formula-token formula-token-number">${escapeHtml(formatFormulaNumberToken(token))}</span>`;
       }
 
       return `<span class="formula-token formula-token-operator">${escapeHtml(token)}</span>`;
@@ -4094,7 +4352,8 @@ function bindAssetComposer(user: UserIdentity): void {
 
 function bindAssetEditor(user: UserIdentity): void {
   const assetEditForm = document.querySelector<HTMLFormElement>("#asset-edit-form");
-  if (!assetEditForm) {
+  const assetEditorPanel = assetEditForm?.closest<HTMLElement>(".asset-panel");
+  if (!assetEditForm || !assetEditorPanel) {
     return;
   }
 
@@ -4148,19 +4407,24 @@ function bindAssetEditor(user: UserIdentity): void {
     }
   });
 
-  assetEditForm.addEventListener("click", (event) => {
+  assetEditorPanel.addEventListener("click", (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLButtonElement)) {
+    if (!(target instanceof Element)) {
       return;
     }
 
-    if (target.id === "add-cash-generation") {
+    const button = target.closest<HTMLButtonElement>("button");
+    if (!button) {
+      return;
+    }
+
+    if (button.id === "add-cash-generation") {
       assetEditDraft.cashGenerations.push(createAssetCashGenerationDraft());
       renderPlanner(user);
       return;
     }
 
-    const removeCashGenerationId = target.dataset.removeCashGeneration;
+    const removeCashGenerationId = button.dataset.removeCashGeneration;
     if (removeCashGenerationId) {
       assetEditDraft.cashGenerations = assetEditDraft.cashGenerations.filter(
         (candidate) => candidate.id !== removeCashGenerationId
@@ -4172,7 +4436,7 @@ function bindAssetEditor(user: UserIdentity): void {
       return;
     }
 
-    if (target.id === "delete-asset-from-editor") {
+    if (button.id === "delete-asset-from-editor") {
       const confirmed = window.confirm(`Delete asset "${assetEditDraft.originalName}"? This will also remove its correlations.`);
       if (!confirmed) {
         return;
@@ -4188,7 +4452,7 @@ function bindAssetEditor(user: UserIdentity): void {
       return;
     }
 
-    if (target.id === "close-asset-editor" || target.id === "close-asset-editor-secondary") {
+    if (button.id === "close-asset-editor" || button.id === "close-asset-editor-secondary") {
       closeAssetEditor();
       renderPlanner(user);
     }
@@ -4866,20 +5130,28 @@ function bindFlowEditor(user: UserIdentity): void {
     input.select();
   }
 
-  for (const input of document.querySelectorAll<HTMLInputElement>("[data-inline-flow-event-formula]")) {
-    input.addEventListener("input", () => {
-      flowEventDraft.formula = input.value;
-    });
-    input.addEventListener("blur", () => {
+  for (const wrapper of document.querySelectorAll<HTMLElement>("[data-inline-flow-event-formula-editor]")) {
+    wrapper.addEventListener("focusout", (event) => {
+      const nextTarget = event.relatedTarget;
+      if (nextTarget instanceof Node && wrapper.contains(nextTarget)) {
+        return;
+      }
+
+      const formulaWrapper = wrapper.querySelector<HTMLElement>("[data-formula-editor]");
+      if (formulaWrapper?.dataset.invalid === "true") {
+        return;
+      }
+
       void saveInlineFlowEvent();
     });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        input.blur();
-      }
-    });
-    input.focus();
-    input.select();
+
+    const editor = wrapper.querySelector<HTMLElement>(".formula-editor-input");
+    if (!editor) {
+      continue;
+    }
+
+    editor.focus();
+    setCaretCharacterOffset(editor, editor.textContent?.length ?? 0);
   }
 }
 
@@ -5122,7 +5394,7 @@ function findAssetCashGenerationDraft(
 function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
   return new Asset({
     name: draft.name,
-    startingValue: Number(draft.startingValue),
+    startingValue: parseEditableNumber(draft.startingValue),
     expectedReturn: Number(draft.expectedReturn),
     volatility: Number(draft.volatility),
     sellProportion: 0,
@@ -5141,7 +5413,7 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
     ...(draft.saleTaxEnabled
       ? {
           saleTax: {
-            costBasis: Number(draft.saleTaxCostBasis),
+            costBasis: parseEditableNumber(draft.saleTaxCostBasis),
             taxTreatment: draft.saleTaxTreatment,
           } satisfies AssetSaleTaxDefinition,
         }
@@ -5527,6 +5799,10 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
               ? Math.max(1, Math.min(10, Math.ceil(partialState.monthsToShow / 12)))
               : fallbackState.yearsToShow;
   simulationDraft.startYear = plannerState.startYear;
+  simulationDraft.horizonYears =
+    typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
+      ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
+      : createSimulationDraft().horizonYears;
   syncTaxProfileDraft();
   syncSimulationDraftAssetRows();
 }
@@ -5574,6 +5850,7 @@ async function persistPlannerState(user: UserIdentity): Promise<void> {
     events: serializeEvents(snapshot.events),
     startYear: plannerState.startYear,
     yearsToShow: plannerState.yearsToShow,
+    simulationHorizonYears: simulationDraft.horizonYears,
   });
 }
 

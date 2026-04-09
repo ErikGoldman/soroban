@@ -227,6 +227,8 @@ describe("computeHouseholdTaxes", () => {
         shortTermCapitalGains: 0,
         longTermCapitalGains: 0,
         taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
         deductibleExpenses: 0,
       },
       profile,
@@ -261,6 +263,8 @@ describe("computeHouseholdTaxes", () => {
         shortTermCapitalGains: 0,
         longTermCapitalGains: 0,
         taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
         deductibleExpenses: 0,
       },
       profile,
@@ -295,6 +299,8 @@ describe("computeHouseholdTaxes", () => {
         shortTermCapitalGains: 0,
         longTermCapitalGains: 0,
         taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
         deductibleExpenses: 15000,
       },
       profile,
@@ -329,6 +335,8 @@ describe("computeHouseholdTaxes", () => {
         shortTermCapitalGains: 0,
         longTermCapitalGains: 0,
         taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
         deductibleExpenses: 10000,
       },
       profile,
@@ -340,5 +348,132 @@ describe("computeHouseholdTaxes", () => {
     expect(result.niitIncomeAboveThreshold).toBe(20000);
     expect(result.niitTaxableIncome).toBe(0);
     expect(result.taxByName.get("Federal NIIT")).toBeCloseTo(0, 6);
+  });
+
+  it("treats tax-exempt income as exempt federally but taxable to state and local by default", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "Federal ordinary income",
+      federalQualifiedTaxName: "",
+      stateTaxName: "State tax",
+      localTaxName: "Local tax",
+      niitTaxName: "",
+    };
+    const taxes = [
+      new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.2 }] }),
+      new Tax({ name: "State tax", taxRates: [{ rate: 0.1 }] }),
+      new Tax({ name: "Local tax", taxRates: [{ rate: 0.05 }] }),
+    ];
+
+    const result = computeHouseholdTaxes(
+      {
+        wages: 0,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: 0,
+        longTermCapitalGains: 0,
+        taxExemptIncome: 100,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
+        deductibleExpenses: 0,
+      },
+      profile,
+      taxes
+    );
+
+    expect(result.federalOrdinaryTaxableIncome).toBe(0);
+    expect(result.stateTaxableIncome).toBe(100);
+    expect(result.localTaxableIncome).toBe(100);
+    expect(result.taxByName.get("Federal ordinary income")).toBeCloseTo(0, 6);
+    expect(result.taxByName.get("State tax")).toBeCloseTo(10, 6);
+    expect(result.taxByName.get("Local tax")).toBeCloseTo(5, 6);
+  });
+
+  it("treats state-local exempt income as federally taxable but exempt from state and local tax", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "Federal ordinary income",
+      federalQualifiedTaxName: "",
+      stateTaxName: "State tax",
+      localTaxName: "Local tax",
+      niitTaxName: "Federal NIIT",
+      niitThreshold: 0,
+    };
+    const taxes = [
+      new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.2 }] }),
+      new Tax({ name: "State tax", taxRates: [{ rate: 0.1 }] }),
+      new Tax({ name: "Local tax", taxRates: [{ rate: 0.05 }] }),
+      new Tax({ name: "Federal NIIT", taxRates: [{ rate: 0.038 }] }),
+    ];
+
+    const result = computeHouseholdTaxes(
+      {
+        wages: 0,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: 0,
+        longTermCapitalGains: 0,
+        taxExemptIncome: 0,
+        stateLocalExemptIncome: 100,
+        tripleExemptIncome: 0,
+        deductibleExpenses: 0,
+      },
+      profile,
+      taxes
+    );
+
+    expect(result.federalOrdinaryTaxableIncome).toBe(100);
+    expect(result.stateTaxableIncome).toBe(0);
+    expect(result.localTaxableIncome).toBe(0);
+    expect(result.netInvestmentIncome).toBe(100);
+    expect(result.modifiedAdjustedGrossIncome).toBe(100);
+    expect(result.taxByName.get("Federal ordinary income")).toBeCloseTo(20, 6);
+    expect(result.taxByName.get("State tax")).toBeCloseTo(0, 6);
+    expect(result.taxByName.get("Local tax")).toBeCloseTo(0, 6);
+    expect(result.taxByName.get("Federal NIIT")).toBeCloseTo(3.8, 6);
+  });
+
+  it("treats triple-exempt income as exempt from federal, state, and local tax", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "Federal ordinary income",
+      federalQualifiedTaxName: "",
+      stateTaxName: "State tax",
+      localTaxName: "Local tax",
+      niitTaxName: "Federal NIIT",
+      niitThreshold: 0,
+    };
+    const taxes = [
+      new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.2 }] }),
+      new Tax({ name: "State tax", taxRates: [{ rate: 0.1 }] }),
+      new Tax({ name: "Local tax", taxRates: [{ rate: 0.05 }] }),
+      new Tax({ name: "Federal NIIT", taxRates: [{ rate: 0.038 }] }),
+    ];
+
+    const result = computeHouseholdTaxes(
+      {
+        wages: 0,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: 0,
+        longTermCapitalGains: 0,
+        taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 100,
+        deductibleExpenses: 0,
+      },
+      profile,
+      taxes
+    );
+
+    expect(result.federalOrdinaryTaxableIncome).toBe(0);
+    expect(result.stateTaxableIncome).toBe(0);
+    expect(result.localTaxableIncome).toBe(0);
+    expect(result.netInvestmentIncome).toBe(0);
+    expect(result.modifiedAdjustedGrossIncome).toBe(0);
+    expect(result.totalTax).toBeCloseTo(0, 6);
   });
 });
