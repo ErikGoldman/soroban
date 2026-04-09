@@ -1,28 +1,108 @@
 # Soroban Financial Planner
 
-Minimal web app scaffold for a financial planning tool.
+Soroban is a browser-based financial planning sandbox built with TypeScript and Vite. It lets you model household cash flows with formulas, apply scheduled events over time, define taxable assets, and run Monte Carlo portfolio simulations directly in the browser.
 
-## Current state
+## What the app does
 
-- Stub auth exposes a current user `id` and `email`.
-- Storage is abstracted behind a small interface and currently uses IndexedDB.
-- The first feature calculates future value at 4% annual interest and persists the latest result per user.
+- Creates planner variables such as `salary`, `rent`, and `groceries`
+- Defines recurring income and expense flows using formulas
+- Applies dated events that can:
+  - change a flow formula
+  - adjust a variable with `m * x + b`
+  - add a new variable
+  - add a new flow
+  - create one-time expenses
+- Models assets with:
+  - starting value
+  - expected annual return
+  - volatility
+  - optional cash generation streams
+  - optional sale tax basis and tax treatment
+  - pairwise correlations
+- Configures household taxes and tax profiles, including a built-in NYC 2025 preset
+- Runs Monte Carlo simulations with percentile views, depletion probability, and representative scenario detail
+- Persists planner state locally in IndexedDB
 
-## Run it
+## Tech stack
+
+- TypeScript
+- Vite
+- Vitest
+- Browser APIs: IndexedDB and Web Workers
+
+## Getting started
+
+### Requirements
+
+- Node.js 18+
+- Yarn 1.x
+
+### Install
 
 ```bash
 yarn install
+```
+
+### Start the dev server
+
+```bash
 yarn dev
 ```
 
-Then open the local Vite URL, typically `http://127.0.0.1:5173`.
+Vite serves the frontend from [`web/`](/home/erikg/projects/soroban/main/web), usually at `http://127.0.0.1:5173` or `http://localhost:5173`.
 
-## Tooling
+### Build for production
 
-- `vite` handles the dev server and production build
-- `tsc --noEmit` handles typechecking
-- App source lives in `web/` and Vite is configured to treat that as the frontend root
+```bash
+yarn build
+```
 
-## Next obvious extension
+The production build is emitted to [`dist/`](/home/erikg/projects/soroban/main/dist).
 
-Replace `createPlanningStorage()` in `web/src/storage.ts` with a Supabase-backed implementation while keeping the rest of the app unchanged.
+### Run tests
+
+```bash
+yarn test
+```
+
+## Available scripts
+
+- `yarn dev` starts the Vite dev server
+- `yarn build` runs typechecking and creates a production bundle
+- `yarn preview` previews the production build locally
+- `yarn test` runs the Vitest suite
+
+## How to use it
+
+1. Open the app and review the default planner state.
+2. Add or edit variables, flows, assets, taxes, and scheduled events in the Setup view.
+3. Optionally load the NYC 2025 tax preset.
+4. Move to the Simulation view, choose the start year, horizon, and attempt count.
+5. Set asset sell proportions so they add up to `100%`.
+6. Run the simulation and review percentile paths, depletion probability, and detailed example years.
+
+## Project structure
+
+- [`package.json`](/home/erikg/projects/soroban/main/package.json) contains scripts and tool metadata
+- [`vite.config.ts`](/home/erikg/projects/soroban/main/vite.config.ts) configures Vite with [`web/`](/home/erikg/projects/soroban/main/web) as the frontend root
+- [`web/src/main.ts`](/home/erikg/projects/soroban/main/web/src/main.ts) contains the application UI, state management, persistence wiring, and simulation orchestration
+- [`web/src/finance.ts`](/home/erikg/projects/soroban/main/web/src/finance.ts) contains formula parsing, planner domain objects, and event logic
+- [`web/src/tax.ts`](/home/erikg/projects/soroban/main/web/src/tax.ts) contains the tax engine and default household tax profile logic
+- [`web/src/simulation.ts`](/home/erikg/projects/soroban/main/web/src/simulation.ts) contains the Monte Carlo engine and percentile aggregation
+- [`web/src/simulation-worker.ts`](/home/erikg/projects/soroban/main/web/src/simulation-worker.ts) runs simulation work in browser workers
+- [`web/src/storage.ts`](/home/erikg/projects/soroban/main/web/src/storage.ts) persists planner data in IndexedDB
+- [`web/src/*.test.ts`](/home/erikg/projects/soroban/main/web/src) covers the formula engine, taxes, and simulation behavior
+
+## Current behavior and constraints
+
+- Authentication is currently a stubbed demo user defined in [`web/src/auth.ts`](/home/erikg/projects/soroban/main/web/src/auth.ts).
+- Persistence is local to the browser via IndexedDB. There is no backend sync, multi-user support, or server-side storage.
+- The simulation operates on yearly snapshots and annual return assumptions.
+- The simulation UI currently exposes a single tax preset option: `NYC`.
+- Simulations require at least one asset and sell proportions that sum to `100%`.
+
+## Notes for future extension
+
+- Swap the IndexedDB storage implementation behind `createPlanningStorage()` for a server-backed store without rewriting the rest of the app.
+- Replace the stub auth service with a real identity provider.
+- Expand the domain model if the planner needs account wrappers, liabilities, or more detailed household planning behavior.
