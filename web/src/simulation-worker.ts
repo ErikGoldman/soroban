@@ -4,6 +4,8 @@ import { Tax, type TaxDefinition } from "./tax.js";
 export interface SimulationWorkerRunInput
   extends Omit<BuildSimulationScenariosInput, "taxes" | "nextStandardNormal"> {
   taxes: readonly TaxDefinition[];
+  detailSampleLimit?: number | null;
+  includeAggregates?: boolean;
 }
 
 export interface SimulationWorkerProgressMessage {
@@ -18,6 +20,8 @@ export interface SimulationWorkerCompleteMessage {
   requestId: number;
   scenarios: ReturnType<typeof buildSimulationExecution>["scenarios"];
   details: ReturnType<typeof buildSimulationExecution>["details"];
+  yearlyTotals?: ReturnType<typeof buildSimulationExecution>["yearlyTotals"];
+  depletionCountsByYear?: ReturnType<typeof buildSimulationExecution>["depletionCountsByYear"];
 }
 
 export interface SimulationWorkerErrorMessage {
@@ -48,10 +52,17 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
   try {
     const result = buildSimulationExecution(
       {
-        ...message.input,
+        attempts: message.input.attempts,
+        horizonYears: message.input.horizonYears,
+        yearlySnapshots: message.input.yearlySnapshots,
+        assets: message.input.assets,
+        assetCorrelations: message.input.assetCorrelations,
+        householdTaxProfile: message.input.householdTaxProfile,
         taxes: message.input.taxes.map((tax) => new Tax(tax)),
       },
       {
+        detailSampleLimit: message.input.detailSampleLimit,
+        includeAggregates: message.input.includeAggregates,
         onProgress: ({ completedAttempts, totalAttempts }) => {
           const progressMessage: SimulationWorkerProgressMessage = {
             type: "progress",
@@ -68,6 +79,8 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
       requestId: message.requestId,
       scenarios: result.scenarios,
       details: result.details,
+      ...(result.yearlyTotals ? { yearlyTotals: result.yearlyTotals } : {}),
+      ...(result.depletionCountsByYear ? { depletionCountsByYear: result.depletionCountsByYear } : {}),
     };
     self.postMessage(completeMessage);
   } catch (error) {

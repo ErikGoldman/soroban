@@ -119,11 +119,15 @@ export interface SimulationExecutionProgress {
 export interface BuildSimulationExecutionOptions {
   onProgress?: (progress: SimulationExecutionProgress) => void;
   progressInterval?: number;
+  detailSampleLimit?: number | null;
+  includeAggregates?: boolean;
 }
 
 export interface BuildSimulationExecutionResult {
   scenarios: Map<SimulationPercentile, SimulationScenario>;
   details: SimulationDetailScenario[];
+  yearlyTotals?: number[][];
+  depletionCountsByYear?: number[];
 }
 
 export function getAssetCorrelationValue(
@@ -295,7 +299,7 @@ export function buildSimulationExecution(
     householdTaxProfile = null,
     nextStandardNormal = randomStandardNormal,
   }: BuildSimulationScenariosInput,
-  { onProgress, progressInterval }: BuildSimulationExecutionOptions = {}
+  { onProgress, progressInterval, detailSampleLimit = null, includeAggregates = true }: BuildSimulationExecutionOptions = {}
 ): BuildSimulationExecutionResult {
   const { scenarios, yearlyTotals, depletionCountsByYear } = runSimulationAttempts(
     {
@@ -311,6 +315,7 @@ export function buildSimulationExecution(
     {
       onProgress,
       progressInterval,
+      detailSampleLimit,
     }
   );
   return {
@@ -322,6 +327,12 @@ export function buildSimulationExecution(
       depletionCountsByYear,
     }),
     details: scenarios,
+    ...(includeAggregates
+      ? {
+          yearlyTotals,
+          depletionCountsByYear,
+        }
+      : {}),
   };
 }
 
@@ -353,6 +364,28 @@ export function buildSimulationScenariosFromDetails({
     }
   }
 
+  return buildSimulationScenariosFromAggregates({
+    attempts,
+    horizonYears,
+    yearlySnapshots,
+    yearlyTotals,
+    depletionCountsByYear,
+  });
+}
+
+export function buildSimulationScenariosFromAggregates({
+  attempts,
+  horizonYears,
+  yearlySnapshots,
+  yearlyTotals,
+  depletionCountsByYear,
+}: {
+  attempts: number;
+  horizonYears: number;
+  yearlySnapshots: readonly SimulationYearlySnapshot[];
+  yearlyTotals: readonly (readonly number[])[];
+  depletionCountsByYear: readonly number[];
+}): Map<SimulationPercentile, SimulationScenario> {
   return buildSimulationScenarioSummaries({
     attempts,
     horizonYears,
@@ -494,6 +527,7 @@ function runSimulationAttempts({
 {
   onProgress,
   progressInterval = Math.max(1, Math.floor(attempts / 100)),
+  detailSampleLimit = null,
 }: BuildSimulationExecutionOptions = {}): SimulationExecutionResult {
   const scenarios: SimulationDetailScenario[] = [];
   const yearlyTotals = Array.from({ length: horizonYears }, () => [] as number[]);
@@ -502,6 +536,7 @@ function runSimulationAttempts({
   const assetNames = normalizedAssets.map((asset) => asset.name);
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const shouldCaptureScenarioDetails = detailSampleLimit === null || scenarios.length < detailSampleLimit;
     let assetValues = new Map(normalizedAssets.map((asset) => [asset.name, asset.startingValue]));
     let assetCostBases = new Map(
       normalizedAssets.map((asset) => [asset.name, Math.min(asset.saleTax?.costBasis ?? asset.startingValue, asset.startingValue)])
@@ -628,29 +663,33 @@ function runSimulationAttempts({
         depletionCountsByYear[yearIndex] += 1;
       }
 
-      yearlyRows.push({
-        yearNumber: yearIndex + 1,
-        label: snapshot.label,
-        startingAssets: startingTotalAssets,
-        endingAssets: finalTotalAssets,
-        totalExpenses,
-        totalGains,
-        taxableGains: totalTaxableGains,
-        taxAmount: taxBreakdown.totalTax,
-        depletionProbability: ((depletionCountsByYear[yearIndex] ?? 0) / Math.max(1, attempt + 1)) * 100,
-        householdTaxInput: saleResult.taxInput,
-        flowTotals: flowTotalsWithTaxes,
-        assetValues: yearAssetValues,
-        assetReturns,
-        totalAssets: finalTotalAssets,
-        taxBreakdown,
-      });
+      if (shouldCaptureScenarioDetails) {
+        yearlyRows.push({
+          yearNumber: yearIndex + 1,
+          label: snapshot.label,
+          startingAssets: startingTotalAssets,
+          endingAssets: finalTotalAssets,
+          totalExpenses,
+          totalGains,
+          taxableGains: totalTaxableGains,
+          taxAmount: taxBreakdown.totalTax,
+          depletionProbability: ((depletionCountsByYear[yearIndex] ?? 0) / Math.max(1, attempt + 1)) * 100,
+          householdTaxInput: saleResult.taxInput,
+          flowTotals: flowTotalsWithTaxes,
+          assetValues: yearAssetValues,
+          assetReturns,
+          totalAssets: finalTotalAssets,
+          taxBreakdown,
+        });
+      }
     }
 
-    scenarios.push({
-      rows: yearlyRows,
-      finalTotalAssets: yearlyRows[yearlyRows.length - 1]?.totalAssets ?? 0,
-    });
+    if (shouldCaptureScenarioDetails) {
+      scenarios.push({
+        rows: yearlyRows,
+        finalTotalAssets: yearlyRows[yearlyRows.length - 1]?.totalAssets ?? 0,
+      });
+    }
 
     if (onProgress && ((attempt + 1) % progressInterval === 0 || attempt === attempts - 1)) {
       onProgress({

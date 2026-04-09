@@ -4,7 +4,7 @@ import { createPlanningStorage, type SavedPlannerState } from "./storage.js";
 import {
   VARIABLE_SWEEP_STEP_COUNT,
   buildVariableSweepValues,
-  buildSimulationScenariosFromDetails,
+  buildSimulationScenariosFromAggregates,
   getAssetCorrelationValue,
   selectRepresentativeSimulationScenario,
   type SimulationDetailScenario,
@@ -284,6 +284,7 @@ type TaxPreset = "nyc";
 const VARIABLE_SWEEP_STORAGE_KEY_PREFIX = "soroban:simulation-variable-sweep:";
 // When true, each active worker is assigned a distinct sweep value before any sweep is split into chunks.
 const ENABLE_VARIABLE_SWEEP_WORKER_FANOUT = true;
+const VARIABLE_SWEEP_DETAIL_SAMPLE_LIMIT = 128;
 
 const auth = new StubAuthService();
 const storage = createPlanningStorage();
@@ -3823,6 +3824,10 @@ function bindHandlers(user: UserIdentity): void {
         : Array.from({ length: chunkCount }, (_, index) =>
             Math.floor(run.input.attempts / chunkCount) + (index < run.input.attempts % chunkCount ? 1 : 0)
           ).filter((attemptCount) => attemptCount > 0);
+      const detailSampleLimitPerTask =
+        sweepVariableName === null
+          ? null
+          : Math.max(1, Math.ceil(VARIABLE_SWEEP_DETAIL_SAMPLE_LIMIT / taskAttemptCounts.length));
       run.taskIds = taskAttemptCounts.map((attemptCount, chunkIndex) => {
         const taskId = nextTaskId;
         nextTaskId += 1;
@@ -3834,6 +3839,8 @@ function bindHandlers(user: UserIdentity): void {
           input: {
             ...run.input,
             attempts: attemptCount,
+            detailSampleLimit: detailSampleLimitPerTask,
+            includeAggregates: taskAttemptCounts.length > 1,
           },
         });
         return taskId;
@@ -3844,7 +3851,10 @@ function bindHandlers(user: UserIdentity): void {
     const totalAttempts = simulationRuns.reduce((total, run) => total + run.input.attempts, 0);
     const workerCount = Math.max(1, Math.min(maxWorkerCount, taskDefinitions.length));
     const completedAttemptsByTask = new Map<number, number>();
+    const scenariosByTask = new Map<number, Map<SimulationPercentile, SimulationScenario>>();
     const detailResultsByTask = new Map<number, SimulationDetailScenario[]>();
+    const yearlyTotalsByTask = new Map<number, number[][]>();
+    const depletionCountsByTask = new Map<number, number[]>();
     const completedTaskCountsByRun = simulationRuns.map(() => 0);
     let pendingTasks = taskDefinitions.length;
     let nextTaskIndex = 0;
@@ -3912,15 +3922,25 @@ function bindHandlers(user: UserIdentity): void {
           .sort((left, right) => left.chunkIndex - right.chunkIndex)
           .flatMap((task) => detailResultsByTask.get(task.id) ?? []);
 
+        const results =
+          run.taskIds.length === 1
+            ? (scenariosByTask.get(run.taskIds[0]) ?? new Map<SimulationPercentile, SimulationScenario>())
+            : buildSimulationScenariosFromAggregates({
+                attempts: run.input.attempts,
+                horizonYears: run.input.horizonYears,
+                yearlySnapshots: run.input.yearlySnapshots,
+                yearlyTotals: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
+                  run.taskIds.flatMap((taskId) => yearlyTotalsByTask.get(taskId)?.[rowIndex] ?? [])
+                ),
+                depletionCountsByYear: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
+                  run.taskIds.reduce((total, taskId) => total + (depletionCountsByTask.get(taskId)?.[rowIndex] ?? 0), 0)
+                ),
+              });
+
         return {
           ...run,
           details: mergedDetails,
-          results: buildSimulationScenariosFromDetails({
-            attempts: run.input.attempts,
-            horizonYears: run.input.horizonYears,
-            yearlySnapshots: run.input.yearlySnapshots,
-            details: mergedDetails,
-          }),
+          results,
         };
       });
 
@@ -3995,7 +4015,14 @@ function bindHandlers(user: UserIdentity): void {
         }
 
         completedAttemptsByTask.set(task.id, task.attemptCount);
+        scenariosByTask.set(task.id, message.scenarios);
         detailResultsByTask.set(task.id, message.details);
+        if (message.yearlyTotals) {
+          yearlyTotalsByTask.set(task.id, message.yearlyTotals);
+        }
+        if (message.depletionCountsByYear) {
+          depletionCountsByTask.set(task.id, message.depletionCountsByYear);
+        }
         completedTaskCountsByRun[task.sweepIndex] += 1;
         pendingTasks -= 1;
         updateSimulationProgress();
