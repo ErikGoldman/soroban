@@ -1,0 +1,945 @@
+export type FormulaContext = Record<string, number>;
+
+type BinaryOperator = "+" | "-" | "*" | "/" | "^";
+
+type FormulaNode =
+  | { type: "number"; value: number }
+  | { type: "variable"; name: string }
+  | { type: "unary"; operator: "+" | "-"; operand: FormulaNode }
+  | { type: "binary"; operator: BinaryOperator; left: FormulaNode; right: FormulaNode };
+
+interface Token {
+  type: "number" | "identifier" | "operator" | "paren" | "eof";
+  value: string;
+}
+
+export interface VariableDefinition {
+  name: string;
+  value: number;
+}
+
+export interface AssetDefinition {
+  name: string;
+  startingValue: number;
+  expectedReturn: number;
+  volatility: number;
+  sellProportion: number;
+  cashGeneration?: AssetCashGenerationDefinition;
+  cashGenerations?: readonly AssetCashGenerationDefinition[];
+  saleTax?: AssetSaleTaxDefinition;
+}
+
+export type FlowTaxTreatment =
+  | "wages"
+  | "ordinary-income"
+  | "qualified-dividends"
+  | "short-term-capital-gains"
+  | "long-term-capital-gains"
+  | "tax-exempt-income"
+  | "deductible-expense"
+  | "nondeductible-expense";
+
+export type AssetCashTaxTreatment =
+  | "ordinary-income"
+  | "qualified-dividends"
+  | "tax-exempt-income"
+  | "not-taxable";
+
+export type AssetSaleTaxTreatment =
+  | "short-term-capital-gains"
+  | "long-term-capital-gains"
+  | "not-taxable";
+
+export interface AssetCashGenerationDefinition {
+  name?: string;
+  rate: number;
+  volatility: number;
+  taxTreatment?: AssetCashTaxTreatment;
+  taxNames?: readonly string[];
+}
+
+export interface AssetSaleTaxDefinition {
+  costBasis: number;
+  taxTreatment?: AssetSaleTaxTreatment;
+  taxableGainProportion?: number;
+  taxNames?: readonly string[];
+}
+
+export interface AssetCorrelationDefinition {
+  assetA: string;
+  assetB: string;
+  correlation: number;
+}
+
+export interface LinearAdjustment {
+  m: number;
+  b: number;
+}
+
+export class Variable {
+  readonly name: string;
+  private currentValue: number;
+
+  constructor({ name, value }: VariableDefinition) {
+    if (!name.trim()) {
+      throw new Error("Variable name is required.");
+    }
+
+    assertFiniteNumber(value, `Initial value for variable "${name}" must be finite.`);
+
+    this.name = name;
+    this.currentValue = value;
+  }
+
+  get value(): number {
+    return this.currentValue;
+  }
+
+  setValue(nextValue: number): number {
+    assertFiniteNumber(nextValue, `Next value for variable "${this.name}" must be finite.`);
+    this.currentValue = nextValue;
+    return this.currentValue;
+  }
+
+  adjustLinearly({ m, b }: LinearAdjustment): number {
+    assertFiniteNumber(m, `Linear multiplier for variable "${this.name}" must be finite.`);
+    assertFiniteNumber(b, `Linear offset for variable "${this.name}" must be finite.`);
+    this.currentValue = m * this.currentValue + b;
+    return this.currentValue;
+  }
+}
+
+export class Asset {
+  readonly name: string;
+  readonly startingValue: number;
+  readonly expectedReturn: number;
+  readonly volatility: number;
+  readonly sellProportion: number;
+  readonly cashGenerations: readonly AssetCashGenerationDefinition[];
+  readonly saleTax: AssetSaleTaxDefinition | null;
+
+  constructor({
+    name,
+    startingValue,
+    expectedReturn,
+    volatility,
+    sellProportion,
+    cashGeneration,
+    cashGenerations,
+    saleTax,
+  }: AssetDefinition) {
+    const normalizedName = name.trim();
+
+    if (!normalizedName) {
+      throw new Error("Asset name is required.");
+    }
+
+    assertFiniteNumber(startingValue, `Starting value for asset "${normalizedName}" must be finite.`);
+    assertFiniteNumber(expectedReturn, `Expected return for asset "${normalizedName}" must be finite.`);
+    assertFiniteNumber(volatility, `Volatility for asset "${normalizedName}" must be finite.`);
+    assertFiniteNumber(sellProportion, `Sell proportion for asset "${normalizedName}" must be finite.`);
+
+    if (sellProportion < 0 || sellProportion > 1) {
+      throw new Error(`Sell proportion for asset "${normalizedName}" must be between 0 and 1.`);
+    }
+
+    const normalizedCashGenerations = normalizeAssetCashGenerations(
+      normalizedName,
+      cashGenerations,
+      cashGeneration
+    );
+    const normalizedSaleTax = normalizeAssetSaleTax(normalizedName, saleTax);
+
+    this.name = normalizedName;
+    this.startingValue = startingValue;
+    this.expectedReturn = expectedReturn;
+    this.volatility = volatility;
+    this.sellProportion = sellProportion;
+    this.cashGenerations = normalizedCashGenerations;
+    this.saleTax = normalizedSaleTax;
+  }
+
+  toDefinition(): AssetDefinition {
+    return {
+      name: this.name,
+      startingValue: this.startingValue,
+      expectedReturn: this.expectedReturn,
+      volatility: this.volatility,
+      sellProportion: this.sellProportion,
+      ...(this.cashGenerations.length > 0 ? { cashGenerations: this.cashGenerations } : {}),
+      ...(this.saleTax ? { saleTax: this.saleTax } : {}),
+    };
+  }
+}
+
+export function normalizeAssetCorrelationPair(assetA: string, assetB: string): {
+  assetA: string;
+  assetB: string;
+} {
+  const normalizedA = assetA.trim();
+  const normalizedB = assetB.trim();
+
+  if (!normalizedA || !normalizedB) {
+    throw new Error("Asset correlation pair requires both asset names.");
+  }
+
+  if (normalizedA === normalizedB) {
+    throw new Error("Asset correlation pair must reference two different assets.");
+  }
+
+  return normalizedA < normalizedB
+    ? { assetA: normalizedA, assetB: normalizedB }
+    : { assetA: normalizedB, assetB: normalizedA };
+}
+
+export function createAssetCorrelationDefinition({
+  assetA,
+  assetB,
+  correlation,
+}: AssetCorrelationDefinition): AssetCorrelationDefinition {
+  const pair = normalizeAssetCorrelationPair(assetA, assetB);
+  assertFiniteNumber(correlation, `Correlation for "${pair.assetA}" and "${pair.assetB}" must be finite.`);
+
+  if (correlation < -1 || correlation > 1) {
+    throw new Error(`Correlation for "${pair.assetA}" and "${pair.assetB}" must be between -1 and 1.`);
+  }
+
+  return {
+    ...pair,
+    correlation,
+  };
+}
+
+export function deleteAssetAndPruneCorrelations(
+  assets: readonly AssetDefinition[],
+  correlations: readonly AssetCorrelationDefinition[],
+  assetName: string
+): {
+  assets: AssetDefinition[];
+  correlations: AssetCorrelationDefinition[];
+} {
+  const normalizedName = assetName.trim();
+
+  return {
+    assets: assets.filter((asset) => asset.name !== normalizedName),
+    correlations: correlations.filter(
+      (correlation) => correlation.assetA !== normalizedName && correlation.assetB !== normalizedName
+    ),
+  };
+}
+
+export type FlowType = "income" | "expense";
+
+export interface FlowDefinition {
+  name: string;
+  type: FlowType;
+  formula: string;
+  taxTreatment?: FlowTaxTreatment;
+  inflationAdjusted?: boolean;
+}
+
+export const DEFAULT_EXPENSE_INFLATION_RATE = 0.03;
+
+export class Flow {
+  readonly name: string;
+  readonly type: FlowType;
+  readonly taxTreatment: FlowTaxTreatment;
+  readonly inflationAdjusted: boolean;
+  private currentFormula: string;
+
+  constructor({ name, type, formula, taxTreatment, inflationAdjusted }: FlowDefinition) {
+    if (!name.trim()) {
+      throw new Error("Flow name is required.");
+    }
+
+    if (type !== "income" && type !== "expense") {
+      throw new Error(`Unsupported flow type: ${type}`);
+    }
+
+    if (!formula.trim()) {
+      throw new Error(`Flow "${name}" requires a formula.`);
+    }
+
+    this.name = name;
+    this.type = type;
+    this.taxTreatment = normalizeFlowTaxTreatment(type, taxTreatment);
+    this.inflationAdjusted = normalizeFlowInflationAdjusted(type, inflationAdjusted);
+    this.currentFormula = formula;
+  }
+
+  get formula(): string {
+    return this.currentFormula;
+  }
+
+  setFormula(nextFormula: string): string {
+    if (!nextFormula.trim()) {
+      throw new Error(`Flow "${this.name}" requires a formula.`);
+    }
+
+    this.currentFormula = nextFormula;
+    return this.currentFormula;
+  }
+
+  evaluateYearlyAmount(context: FormulaContext): number {
+    const amount = evaluateFormula(this.formula, context);
+    return Math.abs(amount);
+  }
+
+  evaluateSignedYearlyAmount(context: FormulaContext): number {
+    const amount = this.evaluateYearlyAmount(context);
+    return this.type === "expense" ? -amount : amount;
+  }
+}
+
+export function createFormulaContext(variables: readonly Variable[]): FormulaContext {
+  return Object.fromEntries(variables.map((variable) => [variable.name, variable.value]));
+}
+
+export function evaluateFormula(formula: string, context: FormulaContext = {}): number {
+  const parser = new FormulaParser(formula);
+  const ast = parser.parse();
+  return evaluateNode(ast, context);
+}
+
+export function sumSignedYearlyFlows(flows: readonly Flow[], context: FormulaContext): number {
+  return flows.reduce((total, flow) => total + flow.evaluateSignedYearlyAmount(context), 0);
+}
+
+export function isFlowInflationAdjusted(
+  flow: Pick<FlowDefinition, "type" | "inflationAdjusted">
+): boolean {
+  return normalizeFlowInflationAdjusted(flow.type, flow.inflationAdjusted);
+}
+
+export function applyFlowExpenseInflation(
+  flow: Pick<FlowDefinition, "type" | "inflationAdjusted">,
+  signedAmount: number,
+  yearOffset: number,
+  annualInflationRate: number = DEFAULT_EXPENSE_INFLATION_RATE
+): number {
+  assertFiniteNumber(signedAmount, "Flow amount must be finite.");
+  assertFiniteNumber(yearOffset, "Flow year offset must be finite.");
+  assertFiniteNumber(annualInflationRate, "Annual inflation rate must be finite.");
+
+  if (!isFlowInflationAdjusted(flow)) {
+    return signedAmount;
+  }
+
+  return signedAmount * Math.pow(1 + annualInflationRate, Math.max(0, yearOffset));
+}
+
+export interface EventYear {
+  year: number;
+}
+
+export interface FlowFormulaSetAction {
+  kind: "set-flow-formula";
+  flowName: string;
+  formula: string;
+}
+
+export interface VariableAdjustAction {
+  kind: "adjust-variable";
+  variableName: string;
+  adjustment: LinearAdjustment;
+}
+
+export interface AddVariableAction {
+  kind: "add-variable";
+  variable: VariableDefinition;
+}
+
+export interface AddFlowAction {
+  kind: "add-flow";
+  flow: FlowDefinition;
+}
+
+export type EventAction =
+  | FlowFormulaSetAction
+  | VariableAdjustAction
+  | AddVariableAction
+  | AddFlowAction;
+
+export interface ScheduledEventAction {
+  year: EventYear;
+  actions: readonly EventAction[];
+}
+
+export interface OneTimeExpenseDefinition {
+  flowName: string;
+  year: EventYear;
+  formula: string;
+}
+
+export interface EventDefinition {
+  name: string;
+  flowName?: string;
+  schedule: readonly ScheduledEventAction[];
+}
+
+export interface PlannerSnapshot {
+  variables: VariableDefinition[];
+  flows: FlowDefinition[];
+  events: EventDefinition[];
+}
+
+export interface FinancialState {
+  variables: Variable[];
+  flows: Flow[];
+}
+
+export class Event {
+  readonly name: string;
+  readonly flowName: string;
+  readonly schedule: readonly ScheduledEventAction[];
+
+  constructor({ name, flowName, schedule }: EventDefinition) {
+    if (!name.trim()) {
+      throw new Error("Event name is required.");
+    }
+
+    if (schedule.length === 0) {
+      throw new Error(`Event "${name}" requires at least one scheduled action.`);
+    }
+
+    this.name = name;
+    this.flowName = flowName?.trim() ?? inferEventFlowName(schedule);
+    this.schedule = [...schedule]
+      .map((entry) => ({
+        year: normalizeEventYear(entry.year),
+        actions: [...entry.actions],
+      }))
+      .sort((left, right) => compareEventYears(left.year, right.year));
+  }
+
+  applyForYear(year: EventYear, state: FinancialState): void {
+    const targetYear = normalizeEventYear(year);
+
+    for (const scheduledAction of this.schedule) {
+      if (sameYear(scheduledAction.year, targetYear)) {
+        applyEventActions(scheduledAction.actions, state);
+      }
+    }
+  }
+}
+
+export function applyEventsForYear(
+  events: readonly Event[],
+  year: EventYear,
+  state: FinancialState
+): void {
+  for (const event of events) {
+    event.applyForYear(year, state);
+  }
+}
+
+export function createOneTimeExpenseSchedule({
+  flowName,
+  year,
+  formula,
+}: OneTimeExpenseDefinition): ScheduledEventAction[] {
+  if (!flowName.trim()) {
+    throw new Error("One-time expense flow name is required.");
+  }
+
+  if (!formula.trim()) {
+    throw new Error(`One-time expense formula for "${flowName}" is required.`);
+  }
+
+  const normalizedYear = normalizeEventYear(year);
+
+  return [
+    {
+      year: normalizedYear,
+      actions: [
+        {
+          kind: "add-flow",
+          flow: { name: flowName, type: "expense", formula },
+        },
+      ],
+    },
+  ];
+}
+
+export function deleteFlowAndPruneVariables(
+  snapshot: PlannerSnapshot,
+  flowName: string
+): PlannerSnapshot {
+  const flows = snapshot.flows.filter((flow) => flow.name !== flowName);
+  const events = snapshot.events
+    .filter((event) => event.flowName !== flowName)
+    .map((event) => ({
+      ...event,
+      schedule: event.schedule
+        .map((entry) => ({
+          ...entry,
+          actions: entry.actions.filter(
+            (action) => action.kind !== "set-flow-formula" || action.flowName !== flowName
+          ),
+        }))
+        .filter((entry) => entry.actions.length > 0),
+    }))
+    .filter((event) => event.schedule.length > 0);
+
+  return {
+    variables: pruneUnusedVariables({ variables: snapshot.variables, flows, events }),
+    flows,
+    events,
+  };
+}
+
+export function deleteEventAndPruneVariables(
+  snapshot: PlannerSnapshot,
+  eventName: string
+): PlannerSnapshot {
+  const events = snapshot.events.filter((event) => event.name !== eventName);
+
+  return {
+    variables: pruneUnusedVariables({
+      variables: snapshot.variables,
+      flows: snapshot.flows,
+      events,
+    }),
+    flows: [...snapshot.flows],
+    events,
+  };
+}
+
+export function pruneUnusedVariables(snapshot: PlannerSnapshot): VariableDefinition[] {
+  const referencedVariableNames = collectReferencedVariableNames(snapshot.flows, snapshot.events);
+  return snapshot.variables.filter((variable) => referencedVariableNames.has(variable.name));
+}
+
+export function collectReferencedVariableNames(
+  flows: readonly FlowDefinition[],
+  events: readonly EventDefinition[]
+): Set<string> {
+  const referencedVariableNames = new Set<string>();
+
+  for (const flow of flows) {
+    for (const variableName of collectFormulaVariableNames(flow.formula)) {
+      referencedVariableNames.add(variableName);
+    }
+  }
+
+  for (const event of events) {
+    const eventVariableDefinitions = new Set<string>();
+
+    for (const entry of event.schedule) {
+      for (const action of entry.actions) {
+        switch (action.kind) {
+          case "adjust-variable":
+            referencedVariableNames.add(action.variableName);
+            break;
+          case "set-flow-formula":
+            for (const variableName of collectFormulaVariableNames(action.formula)) {
+              referencedVariableNames.add(variableName);
+            }
+            break;
+          case "add-variable":
+            eventVariableDefinitions.add(action.variable.name);
+            break;
+          case "add-flow":
+            for (const variableName of collectFormulaVariableNames(action.flow.formula)) {
+              referencedVariableNames.add(variableName);
+            }
+            break;
+        }
+      }
+    }
+
+    for (const variableName of eventVariableDefinitions) {
+      if (referencedVariableNames.has(variableName)) {
+        referencedVariableNames.add(variableName);
+      }
+    }
+  }
+
+  return referencedVariableNames;
+}
+
+function assertFiniteNumber(value: number, message: string): void {
+  if (!Number.isFinite(value)) {
+    throw new Error(message);
+  }
+}
+
+function normalizeAssetCashGenerations(
+  assetName: string,
+  cashGenerations: readonly AssetCashGenerationDefinition[] | undefined,
+  legacyCashGeneration: AssetCashGenerationDefinition | undefined
+): readonly AssetCashGenerationDefinition[] {
+  const candidateCashGenerations =
+    cashGenerations && cashGenerations.length > 0
+      ? cashGenerations
+      : legacyCashGeneration
+        ? [legacyCashGeneration]
+        : [];
+
+  if (candidateCashGenerations.length === 0) {
+    return [];
+  }
+
+  return candidateCashGenerations.map((cashGeneration, index) => {
+    assertFiniteNumber(cashGeneration.rate, `Cash generation rate for asset "${assetName}" must be finite.`);
+    assertFiniteNumber(
+      cashGeneration.volatility,
+      `Cash generation volatility for asset "${assetName}" must be finite.`
+    );
+
+    if (cashGeneration.rate < 0) {
+      throw new Error(`Cash generation rate for asset "${assetName}" cannot be negative.`);
+    }
+
+    if (cashGeneration.volatility < 0) {
+      throw new Error(`Cash generation volatility for asset "${assetName}" cannot be negative.`);
+    }
+
+    const normalizedName = cashGeneration.name?.trim() || `Cash generation ${index + 1}`;
+
+    return {
+      name: normalizedName,
+      rate: cashGeneration.rate,
+      volatility: cashGeneration.volatility,
+      taxTreatment: normalizeAssetCashTaxTreatment(cashGeneration.taxTreatment),
+    };
+  });
+}
+
+function normalizeAssetSaleTax(
+  assetName: string,
+  saleTax: AssetSaleTaxDefinition | undefined
+): AssetSaleTaxDefinition | null {
+  if (!saleTax) {
+    return null;
+  }
+
+  assertFiniteNumber(saleTax.costBasis, `Cost basis for asset "${assetName}" must be finite.`);
+  if (saleTax.costBasis < 0) {
+    throw new Error(`Cost basis for asset "${assetName}" cannot be negative.`);
+  }
+
+  return {
+    costBasis: saleTax.costBasis,
+    taxTreatment: normalizeAssetSaleTaxTreatment(saleTax.taxTreatment),
+  };
+}
+
+function normalizeFlowTaxTreatment(type: FlowType, taxTreatment: FlowTaxTreatment | undefined): FlowTaxTreatment {
+  if (!taxTreatment) {
+    return type === "income" ? "ordinary-income" : "nondeductible-expense";
+  }
+
+  return taxTreatment;
+}
+
+function normalizeFlowInflationAdjusted(type: FlowType, inflationAdjusted: boolean | undefined): boolean {
+  return type === "expense" ? inflationAdjusted !== false : false;
+}
+
+function normalizeAssetCashTaxTreatment(
+  taxTreatment: AssetCashTaxTreatment | undefined
+): AssetCashTaxTreatment {
+  return taxTreatment ?? "ordinary-income";
+}
+
+function normalizeAssetSaleTaxTreatment(
+  taxTreatment: AssetSaleTaxTreatment | undefined
+): AssetSaleTaxTreatment {
+  return taxTreatment ?? "long-term-capital-gains";
+}
+
+function compareEventYears(left: EventYear, right: EventYear): number {
+  return left.year - right.year;
+}
+
+function inferEventFlowName(schedule: readonly ScheduledEventAction[]): string {
+  const flowNames = new Set<string>();
+
+  for (const entry of schedule) {
+    for (const action of entry.actions) {
+      if (action.kind === "set-flow-formula" && action.flowName.trim()) {
+        flowNames.add(action.flowName.trim());
+      }
+    }
+  }
+
+  return flowNames.size === 1 ? [...flowNames][0] : "";
+}
+
+function normalizeEventYear(year: EventYear): EventYear {
+  if (!Number.isInteger(year.year)) {
+    throw new Error(`Invalid event year "${year.year}".`);
+  }
+
+  return year;
+}
+
+function sameYear(left: EventYear, right: EventYear): boolean {
+  return left.year === right.year;
+}
+
+function applyEventActions(actions: readonly EventAction[], state: FinancialState): void {
+  for (const action of actions) {
+    switch (action.kind) {
+      case "set-flow-formula":
+        findFlow(state.flows, action.flowName).setFormula(action.formula);
+        break;
+      case "adjust-variable":
+        findVariable(state.variables, action.variableName).adjustLinearly(action.adjustment);
+        break;
+      case "add-variable":
+        state.variables.push(new Variable(action.variable));
+        break;
+      case "add-flow":
+        state.flows.push(new Flow(action.flow));
+        break;
+    }
+  }
+}
+
+function findVariable(variables: readonly Variable[], name: string): Variable {
+  const variable = variables.find((entry) => entry.name === name);
+  if (!variable) {
+    throw new Error(`Unknown variable "${name}".`);
+  }
+
+  return variable;
+}
+
+function findFlow(flows: readonly Flow[], name: string): Flow {
+  const flow = flows.find((entry) => entry.name === name);
+  if (!flow) {
+    throw new Error(`Unknown flow "${name}".`);
+  }
+
+  return flow;
+}
+
+function evaluateNode(node: FormulaNode, context: FormulaContext): number {
+  switch (node.type) {
+    case "number":
+      return node.value;
+    case "variable": {
+      const value = context[node.name];
+      if (value === undefined) {
+        throw new Error(`Unknown variable "${node.name}".`);
+      }
+
+      assertFiniteNumber(value, `Variable "${node.name}" must resolve to a finite number.`);
+      return value;
+    }
+    case "unary": {
+      const operand = evaluateNode(node.operand, context);
+      return node.operator === "-" ? -operand : operand;
+    }
+    case "binary": {
+      const left = evaluateNode(node.left, context);
+      const right = evaluateNode(node.right, context);
+
+      switch (node.operator) {
+        case "+":
+          return left + right;
+        case "-":
+          return left - right;
+        case "*":
+          return left * right;
+        case "/":
+          return left / right;
+        case "^":
+          return Math.pow(left, right);
+      }
+    }
+  }
+}
+
+export function collectFormulaVariableNames(formula: string): Set<string> {
+  const parser = new FormulaParser(formula);
+  const ast = parser.parse();
+  const names = new Set<string>();
+  collectNodeVariableNames(ast, names);
+  return names;
+}
+
+function collectNodeVariableNames(node: FormulaNode, names: Set<string>): void {
+  switch (node.type) {
+    case "number":
+      return;
+    case "variable":
+      names.add(node.name);
+      return;
+    case "unary":
+      collectNodeVariableNames(node.operand, names);
+      return;
+    case "binary":
+      collectNodeVariableNames(node.left, names);
+      collectNodeVariableNames(node.right, names);
+      return;
+  }
+}
+
+function tokenize(formula: string): Token[] {
+  const tokens: Token[] = [];
+  let index = 0;
+
+  while (index < formula.length) {
+    const char = formula[index];
+
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+
+    if (/[0-9.]/.test(char)) {
+      let end = index + 1;
+      while (end < formula.length && /[0-9.]/.test(formula[end])) {
+        end += 1;
+      }
+
+      const value = formula.slice(index, end);
+      if (!/^\d+(\.\d+)?$|^\.\d+$/.test(value)) {
+        throw new Error(`Invalid number "${value}".`);
+      }
+
+      tokens.push({ type: "number", value });
+      index = end;
+      continue;
+    }
+
+    if (/[A-Za-z_]/.test(char)) {
+      let end = index + 1;
+      while (end < formula.length && /[A-Za-z0-9_]/.test(formula[end])) {
+        end += 1;
+      }
+
+      tokens.push({ type: "identifier", value: formula.slice(index, end) });
+      index = end;
+      continue;
+    }
+
+    if ("+-*/^".includes(char)) {
+      tokens.push({ type: "operator", value: char });
+      index += 1;
+      continue;
+    }
+
+    if ("()".includes(char)) {
+      tokens.push({ type: "paren", value: char });
+      index += 1;
+      continue;
+    }
+
+    throw new Error(`Unexpected token "${char}".`);
+  }
+
+  tokens.push({ type: "eof", value: "" });
+  return tokens;
+}
+
+class FormulaParser {
+  private readonly tokens: Token[];
+  private position = 0;
+
+  constructor(formula: string) {
+    this.tokens = tokenize(formula);
+  }
+
+  parse(): FormulaNode {
+    const expression = this.parseExpression();
+
+    if (!this.is("eof")) {
+      throw new Error(`Unexpected token "${this.current().value}".`);
+    }
+
+    return expression;
+  }
+
+  private parseExpression(): FormulaNode {
+    let node = this.parseTerm();
+
+    while (this.is("operator", "+") || this.is("operator", "-")) {
+      const operator = this.consume("operator").value as BinaryOperator;
+      const right = this.parseTerm();
+      node = { type: "binary", operator, left: node, right };
+    }
+
+    return node;
+  }
+
+  private parseTerm(): FormulaNode {
+    let node = this.parsePower();
+
+    while (this.is("operator", "*") || this.is("operator", "/")) {
+      const operator = this.consume("operator").value as BinaryOperator;
+      const right = this.parsePower();
+      node = { type: "binary", operator, left: node, right };
+    }
+
+    return node;
+  }
+
+  private parsePower(): FormulaNode {
+    let node = this.parseUnary();
+
+    if (this.is("operator", "^")) {
+      this.consume("operator", "^");
+      node = {
+        type: "binary",
+        operator: "^",
+        left: node,
+        right: this.parsePower(),
+      };
+    }
+
+    return node;
+  }
+
+  private parseUnary(): FormulaNode {
+    if (this.is("operator", "+") || this.is("operator", "-")) {
+      const operator = this.consume("operator").value as "+" | "-";
+      return { type: "unary", operator, operand: this.parseUnary() };
+    }
+
+    return this.parsePrimary();
+  }
+
+  private parsePrimary(): FormulaNode {
+    if (this.is("number")) {
+      return { type: "number", value: Number(this.consume("number").value) };
+    }
+
+    if (this.is("identifier")) {
+      return { type: "variable", name: this.consume("identifier").value };
+    }
+
+    if (this.is("paren", "(")) {
+      this.consume("paren", "(");
+      const expression = this.parseExpression();
+      this.consume("paren", ")");
+      return expression;
+    }
+
+    throw new Error(`Unexpected token "${this.current().value || "end of formula"}".`);
+  }
+
+  private current(): Token {
+    return this.tokens[this.position];
+  }
+
+  private is(type: Token["type"], value?: string): boolean {
+    const token = this.current();
+    return token.type === type && (value === undefined || token.value === value);
+  }
+
+  private consume(type: Token["type"], value?: string): Token {
+    const token = this.current();
+    if (!this.is(type, value)) {
+      const expected = value ? `${type} "${value}"` : type;
+      const actual = token.value || token.type;
+      throw new Error(`Expected ${expected}, received "${actual}".`);
+    }
+
+    this.position += 1;
+    return token;
+  }
+}

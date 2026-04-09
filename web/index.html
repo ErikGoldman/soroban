@@ -7,50 +7,7 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <header class="hero">
-        <p class="eyebrow">Soroban</p>
-        <h1>Financial planning, with the backend seam in place.</h1>
-        <p class="hero-copy">
-          Start with a tiny calculator. Keep the app structure ready for real auth and a
-          Supabase-backed persistence layer later.
-        </p>
-      </header>
-
-      <main class="layout">
-        <section class="card" aria-labelledby="user-heading">
-          <div class="section-heading">
-            <p class="kicker">Stub Auth</p>
-            <h2 id="user-heading">Current user</h2>
-          </div>
-          <div id="user-panel" class="user-panel"></div>
-        </section>
-
-        <section class="card" aria-labelledby="calculator-heading">
-          <div class="section-heading">
-            <p class="kicker">Feature 1</p>
-            <h2 id="calculator-heading">4% growth calculator</h2>
-          </div>
-
-          <form id="calculator-form" class="calculator-form">
-            <label>
-              Starting amount
-              <input id="amount" name="amount" type="number" min="0" step="0.01" required />
-            </label>
-
-            <label>
-              Years
-              <input id="years" name="years" type="number" min="0" step="1" required />
-            </label>
-
-            <button type="submit">Calculate</button>
-          </form>
-
-          <div id="result-panel" class="result-panel" aria-live="polite"></div>
-        </section>
-      </main>
-    </div>
-
+    <div id="app"></div>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>
