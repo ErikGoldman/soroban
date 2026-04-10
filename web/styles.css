@@ -215,6 +215,13 @@ label {
   justify-items: end;
 }
 
+.planner-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .planner-tab-strip {
   margin: 0;
   padding: 8px;

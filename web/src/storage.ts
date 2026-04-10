@@ -155,6 +155,8 @@ export interface SavedPlannerState {
   events: PersistedEventDefinition[];
   startYear: string;
   yearsToShow: number;
+  simulationAttempts?: number;
+  simulationTaxPreset?: "nyc";
   simulationHorizonYears?: number;
   simulationVariableSweep?: {
     enabled?: boolean;

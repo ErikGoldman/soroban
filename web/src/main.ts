@@ -1,5 +1,6 @@
 import { formatCurrency } from "./calculator.js";
 import { StubAuthService, type UserIdentity } from "./auth.js";
+import { buildScenarioFileContents, extractScenarioPlannerState } from "./scenario.js";
 import { createPlanningStorage, type SavedPlannerState } from "./storage.js";
 import {
   VARIABLE_SWEEP_STEP_COUNT,
@@ -1793,6 +1794,11 @@ function renderPlanner(user: UserIdentity): void {
             <span class="pill">${escapeHtml(user.email)}</span>
             <span class="pill">Preset tax mode</span>
           </div>
+          <div class="planner-header-actions">
+            <button type="button" class="secondary-button" id="save-scenario-button">Save scenario</button>
+            <button type="button" class="secondary-button" id="load-scenario-button">Load scenario</button>
+            <input id="load-scenario-input" type="file" accept=".json,application/json" hidden />
+          </div>
         </div>
       </header>
 
@@ -2352,6 +2358,99 @@ function downloadSimulationExampleExport(
 
   link.href = url;
   link.download = `simulation-example-${percentile}th-percentile-${timestamp}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
+}
+
+function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlannerState, "updatedAt"> {
+  const snapshot = createPlannerSnapshot();
+  const sweepMinValue = parseEditableNumber(simulationDraft.variableSweep.minValue);
+  const sweepMaxValue = parseEditableNumber(simulationDraft.variableSweep.maxValue);
+
+  return {
+    userId: user.id,
+    email: user.email,
+    variables: snapshot.variables,
+    assets: snapshot.assets.map((asset) =>
+      isHomeAsset(asset)
+        ? {
+            kind: "home" as const,
+            name: asset.name,
+            initialCost: asset.initialCost,
+            expectedReturn: asset.expectedReturn,
+            volatility: asset.volatility,
+            cashPurchasePercent: asset.cashPurchasePercent,
+            mortgageType: asset.mortgageType,
+            mortgageRate: asset.mortgageRate,
+            mortgageTermYears: asset.mortgageTermYears,
+            monthlyNonTaxCosts: asset.monthlyNonTaxCosts,
+            propertyTaxRate: asset.propertyTaxRate,
+            purchaseYear: asset.purchaseYear,
+          }
+        : {
+            name: asset.name,
+            startingValue: asset.startingValue,
+            expectedReturn: asset.expectedReturn,
+            volatility: asset.volatility,
+            sellProportion: asset.sellProportion,
+            ...(asset.cashGenerations && asset.cashGenerations.length > 0
+              ? {
+                  cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
+                    name: cashGeneration.name,
+                    rate: cashGeneration.rate,
+                    volatility: cashGeneration.volatility,
+                    taxTreatment: cashGeneration.taxTreatment,
+                  })),
+                }
+              : {}),
+            ...(asset.saleTax
+              ? {
+                  saleTax: {
+                    costBasis: asset.saleTax.costBasis,
+                    taxTreatment: asset.saleTax.taxTreatment,
+                  },
+                }
+              : {}),
+          }
+    ),
+    taxes: snapshot.taxes.map((tax) => ({
+      name: tax.name,
+      taxRates: tax.taxRates.map((rate) => ({ ...rate })),
+      ...(tax.exclusions ? { exclusions: tax.exclusions.map((exclusion) => ({ ...exclusion })) } : {}),
+      ...(tax.maximum === undefined ? {} : { maximum: tax.maximum }),
+    })),
+    taxProfile: { ...snapshot.taxProfile },
+    assetCorrelations: snapshot.assetCorrelations,
+    flows: snapshot.flows,
+    events: serializeEvents(snapshot.events),
+    startYear: plannerState.startYear,
+    yearsToShow: plannerState.yearsToShow,
+    simulationAttempts: simulationDraft.attempts,
+    simulationTaxPreset: simulationDraft.taxPreset,
+    simulationHorizonYears: simulationDraft.horizonYears,
+    simulationVariableSweep: {
+      enabled: simulationDraft.variableSweep.enabled,
+      variableName: simulationDraft.variableSweep.variableName,
+      ...(Number.isFinite(sweepMinValue) ? { minValue: sweepMinValue } : {}),
+      ...(Number.isFinite(sweepMaxValue) ? { maxValue: sweepMaxValue } : {}),
+    },
+  };
+}
+
+function downloadScenarioExport(user: UserIdentity): void {
+  const { userId: _userId, email: _email, ...plannerState } = buildPersistedPlannerStateRecord(user);
+  const fileContents = buildScenarioFileContents(plannerState);
+  const blob = new Blob([fileContents], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+  link.href = url;
+  link.download = `scenario-${timestamp}.json`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -3887,6 +3986,55 @@ function bindHandlers(user: UserIdentity): void {
 
   const openAssetButton = document.querySelector<HTMLButtonElement>("#open-asset-composer");
   const openFlowButton = document.querySelector<HTMLButtonElement>("#open-flow-composer");
+  const saveScenarioButton = document.querySelector<HTMLButtonElement>("#save-scenario-button");
+  const loadScenarioButton = document.querySelector<HTMLButtonElement>("#load-scenario-button");
+  const loadScenarioInput = document.querySelector<HTMLInputElement>("#load-scenario-input");
+
+  saveScenarioButton?.addEventListener("click", () => {
+    downloadScenarioExport(user);
+  });
+
+  loadScenarioButton?.addEventListener("click", () => {
+    loadScenarioInput?.click();
+  });
+
+  loadScenarioInput?.addEventListener("change", async () => {
+    const file = loadScenarioInput.files?.[0];
+    loadScenarioInput.value = "";
+    if (!file) {
+      return;
+    }
+
+    const previousState = buildPersistedPlannerStateRecord(user);
+
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const importedState = extractScenarioPlannerState(parsed);
+
+      invalidateSimulationState();
+      closeTransientPlannerUi();
+      applySavedPlannerState({
+        ...importedState,
+        userId: user.id,
+        email: user.email,
+        updatedAt: new Date().toISOString(),
+      } as SavedPlannerState);
+      await persistPlannerState(user);
+      renderPlanner(user);
+    } catch (error) {
+      try {
+        applySavedPlannerState({
+          ...previousState,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (restoreError) {
+        console.error(restoreError);
+      }
+      renderPlanner(user);
+      console.error(error);
+      window.alert(error instanceof Error ? error.message : "Scenario file could not be loaded.");
+    }
+  });
 
   openFlowButton?.addEventListener("click", () => {
     flowComposerOpen = true;
@@ -6429,6 +6577,16 @@ function closeEventComposer(): void {
   eventDraft.entries = [createEventEntryDraft(eventDraft.flowName)];
 }
 
+function closeTransientPlannerUi(): void {
+  closeAssetComposer();
+  closeAssetEditor();
+  closeTaxComposer();
+  closeFlowComposer();
+  closeFlowEditor();
+  closeEventComposer();
+  activeInlineAssetValueEditName = null;
+}
+
 function openEventEditor(eventName: string): void {
   const event = plannerState.events.find((candidate) => candidate.name === eventName);
   if (!event) {
@@ -6578,6 +6736,7 @@ function createPlannerSnapshot(): {
 
 function applySavedPlannerState(savedState: SavedPlannerState): void {
   const fallbackState = createDefaultPlannerState();
+  const fallbackSimulationDraft = createSimulationDraft();
   const partialState = savedState as Partial<SavedPlannerState> & {
     monthViewStartMonth?: string;
     monthViewMonthsToShow?: number;
@@ -6637,101 +6796,41 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
               ? Math.max(1, Math.min(10, Math.ceil(partialState.monthsToShow / 12)))
               : fallbackState.yearsToShow;
   simulationDraft.startYear = plannerState.startYear;
+  simulationDraft.attempts =
+    typeof partialState.simulationAttempts === "number" && Number.isFinite(partialState.simulationAttempts)
+      ? Math.max(5000, Math.min(100000, partialState.simulationAttempts))
+      : fallbackSimulationDraft.attempts;
+  simulationDraft.taxPreset =
+    partialState.simulationTaxPreset === "nyc"
+      ? partialState.simulationTaxPreset
+      : fallbackSimulationDraft.taxPreset;
   simulationDraft.horizonYears =
     typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
       ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
-      : createSimulationDraft().horizonYears;
+      : fallbackSimulationDraft.horizonYears;
   simulationDraft.variableSweep.enabled = partialState.simulationVariableSweep?.enabled === true;
   simulationDraft.variableSweep.variableName =
     typeof partialState.simulationVariableSweep?.variableName === "string"
       ? partialState.simulationVariableSweep.variableName
-      : createSimulationDraft().variableSweep.variableName;
+      : fallbackSimulationDraft.variableSweep.variableName;
   simulationDraft.variableSweep.minValue =
     typeof partialState.simulationVariableSweep?.minValue === "number" &&
     Number.isFinite(partialState.simulationVariableSweep.minValue)
       ? formatEditableNumber(partialState.simulationVariableSweep.minValue)
-      : createSimulationDraft().variableSweep.minValue;
+      : fallbackSimulationDraft.variableSweep.minValue;
   simulationDraft.variableSweep.maxValue =
     typeof partialState.simulationVariableSweep?.maxValue === "number" &&
     Number.isFinite(partialState.simulationVariableSweep.maxValue)
       ? formatEditableNumber(partialState.simulationVariableSweep.maxValue)
-      : createSimulationDraft().variableSweep.maxValue;
+      : fallbackSimulationDraft.variableSweep.maxValue;
   syncTaxProfileDraft();
   syncSimulationDraftAssetRows();
   syncSimulationVariableSweepDraft();
 }
 
 async function persistPlannerState(user: UserIdentity): Promise<void> {
-  const snapshot = createPlannerSnapshot();
-  const sweepMinValue = parseEditableNumber(simulationDraft.variableSweep.minValue);
-  const sweepMaxValue = parseEditableNumber(simulationDraft.variableSweep.maxValue);
   persistVariableSweepDraftToLocalStorage(user.id);
-  await storage.savePlannerState({
-    userId: user.id,
-    email: user.email,
-    variables: snapshot.variables,
-    assets: snapshot.assets.map((asset) =>
-      isHomeAsset(asset)
-        ? {
-            kind: "home" as const,
-            name: asset.name,
-            initialCost: asset.initialCost,
-            expectedReturn: asset.expectedReturn,
-            volatility: asset.volatility,
-            cashPurchasePercent: asset.cashPurchasePercent,
-            mortgageType: asset.mortgageType,
-            mortgageRate: asset.mortgageRate,
-            mortgageTermYears: asset.mortgageTermYears,
-            monthlyNonTaxCosts: asset.monthlyNonTaxCosts,
-            propertyTaxRate: asset.propertyTaxRate,
-            purchaseYear: asset.purchaseYear,
-          }
-        : {
-            name: asset.name,
-            startingValue: asset.startingValue,
-            expectedReturn: asset.expectedReturn,
-            volatility: asset.volatility,
-            sellProportion: asset.sellProportion,
-            ...(asset.cashGenerations && asset.cashGenerations.length > 0
-              ? {
-                  cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
-                    name: cashGeneration.name,
-                    rate: cashGeneration.rate,
-                    volatility: cashGeneration.volatility,
-                    taxTreatment: cashGeneration.taxTreatment,
-                  })),
-                }
-              : {}),
-            ...(asset.saleTax
-              ? {
-                  saleTax: {
-                    costBasis: asset.saleTax.costBasis,
-                    taxTreatment: asset.saleTax.taxTreatment,
-                  },
-                }
-              : {}),
-          }
-    ),
-    taxes: snapshot.taxes.map((tax) => ({
-      name: tax.name,
-      taxRates: tax.taxRates.map((rate) => ({ ...rate })),
-      ...(tax.exclusions ? { exclusions: tax.exclusions.map((exclusion) => ({ ...exclusion })) } : {}),
-      ...(tax.maximum === undefined ? {} : { maximum: tax.maximum }),
-    })),
-    taxProfile: { ...snapshot.taxProfile },
-    assetCorrelations: snapshot.assetCorrelations,
-    flows: snapshot.flows,
-    events: serializeEvents(snapshot.events),
-    startYear: plannerState.startYear,
-    yearsToShow: plannerState.yearsToShow,
-    simulationHorizonYears: simulationDraft.horizonYears,
-    simulationVariableSweep: {
-      enabled: simulationDraft.variableSweep.enabled,
-      variableName: simulationDraft.variableSweep.variableName,
-      ...(Number.isFinite(sweepMinValue) ? { minValue: sweepMinValue } : {}),
-      ...(Number.isFinite(sweepMaxValue) ? { maxValue: sweepMaxValue } : {}),
-    },
-  });
+  await storage.savePlannerState(buildPersistedPlannerStateRecord(user));
 }
 
 function inferPersistedEventFlowName(savedEvent: SavedPlannerState["events"][number]): string {
