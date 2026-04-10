@@ -350,6 +350,52 @@ describe("computeHouseholdTaxes", () => {
     expect(result.taxByName.get("Federal NIIT")).toBeCloseTo(0, 6);
   });
 
+  it("computes itemized deductions from mortgage interest plus SALT with the cap rules", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      deductionMode: "itemized" as const,
+      federalStandardDeduction: 0,
+      otherSaltTaxesPaid: 5000,
+      saltDeductionBaseCap: 40000,
+      saltDeductionFloorCap: 10000,
+      saltDeductionPhaseoutThreshold: 500000,
+      saltDeductionPhaseoutRate: 0.3,
+      otherItemizedDeductions: 2000,
+      federalOrdinaryTaxName: "Federal ordinary income",
+      federalQualifiedTaxName: "",
+      stateTaxName: "",
+      localTaxName: "",
+      niitTaxName: "",
+    };
+    const taxes = [new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.1 }] })];
+
+    const result = computeHouseholdTaxes(
+      {
+        wages: 300000,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: 0,
+        longTermCapitalGains: 0,
+        taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
+        deductibleExpenses: 0,
+        saltTaxesPaid: 15000,
+        homeMortgageInterestPaid: 36000,
+        homeMortgageAverageBalance: 700000,
+        homeMortgageInterestDebtLimit: 750000,
+      },
+      profile,
+      taxes
+    );
+
+    expect(result.saltDeductionUsed).toBe(20000);
+    expect(result.deductibleMortgageInterest).toBe(36000);
+    expect(result.otherItemizedDeductionsUsed).toBe(2000);
+    expect(result.deductionUsed).toBe(58000);
+    expect(result.federalOrdinaryTaxableIncome).toBe(242000);
+  });
+
   it("treats tax-exempt income as exempt federally but taxable to state and local by default", () => {
     const profile = {
       ...createDefaultHouseholdTaxProfile(),

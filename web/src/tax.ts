@@ -28,8 +28,11 @@ export interface HouseholdTaxProfileDefinition {
   filingStatus: FilingStatus;
   deductionMode: DeductionMode;
   federalStandardDeduction: number;
-  saltDeduction: number;
-  saltDeductionCap: number;
+  otherSaltTaxesPaid: number;
+  saltDeductionBaseCap: number;
+  saltDeductionFloorCap: number;
+  saltDeductionPhaseoutThreshold: number;
+  saltDeductionPhaseoutRate: number;
   otherItemizedDeductions: number;
   stateTaxableIncomeAdjustment: number;
   localTaxableIncomeAdjustment: number;
@@ -51,6 +54,10 @@ export interface HouseholdTaxInput {
   stateLocalExemptIncome: number;
   tripleExemptIncome: number;
   deductibleExpenses: number;
+  saltTaxesPaid?: number;
+  homeMortgageInterestPaid?: number;
+  homeMortgageAverageBalance?: number;
+  homeMortgageInterestDebtLimit?: number;
 }
 
 export interface TaxComputationResult {
@@ -80,6 +87,9 @@ export interface HouseholdTaxBreakdown {
   niitIncomeAboveThreshold: number;
   niitTaxableIncome: number;
   deductionUsed: number;
+  deductibleMortgageInterest?: number;
+  saltDeductionUsed?: number;
+  otherItemizedDeductionsUsed?: number;
   totalTax: number;
   taxByName: Map<string, number>;
 }
@@ -213,8 +223,11 @@ export function createDefaultHouseholdTaxProfile(): HouseholdTaxProfileDefinitio
     filingStatus: "single",
     deductionMode: "standard",
     federalStandardDeduction: 15000,
-    saltDeduction: 0,
-    saltDeductionCap: 10000,
+    otherSaltTaxesPaid: 0,
+    saltDeductionBaseCap: 40000,
+    saltDeductionFloorCap: 10000,
+    saltDeductionPhaseoutThreshold: 500000,
+    saltDeductionPhaseoutRate: 0.3,
     otherItemizedDeductions: 0,
     stateTaxableIncomeAdjustment: 0,
     localTaxableIncomeAdjustment: 0,
@@ -235,6 +248,7 @@ export function createDefaultNYCHouseholdTaxes(
       ...createDefaultHouseholdTaxProfile(),
       filingStatus,
       federalStandardDeduction: getFederalStandardDeduction(filingStatus),
+      ...getSaltDeductionDefaults(filingStatus),
       niitThreshold: getNiitThreshold(filingStatus),
     },
     taxes: [
@@ -293,13 +307,35 @@ export function computeHouseholdTaxes(
   const taxExemptIncome = sanitizeAmount(input.taxExemptIncome);
   const stateLocalExemptIncome = sanitizeAmount(input.stateLocalExemptIncome);
   const deductibleExpenses = sanitizeAmount(input.deductibleExpenses);
-  const federalDeduction = getFederalDeduction(profile);
-
+  const preferentialIncome = Math.max(0, qualifiedDividends + longTermCapitalGains);
+  const adjustedGrossIncome =
+    wages +
+    ordinaryIncome +
+    stateLocalExemptIncome +
+    qualifiedDividends +
+    shortTermCapitalGains +
+    longTermCapitalGains;
+  const saltDeductionUsed = getSaltDeduction(
+    profile,
+    sanitizeAmount(input.saltTaxesPaid) + sanitizeAmount(profile.otherSaltTaxesPaid),
+    adjustedGrossIncome
+  );
+  const deductibleMortgageInterest = calculateDeductibleMortgageInterest({
+    interestPaid: sanitizeAmount(input.homeMortgageInterestPaid),
+    averageBalance: sanitizeAmount(input.homeMortgageAverageBalance),
+    debtLimit: sanitizeAmount(input.homeMortgageInterestDebtLimit),
+  });
+  const otherItemizedDeductionsUsed = sanitizeAmount(profile.otherItemizedDeductions);
+  const federalDeduction = getFederalDeduction(
+    profile,
+    saltDeductionUsed,
+    deductibleMortgageInterest,
+    otherItemizedDeductionsUsed
+  );
   const ordinaryTaxBase = Math.max(
     0,
     wages + ordinaryIncome + stateLocalExemptIncome + shortTermCapitalGains - deductibleExpenses
   );
-  const preferentialIncome = Math.max(0, qualifiedDividends + longTermCapitalGains);
   const federalTaxableIncome = Math.max(0, ordinaryTaxBase + preferentialIncome - federalDeduction);
   const federalPreferentialIncome = Math.min(preferentialIncome, federalTaxableIncome);
   const federalOrdinaryTaxableIncome = Math.max(0, federalTaxableIncome - federalPreferentialIncome);
@@ -368,26 +404,61 @@ export function computeHouseholdTaxes(
     niitIncomeAboveThreshold,
     niitTaxableIncome,
     deductionUsed: federalDeduction,
+    deductibleMortgageInterest,
+    saltDeductionUsed,
+    otherItemizedDeductionsUsed,
     totalTax: [...taxByName.values()].reduce((total, value) => total + value, 0),
     taxByName,
   };
 }
 
-function sanitizeAmount(value: number): number {
-  assertFiniteNumber(value, "Tax inputs must be finite.");
-  return Math.max(0, value);
+function sanitizeAmount(value: number | undefined): number {
+  const normalizedValue = value ?? 0;
+  assertFiniteNumber(normalizedValue, "Tax inputs must be finite.");
+  return Math.max(0, normalizedValue);
 }
 
-function getFederalDeduction(profile: HouseholdTaxProfileDefinition): number {
+function getFederalDeduction(
+  profile: HouseholdTaxProfileDefinition,
+  saltDeductionUsed: number,
+  deductibleMortgageInterest: number,
+  otherItemizedDeductionsUsed: number
+): number {
   if (profile.deductionMode === "standard") {
     return sanitizeAmount(profile.federalStandardDeduction);
   }
 
-  return Math.max(
-    0,
-    Math.min(sanitizeAmount(profile.saltDeduction), sanitizeAmount(profile.saltDeductionCap)) +
-      sanitizeAmount(profile.otherItemizedDeductions)
-  );
+  return Math.max(0, saltDeductionUsed + deductibleMortgageInterest + otherItemizedDeductionsUsed);
+}
+
+function calculateDeductibleMortgageInterest({
+  interestPaid,
+  averageBalance,
+  debtLimit,
+}: {
+  interestPaid: number;
+  averageBalance: number;
+  debtLimit: number;
+}): number {
+  if (interestPaid <= 0 || averageBalance <= 0 || debtLimit <= 0) {
+    return 0;
+  }
+
+  return interestPaid * Math.min(1, debtLimit / averageBalance);
+}
+
+function getSaltDeduction(
+  profile: HouseholdTaxProfileDefinition,
+  saltTaxesPaid: number,
+  adjustedGrossIncome: number
+): number {
+  const baseCap = sanitizeAmount(profile.saltDeductionBaseCap);
+  const floorCap = sanitizeAmount(profile.saltDeductionFloorCap);
+  const threshold = sanitizeAmount(profile.saltDeductionPhaseoutThreshold);
+  const phaseoutRate = sanitizeAmount(profile.saltDeductionPhaseoutRate);
+  const phasedCap = Math.max(floorCap, baseCap - Math.max(0, adjustedGrossIncome - threshold) * phaseoutRate);
+
+  return Math.max(0, Math.min(saltTaxesPaid, phasedCap));
 }
 
 function applyNamedTax(
@@ -507,6 +578,33 @@ function getNiitThreshold(filingStatus: FilingStatus): number {
     case "single":
     default:
       return 200000;
+  }
+}
+
+function getSaltDeductionDefaults(filingStatus: FilingStatus): {
+  saltDeductionBaseCap: number;
+  saltDeductionFloorCap: number;
+  saltDeductionPhaseoutThreshold: number;
+  saltDeductionPhaseoutRate: number;
+} {
+  switch (filingStatus) {
+    case "married-filing-separately":
+      return {
+        saltDeductionBaseCap: 20000,
+        saltDeductionFloorCap: 5000,
+        saltDeductionPhaseoutThreshold: 250000,
+        saltDeductionPhaseoutRate: 0.3,
+      };
+    case "married-filing-jointly":
+    case "head-of-household":
+    case "single":
+    default:
+      return {
+        saltDeductionBaseCap: 40000,
+        saltDeductionFloorCap: 10000,
+        saltDeductionPhaseoutThreshold: 500000,
+        saltDeductionPhaseoutRate: 0.3,
+      };
   }
 }
 

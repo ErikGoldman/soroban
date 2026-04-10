@@ -288,6 +288,38 @@ describe("Asset", () => {
     });
   });
 
+  it("captures a home asset definition", () => {
+    const asset = new Asset({
+      kind: "home",
+      name: "Primary residence",
+      initialCost: 800000,
+      expectedReturn: 4,
+      volatility: 12,
+      cashPurchasePercent: 0.2,
+      mortgageType: "amortizing",
+      mortgageRate: 6.5,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1200,
+      propertyTaxRate: 1.25,
+      purchaseYear: 2024,
+    });
+
+    expect(asset.toDefinition()).toEqual({
+      kind: "home",
+      name: "Primary residence",
+      initialCost: 800000,
+      expectedReturn: 4,
+      volatility: 12,
+      cashPurchasePercent: 0.2,
+      mortgageType: "amortizing",
+      mortgageRate: 6.5,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1200,
+      propertyTaxRate: 1.25,
+      purchaseYear: 2024,
+    });
+  });
+
   it("rejects non-finite asset inputs", () => {
     expect(() =>
       new Asset({
@@ -354,7 +386,8 @@ describe("Asset", () => {
       ],
     });
 
-    expect(asset.toDefinition().cashGenerations).toEqual([
+    const definition = asset.toDefinition();
+    expect("cashGenerations" in definition ? definition.cashGenerations : undefined).toEqual([
       {
         name: "Qualified dividends",
         rate: 1.2,

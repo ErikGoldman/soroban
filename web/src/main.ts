@@ -32,6 +32,8 @@ import {
   type AssetCashTaxTreatment,
   type AssetCashGenerationDefinition,
   type AssetCorrelationDefinition,
+  type HomeAssetDefinition,
+  type InvestmentAssetDefinition,
   type AssetSaleTaxTreatment,
   type AssetSaleTaxDefinition,
   type EventAction,
@@ -138,10 +140,19 @@ interface ActiveFlowEventEdit {
 }
 
 interface AssetDraft {
+  kind: "investment" | "home";
   name: string;
   startingValue: string;
   expectedReturn: string;
   volatility: string;
+  initialCost: string;
+  cashPurchasePercent: string;
+  mortgageType: "amortizing" | "interest-only";
+  mortgageRate: string;
+  mortgageTermYears: string;
+  monthlyNonTaxCosts: string;
+  propertyTaxRate: string;
+  purchaseYear: string;
   cashGenerationEnabled: boolean;
   cashGenerations: AssetCashGenerationDraft[];
   saleTaxEnabled: boolean;
@@ -187,8 +198,11 @@ interface TaxProfileDraft {
   filingStatus: FilingStatus;
   deductionMode: DeductionMode;
   federalStandardDeduction: string;
-  saltDeduction: string;
-  saltDeductionCap: string;
+  otherSaltTaxesPaid: string;
+  saltDeductionBaseCap: string;
+  saltDeductionFloorCap: string;
+  saltDeductionPhaseoutThreshold: string;
+  saltDeductionPhaseoutRate: string;
   otherItemizedDeductions: string;
   stateTaxableIncomeAdjustment: string;
   localTaxableIncomeAdjustment: string;
@@ -379,10 +393,19 @@ function createFlowVariableDraft(): FlowVariableDraft {
 
 function createAssetDraft(): AssetDraft {
   return {
+    kind: "investment",
     name: "",
     startingValue: "0",
     expectedReturn: "0",
     volatility: "0",
+    initialCost: "0",
+    cashPurchasePercent: "20",
+    mortgageType: "amortizing",
+    mortgageRate: "6",
+    mortgageTermYears: "30",
+    monthlyNonTaxCosts: "0",
+    propertyTaxRate: "1",
+    purchaseYear: String(new Date().getFullYear()),
     cashGenerationEnabled: false,
     cashGenerations: [createAssetCashGenerationDraft()],
     saleTaxEnabled: false,
@@ -458,8 +481,11 @@ function createTaxProfileDraft(): TaxProfileDraft {
     filingStatus: profile.filingStatus,
     deductionMode: profile.deductionMode,
     federalStandardDeduction: String(profile.federalStandardDeduction),
-    saltDeduction: String(profile.saltDeduction),
-    saltDeductionCap: String(profile.saltDeductionCap),
+    otherSaltTaxesPaid: String(profile.otherSaltTaxesPaid),
+    saltDeductionBaseCap: String(profile.saltDeductionBaseCap),
+    saltDeductionFloorCap: String(profile.saltDeductionFloorCap),
+    saltDeductionPhaseoutThreshold: String(profile.saltDeductionPhaseoutThreshold),
+    saltDeductionPhaseoutRate: String(profile.saltDeductionPhaseoutRate),
     otherItemizedDeductions: String(profile.otherItemizedDeductions),
     stateTaxableIncomeAdjustment: String(profile.stateTaxableIncomeAdjustment),
     localTaxableIncomeAdjustment: String(profile.localTaxableIncomeAdjustment),
@@ -489,18 +515,46 @@ function buildNormalizedTaxDefinition(definition: TaxDefinition): TaxDefinition 
   };
 }
 
+function isHomeAsset(asset: AssetDefinition): asset is HomeAssetDefinition {
+  return asset.kind === "home";
+}
+
+function isInvestmentAsset(asset: AssetDefinition): asset is InvestmentAssetDefinition {
+  return asset.kind !== "home";
+}
+
+function getAssetCashGenerations(asset: AssetDefinition): readonly AssetCashGenerationDefinition[] {
+  if (!isInvestmentAsset(asset)) {
+    return [];
+  }
+
+  return asset.cashGenerations && asset.cashGenerations.length > 0
+    ? asset.cashGenerations
+    : asset.cashGeneration
+      ? [asset.cashGeneration]
+      : [];
+}
+
+function getAssetSummaryValue(asset: AssetDefinition): number {
+  return isHomeAsset(asset) ? asset.initialCost : asset.startingValue;
+}
+
 function buildAssetDraftFromDefinition(asset: AssetDefinition): AssetDraft {
-  const cashGenerations =
-    asset.cashGenerations && asset.cashGenerations.length > 0
-      ? asset.cashGenerations
-      : asset.cashGeneration
-        ? [asset.cashGeneration]
-        : [];
+  const cashGenerations = getAssetCashGenerations(asset);
   return {
+    kind: asset.kind === "home" ? "home" : "investment",
     name: asset.name,
-    startingValue: String(asset.startingValue),
+    startingValue: String(isInvestmentAsset(asset) ? asset.startingValue : 0),
     expectedReturn: String(asset.expectedReturn),
     volatility: String(asset.volatility),
+    initialCost: String(isHomeAsset(asset) ? asset.initialCost : 0),
+    cashPurchasePercent: String(isHomeAsset(asset) ? asset.cashPurchasePercent * 100 : 20),
+    mortgageType: isHomeAsset(asset) ? asset.mortgageType ?? "amortizing" : "amortizing",
+    mortgageRate: String(isHomeAsset(asset) ? asset.mortgageRate : 6),
+    mortgageTermYears: String(isHomeAsset(asset) ? asset.mortgageTermYears : 30),
+    monthlyNonTaxCosts: String(isHomeAsset(asset) ? asset.monthlyNonTaxCosts : 0),
+    propertyTaxRate: String(isHomeAsset(asset) ? asset.propertyTaxRate : 1),
+    purchaseYear: String(isHomeAsset(asset) ? asset.purchaseYear : new Date().getFullYear()),
     cashGenerationEnabled: cashGenerations.length > 0,
     cashGenerations:
       cashGenerations.length > 0
@@ -512,15 +566,33 @@ function buildAssetDraftFromDefinition(asset: AssetDefinition): AssetDraft {
             taxTreatment: cashGeneration.taxTreatment ?? "ordinary-income",
           }))
         : [createAssetCashGenerationDraft()],
-    saleTaxEnabled: Boolean(asset.saleTax),
-    saleTaxCostBasis: String(asset.saleTax?.costBasis ?? 0),
-    saleTaxTreatment: asset.saleTax?.taxTreatment ?? "long-term-capital-gains",
+    saleTaxEnabled: isInvestmentAsset(asset) && Boolean(asset.saleTax),
+    saleTaxCostBasis: String(isInvestmentAsset(asset) ? asset.saleTax?.costBasis ?? 0 : 0),
+    saleTaxTreatment:
+      isInvestmentAsset(asset) ? asset.saleTax?.taxTreatment ?? "long-term-capital-gains" : "long-term-capital-gains",
   };
 }
 
 function migratePersistedAsset(
   asset: SavedPlannerState["assets"][number]
 ): AssetDefinition {
+  if (asset.kind === "home") {
+    return new Asset({
+      kind: "home",
+      name: asset.name,
+      initialCost: asset.initialCost ?? 0,
+      expectedReturn: asset.expectedReturn,
+      volatility: asset.volatility,
+      cashPurchasePercent: asset.cashPurchasePercent ?? 0,
+      mortgageType: asset.mortgageType ?? "amortizing",
+      mortgageRate: asset.mortgageRate ?? 0,
+      mortgageTermYears: asset.mortgageTermYears ?? 30,
+      monthlyNonTaxCosts: asset.monthlyNonTaxCosts ?? 0,
+      propertyTaxRate: asset.propertyTaxRate ?? 0,
+      purchaseYear: asset.purchaseYear ?? new Date().getFullYear(),
+    }).toDefinition();
+  }
+
   const persistedCashGenerations =
     Array.isArray(asset.cashGenerations) && asset.cashGenerations.length > 0
       ? asset.cashGenerations
@@ -549,7 +621,7 @@ function migratePersistedAsset(
           costBasis:
             typeof asset.saleTax.costBasis === "number"
               ? asset.saleTax.costBasis
-              : asset.startingValue * (1 - Math.max(0, Math.min(1, asset.saleTax.taxableGainProportion ?? 0))),
+              : (asset.startingValue ?? 0) * (1 - Math.max(0, Math.min(1, asset.saleTax.taxableGainProportion ?? 0))),
           taxTreatment:
             "taxTreatment" in asset.saleTax && asset.saleTax.taxTreatment
               ? asset.saleTax.taxTreatment
@@ -558,7 +630,7 @@ function migratePersistedAsset(
 
   return new Asset({
     name: asset.name,
-    startingValue: asset.startingValue,
+    startingValue: asset.startingValue ?? 0,
     expectedReturn: asset.expectedReturn,
     volatility: asset.volatility,
     sellProportion:
@@ -597,8 +669,14 @@ function buildTaxProfileDefinitionFromSaved(
     filingStatus: next.filingStatus,
     deductionMode: next.deductionMode,
     federalStandardDeduction: Number(next.federalStandardDeduction) || fallback.federalStandardDeduction,
-    saltDeduction: Number(next.saltDeduction) || 0,
-    saltDeductionCap: Number(next.saltDeductionCap) || fallback.saltDeductionCap,
+    otherSaltTaxesPaid: Number((savedProfile as { saltDeduction?: number } | undefined)?.saltDeduction ?? next.otherSaltTaxesPaid) || 0,
+    saltDeductionBaseCap:
+      Number((savedProfile as { saltDeductionCap?: number } | undefined)?.saltDeductionCap ?? next.saltDeductionBaseCap) ||
+      fallback.saltDeductionBaseCap,
+    saltDeductionFloorCap: Number(next.saltDeductionFloorCap) || fallback.saltDeductionFloorCap,
+    saltDeductionPhaseoutThreshold:
+      Number(next.saltDeductionPhaseoutThreshold) || fallback.saltDeductionPhaseoutThreshold,
+    saltDeductionPhaseoutRate: Number(next.saltDeductionPhaseoutRate) || fallback.saltDeductionPhaseoutRate,
     otherItemizedDeductions: Number(next.otherItemizedDeductions) || 0,
     stateTaxableIncomeAdjustment: Number(next.stateTaxableIncomeAdjustment) || 0,
     localTaxableIncomeAdjustment: Number(next.localTaxableIncomeAdjustment) || 0,
@@ -837,14 +915,12 @@ function assetCashTaxTreatmentLabel(taxTreatment: AssetCashTaxTreatment): string
 }
 
 function renderAssetCashGenerationSummary(asset: AssetDefinition): string {
-  const cashGenerations =
-    asset.cashGenerations && asset.cashGenerations.length > 0
-      ? asset.cashGenerations
-      : asset.cashGeneration
-        ? [asset.cashGeneration]
-        : [];
+  const cashGenerations = getAssetCashGenerations(asset);
 
   if (cashGenerations.length === 0) {
+    if (isHomeAsset(asset)) {
+      return `Home purchased ${asset.purchaseYear}`;
+    }
     return "";
   }
 
@@ -942,6 +1018,10 @@ function createEmptyHouseholdTaxInput(): HouseholdTaxInput {
     stateLocalExemptIncome: 0,
     tripleExemptIncome: 0,
     deductibleExpenses: 0,
+    saltTaxesPaid: 0,
+    homeMortgageInterestPaid: 0,
+    homeMortgageAverageBalance: 0,
+    homeMortgageInterestDebtLimit: 0,
   };
 }
 
@@ -1067,7 +1147,7 @@ function syncSimulationDraftAssetRows(): void {
     const baseDraft = buildAssetDraftFromDefinition(asset);
     return {
       ...baseDraft,
-      sellProportion: existing?.sellProportion ?? String(asset.sellProportion * 100),
+      sellProportion: existing?.sellProportion ?? String(isInvestmentAsset(asset) ? asset.sellProportion * 100 : 0),
     };
   });
   if (simulationDraft.assetRows.map((row) => row.name).join("|") !== previousNames) {
@@ -1147,6 +1227,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
     flows: plannerState.flows,
     events: plannerState.events,
   }).map((snapshot) => ({
+    year: snapshot.year.year,
     label: snapshot.label,
     netAmount: snapshot.netAmount,
     totalExpenses: snapshot.totalExpenses,
@@ -1158,31 +1239,48 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
     attempts: simulationDraft.attempts,
     horizonYears: simulationDraft.horizonYears,
     yearlySnapshots,
-    assets: simulationDraft.assetRows.map((asset) => ({
-      name: asset.name,
-      startingValue: Number(asset.startingValue),
-      expectedReturn: Number(asset.expectedReturn),
-      volatility: Number(asset.volatility),
-      sellProportion: Number(asset.sellProportion) / 100,
-      ...(asset.cashGenerationEnabled
+    assets: simulationDraft.assetRows.map((asset) =>
+      asset.kind === "home"
         ? {
-            cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
-              name: cashGeneration.name.trim(),
-              rate: Number(cashGeneration.rate),
-              volatility: Number(cashGeneration.volatility),
-              taxTreatment: cashGeneration.taxTreatment,
-            })),
+            kind: "home" as const,
+            name: asset.name,
+            initialCost: parseEditableNumber(asset.initialCost),
+            expectedReturn: Number(asset.expectedReturn),
+            volatility: Number(asset.volatility),
+            cashPurchasePercent: Number(asset.cashPurchasePercent) / 100,
+            mortgageType: asset.mortgageType,
+            mortgageRate: Number(asset.mortgageRate),
+            mortgageTermYears: Number(asset.mortgageTermYears),
+            monthlyNonTaxCosts: Number(asset.monthlyNonTaxCosts),
+            propertyTaxRate: Number(asset.propertyTaxRate),
+            purchaseYear: Number(asset.purchaseYear),
           }
-        : {}),
-      ...(asset.saleTaxEnabled
-        ? {
-            saleTax: {
-              costBasis: Number(asset.saleTaxCostBasis),
-              taxTreatment: asset.saleTaxTreatment,
-            },
+        : {
+            name: asset.name,
+            startingValue: Number(asset.startingValue),
+            expectedReturn: Number(asset.expectedReturn),
+            volatility: Number(asset.volatility),
+            sellProportion: Number(asset.sellProportion) / 100,
+            ...(asset.cashGenerationEnabled
+              ? {
+                  cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
+                    name: cashGeneration.name.trim(),
+                    rate: Number(cashGeneration.rate),
+                    volatility: Number(cashGeneration.volatility),
+                    taxTreatment: cashGeneration.taxTreatment,
+                  })),
+                }
+              : {}),
+            ...(asset.saleTaxEnabled
+              ? {
+                  saleTax: {
+                    costBasis: Number(asset.saleTaxCostBasis),
+                    taxTreatment: asset.saleTaxTreatment,
+                  },
+                }
+              : {}),
           }
-        : {}),
-    })),
+    ),
     taxes: selectedTaxPreset.taxes,
     householdTaxProfile: selectedTaxPreset.householdTaxProfile,
     assetCorrelations: plannerState.assetCorrelations,
@@ -1463,6 +1561,7 @@ function renderSetupAssetArea(): string {
                 </div>
                 ${
                   activeInlineAssetValueEditName === asset.name
+                    && isInvestmentAsset(asset)
                     ? `
                   <form class="inline-asset-value-form" data-inline-asset-value-form="${escapeAttribute(asset.name)}">
                     <input
@@ -1489,15 +1588,16 @@ function renderSetupAssetArea(): string {
                     data-edit-asset-value="${escapeAttribute(asset.name)}"
                     aria-label="Edit ${escapeAttribute(asset.name)} amount"
                   >
-                    ${formatCurrency(asset.startingValue)}
+                    ${formatCurrency(getAssetSummaryValue(asset))}
                   </button>
                     `
                 }
               </div>
               <div class="workspace-item-stats">
+                <span><strong>Type</strong>${isHomeAsset(asset) ? "Home" : "Investment"}</span>
                 <span><strong>Expected return</strong>${formatPercentage(asset.expectedReturn)}</span>
                 <span><strong>Volatility</strong>${formatPercentage(asset.volatility)}</span>
-                <span><strong>Sell proportion</strong>${formatPercentage(asset.sellProportion)}</span>
+                <span><strong>${isHomeAsset(asset) ? "Sale behavior" : "Sell proportion"}</strong>${isHomeAsset(asset) ? "Not sellable" : formatPercentage(isInvestmentAsset(asset) ? asset.sellProportion : 0)}</span>
               </div>
             </article>
           `
@@ -1841,28 +1941,44 @@ function renderTaxProfileEditor(): string {
       </div>
       <div class="split-fields">
         <label>
-          SALT paid
-          <input name="saltDeduction" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.saltDeduction)}" />
+          Other SALT paid
+          <input name="otherSaltTaxesPaid" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.otherSaltTaxesPaid)}" />
         </label>
         <label>
-          SALT cap
-          <input name="saltDeductionCap" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.saltDeductionCap)}" />
+          SALT base cap
+          <input name="saltDeductionBaseCap" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.saltDeductionBaseCap)}" />
         </label>
       </div>
       <div class="split-fields">
         <label>
+          SALT floor cap
+          <input name="saltDeductionFloorCap" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.saltDeductionFloorCap)}" />
+        </label>
+        <label>
+          SALT phaseout threshold
+          <input name="saltDeductionPhaseoutThreshold" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.saltDeductionPhaseoutThreshold)}" />
+        </label>
+      </div>
+      <div class="split-fields">
+        <label>
+          SALT phaseout rate
+          <input name="saltDeductionPhaseoutRate" type="number" step="0.0001" value="${escapeHtml(taxProfileDraft.saltDeductionPhaseoutRate)}" />
+        </label>
+        <label>
           Other itemized deductions
           <input name="otherItemizedDeductions" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.otherItemizedDeductions)}" />
         </label>
+      </div>
+      <div class="split-fields">
         <label>
           State taxable-income adjustment
           <input name="stateTaxableIncomeAdjustment" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.stateTaxableIncomeAdjustment)}" />
         </label>
+        <label>
+          Local taxable-income adjustment
+          <input name="localTaxableIncomeAdjustment" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.localTaxableIncomeAdjustment)}" />
+        </label>
       </div>
-      <label>
-        Local taxable-income adjustment
-        <input name="localTaxableIncomeAdjustment" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.localTaxableIncomeAdjustment)}" />
-      </label>
       <div class="split-fields">
         <label>
           Federal ordinary schedule
@@ -1931,10 +2047,8 @@ function renderExpenseTaxTreatmentOptions(selectedValue: FlowTaxTreatment): stri
 }
 
 function getSimulationSubmitState(): { disabled: boolean; reason: string } {
-  const sellProportionTotal = simulationDraft.assetRows.reduce(
-    (total, asset) => total + (Number(asset.sellProportion) || 0),
-    0
-  );
+  const sellableAssets = simulationDraft.assetRows.filter((asset) => asset.kind !== "home");
+  const sellProportionTotal = sellableAssets.reduce((total, asset) => total + (Number(asset.sellProportion) || 0), 0);
   if (simulationDraft.assetRows.length === 0) {
     return {
       disabled: true,
@@ -1942,7 +2056,7 @@ function getSimulationSubmitState(): { disabled: boolean; reason: string } {
     };
   }
 
-  if (Math.abs(sellProportionTotal - 100) > 0.000001) {
+  if (sellableAssets.length > 0 && Math.abs(sellProportionTotal - 100) > 0.000001) {
     return {
       disabled: true,
       reason: `Sell proportions must add up to 100%. Current total: ${sellProportionTotal.toFixed(2)}%.`,
@@ -2012,7 +2126,13 @@ function renderSimulationTaxInputs(row: SimulationDetailYearRow): string {
     ["Short-term gains", row.householdTaxInput.shortTermCapitalGains],
     ["Long-term gains", row.householdTaxInput.longTermCapitalGains],
     ["Tax-exempt income", row.householdTaxInput.taxExemptIncome],
+    ["State/local-exempt income", row.householdTaxInput.stateLocalExemptIncome ?? 0],
+    ["Triple-exempt income", row.householdTaxInput.tripleExemptIncome ?? 0],
     ["Deductible expenses", row.householdTaxInput.deductibleExpenses],
+    ["Property tax / SALT paid", row.householdTaxInput.saltTaxesPaid ?? 0],
+    ["Mortgage interest candidate", row.householdTaxInput.homeMortgageInterestPaid ?? 0],
+    ["Average mortgage balance", row.householdTaxInput.homeMortgageAverageBalance ?? 0],
+    ["Mortgage interest debt limit", row.householdTaxInput.homeMortgageInterestDebtLimit ?? 0],
   ];
   const visibleEntries = entries.filter(([, amount]) => Math.abs(amount) > 0.000001);
 
@@ -2171,6 +2291,10 @@ function buildSimulationExampleExport(
             stateLocalExemptIncome: exampleYear.householdTaxInput.stateLocalExemptIncome,
             tripleExemptIncome: exampleYear.householdTaxInput.tripleExemptIncome,
             deductibleExpenses: exampleYear.householdTaxInput.deductibleExpenses,
+            saltTaxesPaid: exampleYear.householdTaxInput.saltTaxesPaid ?? 0,
+            homeMortgageInterestPaid: exampleYear.householdTaxInput.homeMortgageInterestPaid ?? 0,
+            homeMortgageAverageBalance: exampleYear.householdTaxInput.homeMortgageAverageBalance ?? 0,
+            homeMortgageInterestDebtLimit: exampleYear.householdTaxInput.homeMortgageInterestDebtLimit ?? 0,
           },
           taxBreakdown: {
             federalTaxableIncome: exampleYear.taxBreakdown.federalTaxableIncome,
@@ -2289,6 +2413,7 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
     })),
     ...assetReturnEntries,
   ].sort((left, right) => compareSignedAmounts(left.amount, right.amount));
+  const assetValueEntries = [...row.assetValues.entries()].sort((left, right) => right[1] - left[1]);
   const expensesWithoutTaxes = Math.max(0, row.totalExpenses - row.taxAmount);
 
   return `
@@ -2309,6 +2434,16 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
                   <th>Ending assets</th>
                   <td>${formatCurrency(row.endingAssets)}</td>
                 </tr>
+                ${assetValueEntries
+                  .map(
+                    ([assetName, amount]) => `
+                <tr>
+                  <th>${escapeHtml(assetName)}</th>
+                  <td>${formatCurrency(amount)}</td>
+                </tr>
+                `
+                  )
+                  .join("")}
                 <tr>
                   <th>Expenses</th>
                   <td>${formatCurrency(expensesWithoutTaxes)}</td>
@@ -2671,13 +2806,17 @@ function renderSimulationBoard(): string {
                 .map(
                   (asset) => `
                     <tr>
-                      <td><input type="number" min="0" max="100" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" /></td>
+                      <td>${
+                        asset.kind === "home"
+                          ? "Not sellable"
+                          : `<input type="number" min="0" max="100" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" />`
+                      }</td>
                       <th>
                         <button type="button" class="link-button" data-edit-asset="${escapeHtml(asset.name)}">
                           ${escapeHtml(asset.name)}
                         </button>
                       </th>
-                      <td>${formatCurrency(Number(asset.startingValue))}</td>
+                      <td>${formatCurrency(Number(asset.kind === "home" ? asset.initialCost : asset.startingValue))}</td>
                       <td>${formatPercentage(Number(asset.expectedReturn))}</td>
                       <td>${formatPercentage(Number(asset.volatility))}</td>
                     </tr>
@@ -2756,13 +2895,14 @@ function renderSimulationBoard(): string {
           Export example
         </button>
       </div>
+      <p class="helper-copy">Depletion is cumulative by year and means the plan ran out of non-home assets or cash. Home equity still remains in total assets because homes are not sold in the simulation.</p>
       <div class="board-scroll simulation-results">
         <table class="flow-table">
           <thead>
             <tr>
               <th>Year</th>
               <th>${selectedSimulationPercentile}th percentile assets</th>
-              <th>Hit $0 assets</th>
+              <th>Depleted by year</th>
               <th>Example</th>
             </tr>
           </thead>
@@ -2883,15 +3023,13 @@ function renderAssetComposer(): string {
             <input name="name" type="text" value="${escapeHtml(assetDraft.name)}" placeholder="Brokerage account" required />
           </label>
           <label>
-            Starting value
-            <input
-              name="startingValue"
-              type="text"
-              inputmode="decimal"
-              value="${escapeHtml(assetDraft.startingValue === "" ? "" : formatEditableNumber(parseEditableNumber(assetDraft.startingValue)))}"
-              required
-            />
+            Asset type
+            <select name="kind">
+              <option value="investment" ${assetDraft.kind === "investment" ? "selected" : ""}>Investment</option>
+              <option value="home" ${assetDraft.kind === "home" ? "selected" : ""}>Home</option>
+            </select>
           </label>
+          ${renderAssetCoreFields(assetDraft)}
           <div class="split-fields">
             <label>
               Expected return (%)
@@ -2956,15 +3094,13 @@ function renderAssetEditor(): string {
             <input name="name" type="text" value="${escapeHtml(assetEditDraft.name)}" required />
           </label>
           <label>
-            Starting value
-            <input
-              name="startingValue"
-              type="text"
-              inputmode="decimal"
-              value="${escapeHtml(assetEditDraft.startingValue === "" ? "" : formatEditableNumber(parseEditableNumber(assetEditDraft.startingValue)))}"
-              required
-            />
+            Asset type
+            <select name="kind">
+              <option value="investment" ${assetEditDraft.kind === "investment" ? "selected" : ""}>Investment</option>
+              <option value="home" ${assetEditDraft.kind === "home" ? "selected" : ""}>Home</option>
+            </select>
           </label>
+          ${renderAssetCoreFields(assetEditDraft)}
           <div class="split-fields">
             <label>
               Expected return (%)
@@ -3032,7 +3168,84 @@ function renderAssetEditor(): string {
   `;
 }
 
+function renderAssetCoreFields(draft: AssetDraft): string {
+  if (draft.kind === "home") {
+    return `
+      <label>
+        Initial cost
+        <input
+          name="initialCost"
+          type="text"
+          inputmode="decimal"
+          value="${escapeHtml(draft.initialCost === "" ? "" : formatEditableNumber(parseEditableNumber(draft.initialCost)))}"
+          required
+        />
+      </label>
+      <label>
+        Cash purchase (%)
+        <input name="cashPurchasePercent" type="number" step="0.01" value="${escapeHtml(draft.cashPurchasePercent)}" required />
+      </label>
+      <div class="split-fields">
+        <label>
+          Mortgage type
+          <select name="mortgageType">
+            <option value="amortizing" ${draft.mortgageType === "amortizing" ? "selected" : ""}>Amortizing</option>
+            <option value="interest-only" ${draft.mortgageType === "interest-only" ? "selected" : ""}>Interest-only</option>
+          </select>
+        </label>
+        <label>
+          Mortgage rate (%)
+          <input name="mortgageRate" type="number" step="0.01" value="${escapeHtml(draft.mortgageRate)}" required />
+        </label>
+        <label>
+          Mortgage term (years)
+          <input name="mortgageTermYears" type="number" step="1" value="${escapeHtml(draft.mortgageTermYears)}" required />
+        </label>
+      </div>
+      <div class="split-fields">
+        <label>
+          Non-tax monthlies
+          <input name="monthlyNonTaxCosts" type="number" step="0.01" value="${escapeHtml(draft.monthlyNonTaxCosts)}" required />
+        </label>
+        <label>
+          Property tax rate (%)
+          <input name="propertyTaxRate" type="number" step="0.01" value="${escapeHtml(draft.propertyTaxRate)}" required />
+        </label>
+      </div>
+      <label>
+        Purchase year
+        <input name="purchaseYear" type="number" step="1" value="${escapeHtml(draft.purchaseYear)}" required />
+      </label>
+    `;
+  }
+
+  return `
+    <label>
+      Starting value
+      <input
+        name="startingValue"
+        type="text"
+        inputmode="decimal"
+        value="${escapeHtml(draft.startingValue === "" ? "" : formatEditableNumber(parseEditableNumber(draft.startingValue)))}"
+        required
+      />
+    </label>
+  `;
+}
+
 function renderAssetTaxModelFields(draft: AssetDraft): string {
+  if (draft.kind === "home") {
+    return `
+      <section class="composer-subsection">
+        <div class="event-entry-header">
+          <strong>Home cash model</strong>
+          <span class="summary-meta">Mortgage, property tax, and operating costs are generated automatically.</span>
+        </div>
+        <p class="helper-copy">Mortgage interest and property tax feed federal itemized deduction analysis. Home assets cannot be sold in simulation.</p>
+      </section>
+    `;
+  }
+
   return `
     <section class="composer-subsection">
       <div class="event-entry-header">
@@ -4267,7 +4480,7 @@ function bindHandlers(user: UserIdentity): void {
 
       updateAsset(assetName, {
         ...existingAsset,
-        startingValue: nextValue,
+        ...(isInvestmentAsset(existingAsset) ? { startingValue: nextValue } : { initialCost: nextValue }),
       });
       syncSimulationDraftAssetRows();
       invalidateSimulationState();
@@ -4841,8 +5054,28 @@ function bindAssetComposer(user: UserIdentity): void {
 
     if (target.name === "name") {
       assetDraft.name = target.value;
+    } else if (target.name === "kind") {
+      assetDraft.kind = target.value as AssetDraft["kind"];
+      renderPlanner(user);
+      return;
     } else if (target.name === "startingValue") {
       assetDraft.startingValue = target.value;
+    } else if (target.name === "initialCost") {
+      assetDraft.initialCost = target.value;
+    } else if (target.name === "cashPurchasePercent") {
+      assetDraft.cashPurchasePercent = target.value;
+    } else if (target.name === "mortgageType") {
+      assetDraft.mortgageType = target.value as AssetDraft["mortgageType"];
+    } else if (target.name === "mortgageRate") {
+      assetDraft.mortgageRate = target.value;
+    } else if (target.name === "mortgageTermYears") {
+      assetDraft.mortgageTermYears = target.value;
+    } else if (target.name === "monthlyNonTaxCosts") {
+      assetDraft.monthlyNonTaxCosts = target.value;
+    } else if (target.name === "propertyTaxRate") {
+      assetDraft.propertyTaxRate = target.value;
+    } else if (target.name === "purchaseYear") {
+      assetDraft.purchaseYear = target.value;
     } else if (target.name === "expectedReturn") {
       assetDraft.expectedReturn = target.value;
     } else if (target.name === "volatility") {
@@ -4937,8 +5170,28 @@ function bindAssetEditor(user: UserIdentity): void {
 
     if (target.name === "name") {
       assetEditDraft.name = target.value;
+    } else if (target.name === "kind") {
+      assetEditDraft.kind = target.value as AssetDraft["kind"];
+      renderPlanner(user);
+      return;
     } else if (target.name === "startingValue") {
       assetEditDraft.startingValue = target.value;
+    } else if (target.name === "initialCost") {
+      assetEditDraft.initialCost = target.value;
+    } else if (target.name === "cashPurchasePercent") {
+      assetEditDraft.cashPurchasePercent = target.value;
+    } else if (target.name === "mortgageType") {
+      assetEditDraft.mortgageType = target.value as AssetDraft["mortgageType"];
+    } else if (target.name === "mortgageRate") {
+      assetEditDraft.mortgageRate = target.value;
+    } else if (target.name === "mortgageTermYears") {
+      assetEditDraft.mortgageTermYears = target.value;
+    } else if (target.name === "monthlyNonTaxCosts") {
+      assetEditDraft.monthlyNonTaxCosts = target.value;
+    } else if (target.name === "propertyTaxRate") {
+      assetEditDraft.propertyTaxRate = target.value;
+    } else if (target.name === "purchaseYear") {
+      assetEditDraft.purchaseYear = target.value;
     } else if (target.name === "expectedReturn") {
       assetEditDraft.expectedReturn = target.value;
     } else if (target.name === "volatility") {
@@ -5211,10 +5464,16 @@ function bindTaxProfileForm(user: UserIdentity): void {
       taxProfileDraft.deductionMode = target.value as DeductionMode;
     } else if (target.name === "federalStandardDeduction") {
       taxProfileDraft.federalStandardDeduction = target.value;
-    } else if (target.name === "saltDeduction") {
-      taxProfileDraft.saltDeduction = target.value;
-    } else if (target.name === "saltDeductionCap") {
-      taxProfileDraft.saltDeductionCap = target.value;
+    } else if (target.name === "otherSaltTaxesPaid") {
+      taxProfileDraft.otherSaltTaxesPaid = target.value;
+    } else if (target.name === "saltDeductionBaseCap") {
+      taxProfileDraft.saltDeductionBaseCap = target.value;
+    } else if (target.name === "saltDeductionFloorCap") {
+      taxProfileDraft.saltDeductionFloorCap = target.value;
+    } else if (target.name === "saltDeductionPhaseoutThreshold") {
+      taxProfileDraft.saltDeductionPhaseoutThreshold = target.value;
+    } else if (target.name === "saltDeductionPhaseoutRate") {
+      taxProfileDraft.saltDeductionPhaseoutRate = target.value;
     } else if (target.name === "otherItemizedDeductions") {
       taxProfileDraft.otherItemizedDeductions = target.value;
     } else if (target.name === "stateTaxableIncomeAdjustment") {
@@ -5948,6 +6207,23 @@ function findAssetCashGenerationDraft(
 }
 
 function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
+  if (draft.kind === "home") {
+    return new Asset({
+      kind: "home",
+      name: draft.name,
+      initialCost: parseEditableNumber(draft.initialCost),
+      expectedReturn: Number(draft.expectedReturn),
+      volatility: Number(draft.volatility),
+      cashPurchasePercent: Number(draft.cashPurchasePercent) / 100,
+      mortgageType: draft.mortgageType,
+      mortgageRate: Number(draft.mortgageRate),
+      mortgageTermYears: Number(draft.mortgageTermYears),
+      monthlyNonTaxCosts: Number(draft.monthlyNonTaxCosts),
+      propertyTaxRate: Number(draft.propertyTaxRate),
+      purchaseYear: Number(draft.purchaseYear),
+    }).toDefinition();
+  }
+
   return new Asset({
     name: draft.name,
     startingValue: parseEditableNumber(draft.startingValue),
@@ -6002,8 +6278,11 @@ function buildTaxProfileDefinition(draft: TaxProfileDraft): HouseholdTaxProfileD
     filingStatus: draft.filingStatus,
     deductionMode: draft.deductionMode,
     federalStandardDeduction: Number(draft.federalStandardDeduction),
-    saltDeduction: Number(draft.saltDeduction),
-    saltDeductionCap: Number(draft.saltDeductionCap),
+    otherSaltTaxesPaid: Number(draft.otherSaltTaxesPaid),
+    saltDeductionBaseCap: Number(draft.saltDeductionBaseCap),
+    saltDeductionFloorCap: Number(draft.saltDeductionFloorCap),
+    saltDeductionPhaseoutThreshold: Number(draft.saltDeductionPhaseoutThreshold),
+    saltDeductionPhaseoutRate: Number(draft.saltDeductionPhaseoutRate),
     otherItemizedDeductions: Number(draft.otherItemizedDeductions),
     stateTaxableIncomeAdjustment: Number(draft.stateTaxableIncomeAdjustment),
     localTaxableIncomeAdjustment: Number(draft.localTaxableIncomeAdjustment),
@@ -6021,8 +6300,11 @@ function syncTaxProfileDraft(): void {
   taxProfileDraft.filingStatus = profile.filingStatus;
   taxProfileDraft.deductionMode = profile.deductionMode;
   taxProfileDraft.federalStandardDeduction = String(profile.federalStandardDeduction);
-  taxProfileDraft.saltDeduction = String(profile.saltDeduction);
-  taxProfileDraft.saltDeductionCap = String(profile.saltDeductionCap);
+  taxProfileDraft.otherSaltTaxesPaid = String(profile.otherSaltTaxesPaid);
+  taxProfileDraft.saltDeductionBaseCap = String(profile.saltDeductionBaseCap);
+  taxProfileDraft.saltDeductionFloorCap = String(profile.saltDeductionFloorCap);
+  taxProfileDraft.saltDeductionPhaseoutThreshold = String(profile.saltDeductionPhaseoutThreshold);
+  taxProfileDraft.saltDeductionPhaseoutRate = String(profile.saltDeductionPhaseoutRate);
   taxProfileDraft.otherItemizedDeductions = String(profile.otherItemizedDeductions);
   taxProfileDraft.stateTaxableIncomeAdjustment = String(profile.stateTaxableIncomeAdjustment);
   taxProfileDraft.localTaxableIncomeAdjustment = String(profile.localTaxableIncomeAdjustment);
@@ -6388,31 +6670,48 @@ async function persistPlannerState(user: UserIdentity): Promise<void> {
     userId: user.id,
     email: user.email,
     variables: snapshot.variables,
-    assets: snapshot.assets.map((asset) => ({
-      name: asset.name,
-      startingValue: asset.startingValue,
-      expectedReturn: asset.expectedReturn,
-      volatility: asset.volatility,
-      sellProportion: asset.sellProportion,
-      ...(asset.cashGenerations && asset.cashGenerations.length > 0
+    assets: snapshot.assets.map((asset) =>
+      isHomeAsset(asset)
         ? {
-            cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
-              name: cashGeneration.name,
-              rate: cashGeneration.rate,
-              volatility: cashGeneration.volatility,
-              taxTreatment: cashGeneration.taxTreatment,
-            })),
+            kind: "home" as const,
+            name: asset.name,
+            initialCost: asset.initialCost,
+            expectedReturn: asset.expectedReturn,
+            volatility: asset.volatility,
+            cashPurchasePercent: asset.cashPurchasePercent,
+            mortgageType: asset.mortgageType,
+            mortgageRate: asset.mortgageRate,
+            mortgageTermYears: asset.mortgageTermYears,
+            monthlyNonTaxCosts: asset.monthlyNonTaxCosts,
+            propertyTaxRate: asset.propertyTaxRate,
+            purchaseYear: asset.purchaseYear,
           }
-        : {}),
-      ...(asset.saleTax
-        ? {
-            saleTax: {
-              costBasis: asset.saleTax.costBasis,
-              taxTreatment: asset.saleTax.taxTreatment,
-            },
+        : {
+            name: asset.name,
+            startingValue: asset.startingValue,
+            expectedReturn: asset.expectedReturn,
+            volatility: asset.volatility,
+            sellProportion: asset.sellProportion,
+            ...(asset.cashGenerations && asset.cashGenerations.length > 0
+              ? {
+                  cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
+                    name: cashGeneration.name,
+                    rate: cashGeneration.rate,
+                    volatility: cashGeneration.volatility,
+                    taxTreatment: cashGeneration.taxTreatment,
+                  })),
+                }
+              : {}),
+            ...(asset.saleTax
+              ? {
+                  saleTax: {
+                    costBasis: asset.saleTax.costBasis,
+                    taxTreatment: asset.saleTax.taxTreatment,
+                  },
+                }
+              : {}),
           }
-        : {}),
-    })),
+    ),
     taxes: snapshot.taxes.map((tax) => ({
       name: tax.name,
       taxRates: tax.taxRates.map((rate) => ({ ...rate })),

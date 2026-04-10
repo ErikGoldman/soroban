@@ -179,6 +179,7 @@ describe("buildSimulationScenarios", () => {
             totalGains: 0,
             taxableGains: 0,
             taxAmount: 0,
+            depleted: false,
             depletionProbability: 0,
             householdTaxInput: createEmptyHouseholdTaxInput(),
             flowTotals: new Map(),
@@ -209,6 +210,7 @@ describe("buildSimulationScenarios", () => {
             totalGains: -10,
             taxableGains: 0,
             taxAmount: 0,
+            depleted: false,
             depletionProbability: 0,
             householdTaxInput: createEmptyHouseholdTaxInput(),
             flowTotals: new Map(),
@@ -244,6 +246,7 @@ describe("buildSimulationScenarios", () => {
             totalGains: 0,
             taxableGains: 0,
             taxAmount: 0,
+            depleted: false,
             depletionProbability: 0,
             householdTaxInput: createEmptyHouseholdTaxInput(),
             flowTotals: new Map(),
@@ -274,6 +277,7 @@ describe("buildSimulationScenarios", () => {
             totalGains: -60,
             taxableGains: 0,
             taxAmount: 0,
+            depleted: false,
             depletionProbability: 0,
             householdTaxInput: createEmptyHouseholdTaxInput(),
             flowTotals: new Map(),
@@ -553,6 +557,146 @@ describe("buildSimulationScenarios", () => {
     expect(row?.totalGains).toBeCloseTo(0, 6);
   });
 
+  it("does not sell a home asset to fund cash needs", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: -50,
+          totalExpenses: 50,
+          flowAmounts: new Map([["Living expenses", -50]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          kind: "home",
+          name: "Home",
+          initialCost: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 1,
+          mortgageType: "amortizing",
+          mortgageRate: 0,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 2026,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Home sale proceeds")).toBeUndefined();
+    expect(row?.assetValues.get("Home")).toBeCloseTo(100, 6);
+    expect(row?.totalAssets).toBeCloseTo(100, 6);
+  });
+
+  it("marks depletion when expenses hit a home-only household with no investable assets", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 2,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: -50,
+          totalExpenses: 50,
+          flowAmounts: new Map([["Living expenses", -50]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+        {
+          year: 2028,
+          label: "2028",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          kind: "home",
+          name: "Home",
+          initialCost: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 1,
+          mortgageType: "amortizing",
+          mortgageRate: 0,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 2026,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const firstYear = scenarios[0]?.rows[0];
+    const secondYear = scenarios[0]?.rows[1];
+    expect(firstYear?.assetValues.get("Home")).toBeCloseTo(100, 6);
+    expect(firstYear?.totalAssets).toBeCloseTo(100, 6);
+    expect(firstYear?.depleted).toBe(true);
+    expect(firstYear?.depletionProbability).toBeCloseTo(100, 6);
+    expect(secondYear?.depleted).toBe(true);
+    expect(secondYear?.depletionProbability).toBeCloseTo(100, 6);
+  });
+
+  it("does not mark depletion when non-home assets remain after funding expenses", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: -50,
+          totalExpenses: 50,
+          flowAmounts: new Map([["Living expenses", -50]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Portfolio",
+          startingValue: 200,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          kind: "home",
+          name: "Home",
+          initialCost: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 1,
+          mortgageType: "amortizing",
+          mortgageRate: 0,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 2026,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.assetValues.get("Portfolio")).toBeCloseTo(150, 6);
+    expect(row?.assetValues.get("Home")).toBeCloseTo(100, 6);
+    expect(row?.depleted).toBe(false);
+    expect(row?.depletionProbability).toBeCloseTo(0, 6);
+  });
+
   it("applies NIIT using the lesser of net investment income and MAGI above the threshold", () => {
     const profile = {
       ...createDefaultHouseholdTaxProfile(),
@@ -596,6 +740,112 @@ describe("buildSimulationScenarios", () => {
     expect(row?.taxBreakdown.netInvestmentIncome).toBeCloseTo(15000, 6);
     expect(row?.taxBreakdown.niitIncomeAboveThreshold).toBeCloseTo(5000, 6);
     expect(row?.taxBreakdown.niitTaxableIncome).toBeCloseTo(5000, 6);
+  });
+
+  it("models mortgage interest, property tax, and home monthlies with itemized deductions", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      deductionMode: "itemized" as const,
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "Federal ordinary income",
+      federalQualifiedTaxName: "",
+      stateTaxName: "",
+      localTaxName: "",
+      niitTaxName: "",
+    };
+
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: {
+            ...createEmptyHouseholdTaxInput(),
+            wages: 100000,
+          },
+        },
+      ],
+      assets: [
+        {
+          name: "Portfolio",
+          startingValue: 50000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          kind: "home",
+          name: "Home",
+          initialCost: 100000,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 0.2,
+          mortgageType: "amortizing",
+          mortgageRate: 6,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 100,
+          propertyTaxRate: 1.2,
+          purchaseYear: 2027,
+        },
+      ],
+      assetCorrelations: [],
+      taxes: [new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.1 }] })],
+      householdTaxProfile: profile,
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Home down payment")).toBeCloseTo(-20000, 6);
+    expect((row?.flowTotals.get("Home mortgage interest") ?? 0) < 0).toBe(true);
+    expect(row?.flowTotals.get("Home property tax")).toBeCloseTo(-1200, 6);
+    expect(row?.flowTotals.get("Home home monthlies")).toBeCloseTo(-1200, 6);
+    expect((row?.taxBreakdown.deductibleMortgageInterest ?? 0) > 0).toBe(true);
+    expect(row?.taxBreakdown.saltDeductionUsed).toBeCloseTo(1200, 6);
+  });
+
+  it("supports interest-only mortgages without paying principal", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          kind: "home",
+          name: "IO Home",
+          initialCost: 100000,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 0.2,
+          mortgageType: "interest-only",
+          mortgageRate: 6,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 2027,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("IO Home mortgage principal") ?? 0).toBeCloseTo(0, 6);
+    expect(row?.flowTotals.get("IO Home mortgage interest")).toBeCloseTo(-4800, 6);
+    expect(row?.assetValues.get("IO Home")).toBeCloseTo(20000, 6);
   });
 
   it("reinvests yearly surplus cash into the asset that generated it", () => {
@@ -829,5 +1079,6 @@ describe("buildSimulationScenarios", () => {
     const rows = scenarios.get(50)?.rows ?? [];
     expect(rows).toHaveLength(2);
     expect(rows[0]?.depletionProbability).toBeCloseTo(100, 6);
+    expect(rows[1]?.depletionProbability).toBeCloseTo(100, 6);
   });
 });

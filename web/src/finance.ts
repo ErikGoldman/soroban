@@ -18,16 +18,34 @@ export interface VariableDefinition {
   value: number;
 }
 
-export interface AssetDefinition {
+interface AssetDefinitionBase {
   name: string;
-  startingValue: number;
   expectedReturn: number;
   volatility: number;
+}
+
+export interface InvestmentAssetDefinition extends AssetDefinitionBase {
+  kind?: "investment";
+  startingValue: number;
   sellProportion: number;
   cashGeneration?: AssetCashGenerationDefinition;
   cashGenerations?: readonly AssetCashGenerationDefinition[];
   saleTax?: AssetSaleTaxDefinition;
 }
+
+export interface HomeAssetDefinition extends AssetDefinitionBase {
+  kind: "home";
+  initialCost: number;
+  cashPurchasePercent: number;
+  mortgageType: "amortizing" | "interest-only";
+  mortgageRate: number;
+  mortgageTermYears: number;
+  monthlyNonTaxCosts: number;
+  propertyTaxRate: number;
+  purchaseYear: number;
+}
+
+export type AssetDefinition = InvestmentAssetDefinition | HomeAssetDefinition;
 
 export type FlowTaxTreatment =
   | "wages"
@@ -113,55 +131,104 @@ export class Variable {
 
 export class Asset {
   readonly name: string;
-  readonly startingValue: number;
   readonly expectedReturn: number;
   readonly volatility: number;
+  readonly kind: "investment" | "home";
+  readonly startingValue: number;
   readonly sellProportion: number;
   readonly cashGenerations: readonly AssetCashGenerationDefinition[];
   readonly saleTax: AssetSaleTaxDefinition | null;
+  readonly initialCost: number;
+  readonly cashPurchasePercent: number;
+  readonly mortgageType: "amortizing" | "interest-only";
+  readonly mortgageRate: number;
+  readonly mortgageTermYears: number;
+  readonly monthlyNonTaxCosts: number;
+  readonly propertyTaxRate: number;
+  readonly purchaseYear: number | null;
 
-  constructor({
-    name,
-    startingValue,
-    expectedReturn,
-    volatility,
-    sellProportion,
-    cashGeneration,
-    cashGenerations,
-    saleTax,
-  }: AssetDefinition) {
-    const normalizedName = name.trim();
+  constructor(definition: AssetDefinition) {
+    const normalizedName = definition.name.trim();
 
     if (!normalizedName) {
       throw new Error("Asset name is required.");
     }
 
-    assertFiniteNumber(startingValue, `Starting value for asset "${normalizedName}" must be finite.`);
-    assertFiniteNumber(expectedReturn, `Expected return for asset "${normalizedName}" must be finite.`);
-    assertFiniteNumber(volatility, `Volatility for asset "${normalizedName}" must be finite.`);
-    assertFiniteNumber(sellProportion, `Sell proportion for asset "${normalizedName}" must be finite.`);
+    assertFiniteNumber(definition.expectedReturn, `Expected return for asset "${normalizedName}" must be finite.`);
+    assertFiniteNumber(definition.volatility, `Volatility for asset "${normalizedName}" must be finite.`);
 
-    if (sellProportion < 0 || sellProportion > 1) {
+    if (definition.kind === "home") {
+      const normalizedHome = normalizeHomeAssetDefinition(normalizedName, definition);
+
+      this.name = normalizedName;
+      this.kind = "home";
+      this.expectedReturn = definition.expectedReturn;
+      this.volatility = definition.volatility;
+      this.startingValue = 0;
+      this.sellProportion = 0;
+      this.cashGenerations = [];
+      this.saleTax = null;
+      this.initialCost = normalizedHome.initialCost;
+      this.cashPurchasePercent = normalizedHome.cashPurchasePercent;
+      this.mortgageType = normalizedHome.mortgageType;
+      this.mortgageRate = normalizedHome.mortgageRate;
+      this.mortgageTermYears = normalizedHome.mortgageTermYears;
+      this.monthlyNonTaxCosts = normalizedHome.monthlyNonTaxCosts;
+      this.propertyTaxRate = normalizedHome.propertyTaxRate;
+      this.purchaseYear = normalizedHome.purchaseYear;
+      return;
+    }
+
+    assertFiniteNumber(definition.startingValue, `Starting value for asset "${normalizedName}" must be finite.`);
+    assertFiniteNumber(definition.sellProportion, `Sell proportion for asset "${normalizedName}" must be finite.`);
+
+    if (definition.sellProportion < 0 || definition.sellProportion > 1) {
       throw new Error(`Sell proportion for asset "${normalizedName}" must be between 0 and 1.`);
     }
 
     const normalizedCashGenerations = normalizeAssetCashGenerations(
       normalizedName,
-      cashGenerations,
-      cashGeneration
+      definition.cashGenerations,
+      definition.cashGeneration
     );
-    const normalizedSaleTax = normalizeAssetSaleTax(normalizedName, saleTax);
+    const normalizedSaleTax = normalizeAssetSaleTax(normalizedName, definition.saleTax);
 
     this.name = normalizedName;
-    this.startingValue = startingValue;
-    this.expectedReturn = expectedReturn;
-    this.volatility = volatility;
-    this.sellProportion = sellProportion;
+    this.kind = "investment";
+    this.startingValue = definition.startingValue;
+    this.expectedReturn = definition.expectedReturn;
+    this.volatility = definition.volatility;
+    this.sellProportion = definition.sellProportion;
     this.cashGenerations = normalizedCashGenerations;
     this.saleTax = normalizedSaleTax;
+    this.initialCost = 0;
+    this.cashPurchasePercent = 0;
+    this.mortgageType = "amortizing";
+    this.mortgageRate = 0;
+    this.mortgageTermYears = 0;
+    this.monthlyNonTaxCosts = 0;
+    this.propertyTaxRate = 0;
+    this.purchaseYear = null;
   }
 
   toDefinition(): AssetDefinition {
+    if (this.kind === "home") {
+      return {
+        kind: "home",
+        name: this.name,
+        initialCost: this.initialCost,
+        cashPurchasePercent: this.cashPurchasePercent,
+        mortgageType: this.mortgageType,
+        mortgageRate: this.mortgageRate,
+        mortgageTermYears: this.mortgageTermYears,
+        monthlyNonTaxCosts: this.monthlyNonTaxCosts,
+        propertyTaxRate: this.propertyTaxRate,
+        purchaseYear: this.purchaseYear ?? new Date().getFullYear(),
+        expectedReturn: this.expectedReturn,
+        volatility: this.volatility,
+      };
+    }
+
     return {
       name: this.name,
       startingValue: this.startingValue,
@@ -606,6 +673,61 @@ function normalizeAssetCashGenerations(
       taxTreatment: normalizeAssetCashTaxTreatment(cashGeneration.taxTreatment),
     };
   });
+}
+
+function normalizeHomeAssetDefinition(
+  assetName: string,
+  definition: HomeAssetDefinition
+): Omit<HomeAssetDefinition, "name" | "expectedReturn" | "volatility" | "kind"> {
+  assertFiniteNumber(definition.initialCost, `Initial cost for asset "${assetName}" must be finite.`);
+  assertFiniteNumber(
+    definition.cashPurchasePercent,
+    `Cash purchase percent for asset "${assetName}" must be finite.`
+  );
+  assertFiniteNumber(definition.mortgageRate, `Mortgage rate for asset "${assetName}" must be finite.`);
+  assertFiniteNumber(
+    definition.mortgageTermYears,
+    `Mortgage term for asset "${assetName}" must be finite.`
+  );
+  assertFiniteNumber(
+    definition.monthlyNonTaxCosts,
+    `Monthly non-tax costs for asset "${assetName}" must be finite.`
+  );
+  assertFiniteNumber(definition.propertyTaxRate, `Property tax rate for asset "${assetName}" must be finite.`);
+  assertFiniteNumber(definition.purchaseYear, `Purchase year for asset "${assetName}" must be finite.`);
+
+  if (definition.initialCost < 0) {
+    throw new Error(`Initial cost for asset "${assetName}" cannot be negative.`);
+  }
+  if (definition.cashPurchasePercent < 0 || definition.cashPurchasePercent > 1) {
+    throw new Error(`Cash purchase percent for asset "${assetName}" must be between 0 and 1.`);
+  }
+  if (definition.mortgageRate < 0) {
+    throw new Error(`Mortgage rate for asset "${assetName}" cannot be negative.`);
+  }
+  if (!Number.isInteger(definition.mortgageTermYears) || definition.mortgageTermYears < 1) {
+    throw new Error(`Mortgage term for asset "${assetName}" must be a whole number of years.`);
+  }
+  if (definition.monthlyNonTaxCosts < 0) {
+    throw new Error(`Monthly non-tax costs for asset "${assetName}" cannot be negative.`);
+  }
+  if (definition.propertyTaxRate < 0) {
+    throw new Error(`Property tax rate for asset "${assetName}" cannot be negative.`);
+  }
+  if (!Number.isInteger(definition.purchaseYear)) {
+    throw new Error(`Purchase year for asset "${assetName}" must be a whole number.`);
+  }
+
+  return {
+    initialCost: definition.initialCost,
+    cashPurchasePercent: definition.cashPurchasePercent,
+    mortgageType: definition.mortgageType ?? "amortizing",
+    mortgageRate: definition.mortgageRate,
+    mortgageTermYears: definition.mortgageTermYears,
+    monthlyNonTaxCosts: definition.monthlyNonTaxCosts,
+    propertyTaxRate: definition.propertyTaxRate,
+    purchaseYear: definition.purchaseYear,
+  };
 }
 
 function normalizeAssetSaleTax(

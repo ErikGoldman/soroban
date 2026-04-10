@@ -34,10 +34,19 @@ export interface PersistedVariableDefinition {
 
 export interface PersistedAssetDefinition {
   name: string;
-  startingValue: number;
+  kind?: "investment" | "home";
+  startingValue?: number;
   expectedReturn: number;
   volatility: number;
-  sellProportion: number;
+  sellProportion?: number;
+  initialCost?: number;
+  cashPurchasePercent?: number;
+  mortgageType?: "amortizing" | "interest-only";
+  mortgageRate?: number;
+  mortgageTermYears?: number;
+  monthlyNonTaxCosts?: number;
+  propertyTaxRate?: number;
+  purchaseYear?: number;
   cashGeneration?: {
     name?: string;
     rate: number;
@@ -126,6 +135,11 @@ export interface SavedPlannerState {
     federalStandardDeduction?: number;
     saltDeduction?: number;
     saltDeductionCap?: number;
+    otherSaltTaxesPaid?: number;
+    saltDeductionBaseCap?: number;
+    saltDeductionFloorCap?: number;
+    saltDeductionPhaseoutThreshold?: number;
+    saltDeductionPhaseoutRate?: number;
     otherItemizedDeductions?: number;
     stateTaxableIncomeAdjustment?: number;
     localTaxableIncomeAdjustment?: number;
