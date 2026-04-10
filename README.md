@@ -93,6 +93,74 @@ yarn test
 - [`web/src/storage.ts`](/home/erikg/projects/soroban/main/web/src/storage.ts) persists planner data in IndexedDB
 - [`web/src/*.test.ts`](/home/erikg/projects/soroban/main/web/src) covers the formula engine, taxes, and simulation behavior
 
+## Deploy with Firebase Hosting
+
+This app is a static Vite frontend, so the production deploy only needs the built files in [`dist/`](/home/erikg/projects/soroban/main/dist). Firebase Hosting is a better fit than Cloud Run here because it serves the built assets directly from a CDN, gives you default `*.web.app` and `*.firebaseapp.com` URLs, and supports custom domains with managed SSL.
+
+### Files used for hosting
+
+- [`firebase.json`](/home/erikg/projects/soroban/main/firebase.json) points Hosting at the built `dist/` directory
+- [`package.json`](/home/erikg/projects/soroban/main/package.json) includes deploy and local Hosting commands
+
+### Requirements
+
+- Node.js 18+
+- Yarn 1.x
+- Firebase CLI installed locally
+- a Firebase project linked to a Google Cloud project with billing if you expect usage beyond the free tier
+
+Install the Firebase CLI if needed:
+
+```bash
+npm install -g firebase-tools
+```
+
+### One-time setup
+
+Log in and attach this repo to your Firebase project:
+
+```bash
+firebase login
+firebase use --add
+```
+
+The second command creates a local `.firebaserc` file with your selected project alias.
+
+### Deploy
+
+From the repo root:
+
+```bash
+yarn deploy:firebase
+```
+
+That builds the Vite app and deploys Hosting only. Firebase will print your public site URLs, usually `PROJECT_ID.web.app` and `PROJECT_ID.firebaseapp.com`.
+
+### Local preview
+
+```bash
+yarn build
+yarn serve:firebase
+```
+
+### Custom domain
+
+After the first deploy, connect your custom domain in the Firebase console under Hosting. Firebase Hosting provisions SSL certificates for custom domains and tells you which DNS records to create.
+
+Typical flow:
+
+1. Open Hosting in the Firebase console.
+2. Choose `Add custom domain`.
+3. Enter the apex domain or subdomain you want to use.
+4. Add the DNS records Firebase gives you at your DNS provider.
+5. Wait for verification and certificate provisioning.
+
+Official docs:
+
+- https://firebase.google.com/docs/hosting/quickstart
+- https://firebase.google.com/docs/hosting/full-config
+- https://firebase.google.com/docs/hosting/custom-domain
+
 ## Current behavior and constraints
 
 - Authentication is currently a stubbed demo user defined in [`web/src/auth.ts`](/home/erikg/projects/soroban/main/web/src/auth.ts).

@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc --noEmit --project tsconfig.json && vite build",
     "dev": "vite",
+    "deploy:firebase": "yarn build && npx firebase-tools deploy --only hosting",
+    "serve:firebase": "npx firebase-tools emulators:start --only hosting",
     "preview": "vite preview",
     "test": "vitest run"
   },
