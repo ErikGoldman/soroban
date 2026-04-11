@@ -29,10 +29,47 @@ function createEmptyHouseholdTaxInput() {
     qualifiedDividends: 0,
     shortTermCapitalGains: 0,
     longTermCapitalGains: 0,
+    capitalLossDeduction: 0,
     taxExemptIncome: 0,
     stateLocalExemptIncome: 0,
     tripleExemptIncome: 0,
     deductibleExpenses: 0,
+    saltTaxesPaid: 0,
+    homeMortgageInterestPaid: 0,
+    homeMortgageAverageBalance: 0,
+    homeMortgageInterestDebtLimit: 0,
+  };
+}
+
+function createYearlyPlan(
+  label: string,
+  flows: Array<{
+    name: string;
+    amount: number;
+    type?: "income" | "expense";
+    inflationAdjusted?: boolean;
+    taxTreatment?:
+      | "wages"
+      | "ordinary-income"
+      | "qualified-dividends"
+      | "short-term-capital-gains"
+      | "long-term-capital-gains"
+      | "tax-exempt-income"
+      | "deductible-expense"
+      | "nondeductible-expense";
+  }>,
+  year?: number
+) {
+  return {
+    ...(year === undefined ? {} : { year }),
+    label,
+    flows: flows.map((flow) => ({
+      name: flow.name,
+      type: flow.type ?? (flow.amount < 0 ? "expense" : "income"),
+      taxTreatment: flow.taxTreatment ?? (flow.amount < 0 ? "nondeductible-expense" : "ordinary-income"),
+      inflationAdjusted: flow.inflationAdjusted ?? false,
+      baseSignedAmount: flow.amount,
+    })),
   };
 }
 
@@ -111,6 +148,151 @@ describe("buildSimulationScenarios", () => {
     expect(row?.assetValues.get("Stocks")).toBeCloseTo(110, 6);
     expect(row?.assetReturns.get("Stocks")?.amount).toBeCloseTo(10, 6);
     expect(row?.assetReturns.get("Stocks")?.percentage).toBeCloseTo(10, 6);
+  });
+
+  it("preserves fixed inflation compounding semantics in fixed mode", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 3,
+      yearlyPlans: [
+        createYearlyPlan("2027", [{ name: "Rent", amount: -100, inflationAdjusted: true }], 2027),
+        createYearlyPlan("2028", [{ name: "Rent", amount: -100, inflationAdjusted: true }], 2028),
+        createYearlyPlan("2029", [{ name: "Rent", amount: -100, inflationAdjusted: true }], 2029),
+      ],
+      assets: [
+        {
+          name: "Cash",
+          startingValue: 400,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      inflation: {
+        mode: "fixed",
+        fixedRate: 0.03,
+      },
+      nextStandardNormal: createDeterministicNormals([0, 0, 0]),
+    });
+
+    const [yearOne, yearTwo, yearThree] = scenarios[0]?.rows ?? [];
+    expect(yearOne?.flowTotals.get("Rent")).toBeCloseTo(-100, 6);
+    expect(yearTwo?.flowTotals.get("Rent")).toBeCloseTo(-103, 6);
+    expect(yearThree?.flowTotals.get("Rent")).toBeCloseTo(-106.09, 6);
+    expect(yearOne?.inflationRateApplied).toBeCloseTo(0.03, 6);
+    expect(yearOne?.inflationRegime).toBe("fixed");
+    expect(yearTwo?.inflationRegime).toBe("fixed");
+    expect(yearThree?.inflationRegime).toBe("fixed");
+  });
+
+  it("switches inflation regimes yearly and compounds only opted-in expenses", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 3,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [
+            { name: "Rent", amount: -100, inflationAdjusted: true },
+            { name: "Insurance", amount: -50, inflationAdjusted: false },
+            { name: "Salary", amount: 80, type: "income", taxTreatment: "wages" },
+          ],
+          2027
+        ),
+        createYearlyPlan(
+          "2028",
+          [
+            { name: "Rent", amount: -100, inflationAdjusted: true },
+            { name: "Insurance", amount: -50, inflationAdjusted: false },
+            { name: "Salary", amount: 80, type: "income", taxTreatment: "wages" },
+          ],
+          2028
+        ),
+        createYearlyPlan(
+          "2029",
+          [
+            { name: "Rent", amount: -100, inflationAdjusted: true },
+            { name: "Insurance", amount: -50, inflationAdjusted: false },
+            { name: "Salary", amount: 80, type: "income", taxTreatment: "wages" },
+          ],
+          2029
+        ),
+      ],
+      assets: [
+        {
+          name: "Cash",
+          startingValue: 500,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      inflation: {
+        mode: "regime-switching",
+        lowRate: 0.02,
+        highRate: 0.08,
+        stayLowProbability: 0.9,
+        stayHighProbability: 0.6,
+      },
+      nextRandom: (() => {
+        const values = [0.1, 0.95, 0.2];
+        let index = 0;
+        return () => values[index++] ?? 0;
+      })(),
+      nextStandardNormal: createDeterministicNormals([0, 0, 0]),
+    });
+
+    const [yearOne, yearTwo, yearThree] = scenarios[0]?.rows ?? [];
+    expect(yearOne?.inflationRegime).toBe("high");
+    expect(yearTwo?.inflationRegime).toBe("low");
+    expect(yearThree?.inflationRegime).toBe("low");
+    expect(yearOne?.inflationRateApplied).toBeCloseTo(0.08, 6);
+    expect(yearTwo?.inflationRateApplied).toBeCloseTo(0.02, 6);
+    expect(yearThree?.inflationRateApplied).toBeCloseTo(0.02, 6);
+    expect(yearOne?.flowTotals.get("Rent")).toBeCloseTo(-100, 6);
+    expect(yearTwo?.flowTotals.get("Rent")).toBeCloseTo(-102, 6);
+    expect(yearThree?.flowTotals.get("Rent")).toBeCloseTo(-104.04, 6);
+    expect(yearOne?.flowTotals.get("Insurance")).toBeCloseTo(-50, 6);
+    expect(yearTwo?.flowTotals.get("Insurance")).toBeCloseTo(-50, 6);
+    expect(yearThree?.flowTotals.get("Insurance")).toBeCloseTo(-50, 6);
+    expect(yearTwo?.flowTotals.get("Salary")).toBeCloseTo(80, 6);
+    expect(yearThree?.flowTotals.get("Salary")).toBeCloseTo(80, 6);
+    expect(yearThree?.householdTaxInput.wages).toBeCloseTo(80, 6);
+    expect(yearThree?.totalExpenses).toBeCloseTo(154.04, 6);
+  });
+
+  it("starts from the stationary distribution when sampling the initial inflation regime", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlyPlans: [createYearlyPlan("2027", [{ name: "Rent", amount: -100, inflationAdjusted: true }], 2027)],
+      assets: [
+        {
+          name: "Cash",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      inflation: {
+        mode: "regime-switching",
+        lowRate: 0.02,
+        highRate: 0.08,
+        stayLowProbability: 0.9,
+        stayHighProbability: 0.6,
+      },
+      nextRandom: () => 0.25,
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.inflationRegime).toBe("low");
+    expect(row?.inflationRateApplied).toBeCloseTo(0.02, 6);
+    expect(row?.flowTotals.get("Rent")).toBeCloseTo(-100, 6);
   });
 
   it("keeps home appreciation out of cash flows and tracks market value separately from equity", () => {
@@ -215,6 +397,9 @@ describe("buildSimulationScenarios", () => {
           {
             yearNumber: 1,
             label: "2026",
+            inflationMode: "fixed",
+            inflationRateApplied: 0,
+            inflationRegime: "fixed",
             startingAssets: 100,
             endingAssets: 100,
             totalExpenses: 0,
@@ -246,6 +431,9 @@ describe("buildSimulationScenarios", () => {
           {
             yearNumber: 2,
             label: "2027",
+            inflationMode: "fixed",
+            inflationRateApplied: 0,
+            inflationRegime: "fixed",
             startingAssets: 100,
             endingAssets: 90,
             totalExpenses: 0,
@@ -282,6 +470,9 @@ describe("buildSimulationScenarios", () => {
           {
             yearNumber: 1,
             label: "2026",
+            inflationMode: "fixed",
+            inflationRateApplied: 0,
+            inflationRegime: "fixed",
             startingAssets: 100,
             endingAssets: 100,
             totalExpenses: 0,
@@ -313,6 +504,9 @@ describe("buildSimulationScenarios", () => {
           {
             yearNumber: 2,
             label: "2027",
+            inflationMode: "fixed",
+            inflationRateApplied: 0,
+            inflationRegime: "fixed",
             startingAssets: 100,
             endingAssets: 40,
             totalExpenses: 0,

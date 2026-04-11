@@ -126,6 +126,15 @@ function createScenarioPlannerState(): ScenarioPlannerState {
     simulationAttempts: 25000,
     simulationTaxPreset: "nyc",
     simulationHorizonYears: 18,
+    simulationInflation: {
+      mode: "regime-switching",
+      regimeSwitching: {
+        lowRate: 2.5,
+        highRate: 6,
+        stayLowProbability: 90,
+        stayHighProbability: 60,
+      },
+    },
     simulationVariableSweep: {
       enabled: true,
       variableName: "salary",
@@ -159,6 +168,15 @@ describe("scenario save and load", () => {
       formula: "salary + salary * bonusRate + 10000",
     });
     expect(parsedFile.plannerState.simulationAttempts).toBe(25000);
+    expect(parsedFile.plannerState.simulationInflation).toEqual({
+      mode: "regime-switching",
+      regimeSwitching: {
+        lowRate: 2.5,
+        highRate: 6,
+        stayLowProbability: 90,
+        stayHighProbability: 60,
+      },
+    });
     expect(parsedFile.plannerState.simulationVariableSweep).toEqual({
       enabled: true,
       variableName: "salary",

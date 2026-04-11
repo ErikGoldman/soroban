@@ -163,6 +163,16 @@ export interface SavedPlannerState {
   simulationTaxPreset?: "nyc";
   simulationHorizonYears?: number;
   simulationInflationRate?: number;
+  simulationInflation?: {
+    mode?: "fixed" | "regime-switching";
+    fixedRate?: number;
+    regimeSwitching?: {
+      lowRate?: number;
+      highRate?: number;
+      stayLowProbability?: number;
+      stayHighProbability?: number;
+    };
+  };
   simulationVariableSweep?: {
     enabled?: boolean;
     variableName?: string;

@@ -11,6 +11,9 @@ function createRow(overrides: Partial<SimulationDetailYearRow> = {}): Simulation
   return {
     yearNumber: 1,
     label: "2027",
+    inflationMode: "fixed",
+    inflationRateApplied: 0,
+    inflationRegime: "fixed",
     startingAssets: 20,
     endingAssets: 32.666666666666664,
     totalExpenses: 0,

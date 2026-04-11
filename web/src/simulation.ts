@@ -29,6 +29,51 @@ export interface SimulationHomeAssetInput extends HomeAssetDefinition {
 
 export type SimulationAssetInput = SimulationInvestmentAssetInput | SimulationHomeAssetInput;
 
+export type SimulationInflationMode = "fixed" | "regime-switching";
+
+export interface SimulationFixedInflationConfig {
+  mode: "fixed";
+  fixedRate: number;
+}
+
+export interface SimulationRegimeSwitchingInflationConfig {
+  mode: "regime-switching";
+  lowRate: number;
+  highRate: number;
+  stayLowProbability: number;
+  stayHighProbability: number;
+}
+
+export type SimulationInflationConfig = SimulationFixedInflationConfig | SimulationRegimeSwitchingInflationConfig;
+
+export interface SimulationYearlyFlowInput {
+  name: string;
+  type: "income" | "expense";
+  taxTreatment:
+    | "wages"
+    | "ordinary-income"
+    | "qualified-dividends"
+    | "short-term-capital-gains"
+    | "long-term-capital-gains"
+    | "tax-exempt-income"
+    | "deductible-expense"
+    | "nondeductible-expense";
+  inflationAdjusted: boolean;
+  baseSignedAmount: number;
+}
+
+export interface SimulationYearlyPlan {
+  year?: number;
+  label: string;
+  flows: readonly SimulationYearlyFlowInput[];
+  legacySnapshot?: {
+    netAmount: number;
+    totalExpenses: number;
+    flowAmounts: Map<string, number>;
+    householdTaxInput: HouseholdTaxInput;
+  };
+}
+
 export interface SimulationYearlySnapshot {
   year?: number;
   label: string;
@@ -60,6 +105,9 @@ export interface SimulationScenario {
 export interface SimulationDetailYearRow {
   yearNumber: number;
   label: string;
+  inflationMode: SimulationInflationMode;
+  inflationRateApplied: number;
+  inflationRegime: "fixed" | "low" | "high";
   startingAssets: number;
   endingAssets: number;
   liquidAssets?: number;
@@ -86,12 +134,15 @@ export interface SimulationDetailScenario {
 export interface BuildSimulationScenariosInput {
   attempts: number;
   horizonYears: number;
-  yearlySnapshots: readonly SimulationYearlySnapshot[];
+  yearlyPlans?: readonly SimulationYearlyPlan[];
+  yearlySnapshots?: readonly SimulationYearlySnapshot[];
   assets: readonly SimulationAssetInput[];
   assetCorrelations: readonly AssetCorrelationDefinition[];
+  inflation?: SimulationInflationConfig;
   taxes?: readonly Tax[];
   householdTaxProfile?: HouseholdTaxProfileDefinition | null;
   nextStandardNormal?: () => number;
+  nextRandom?: () => number;
 }
 
 interface NormalizedSimulationInvestmentAsset {
@@ -157,6 +208,17 @@ interface GeneratedCashStreamsResult {
   generatedCashTotal: number;
   reinvestmentSources: Map<string, number>;
   expenseTotal: number;
+}
+
+interface RealizedYearlyPlan {
+  label: string;
+  year?: number;
+  flowAmounts: Map<string, number>;
+  netAmount: number;
+  totalExpenses: number;
+  householdTaxInput: HouseholdTaxInput;
+  inflationRateApplied: number;
+  inflationRegime: "fixed" | "low" | "high";
 }
 
 interface SimulationExecutionResult {
@@ -322,25 +384,58 @@ export function createCorrelatedNormals(
   return correlatedNormals;
 }
 
+function normalizeSimulationYearlyPlans(
+  yearlyPlans: readonly SimulationYearlyPlan[] | undefined,
+  yearlySnapshots: readonly SimulationYearlySnapshot[] | undefined
+): readonly SimulationYearlyPlan[] {
+  if (yearlyPlans && yearlyPlans.length > 0) {
+    return yearlyPlans;
+  }
+
+  return (yearlySnapshots ?? []).map((snapshot) => ({
+    year: snapshot.year,
+    label: snapshot.label,
+    flows: [...snapshot.flowAmounts.entries()].map(([name, amount]) => ({
+      name,
+      type: amount < 0 ? "expense" : "income",
+      taxTreatment: amount < 0 ? "nondeductible-expense" : "ordinary-income",
+      inflationAdjusted: false,
+      baseSignedAmount: amount,
+    })),
+    legacySnapshot: {
+      netAmount: snapshot.netAmount,
+      totalExpenses: snapshot.totalExpenses,
+      flowAmounts: new Map(snapshot.flowAmounts),
+      householdTaxInput: cloneHouseholdTaxInput(snapshot.householdTaxInput),
+    },
+  }));
+}
+
 export function buildSimulationScenarios({
   attempts,
   horizonYears,
+  yearlyPlans,
   yearlySnapshots,
   assets,
   assetCorrelations,
+  inflation,
   taxes = [],
   householdTaxProfile = null,
   nextStandardNormal = randomStandardNormal,
+  nextRandom = Math.random,
 }: BuildSimulationScenariosInput): Map<SimulationPercentile, SimulationScenario> {
   return buildSimulationExecution({
     attempts,
     horizonYears,
+    yearlyPlans,
     yearlySnapshots,
     assets,
     assetCorrelations,
+    inflation,
     taxes,
     householdTaxProfile,
     nextStandardNormal,
+    nextRandom,
   }).scenarios;
 }
 
@@ -348,25 +443,32 @@ export function buildSimulationExecution(
   {
     attempts,
     horizonYears,
+    yearlyPlans,
     yearlySnapshots,
     assets,
     assetCorrelations,
+    inflation,
     taxes = [],
     householdTaxProfile = null,
     nextStandardNormal = randomStandardNormal,
+    nextRandom = Math.random,
   }: BuildSimulationScenariosInput,
   { onProgress, progressInterval, detailSampleLimit = null, includeAggregates = true }: BuildSimulationExecutionOptions = {}
 ): BuildSimulationExecutionResult {
+  const normalizedYearlyPlans = normalizeSimulationYearlyPlans(yearlyPlans, yearlySnapshots);
+  const normalizedInflation = inflation ?? { mode: "fixed", fixedRate: 0 };
   const { scenarios, yearlyTotals, yearlyLiquidTotals, depletionCountsByYear } = runSimulationAttempts(
     {
       attempts,
       horizonYears,
-      yearlySnapshots,
+      yearlyPlans: normalizedYearlyPlans,
       assets,
       assetCorrelations,
+      inflation: normalizedInflation,
       taxes,
       householdTaxProfile,
       nextStandardNormal,
+      nextRandom,
     },
     {
       onProgress,
@@ -378,7 +480,7 @@ export function buildSimulationExecution(
     scenarios: buildSimulationScenarioSummaries({
       attempts,
       horizonYears,
-      yearlySnapshots,
+      yearlyPlans: normalizedYearlyPlans,
       yearlyTotals,
       yearlyLiquidTotals,
       depletionCountsByYear,
@@ -397,12 +499,12 @@ export function buildSimulationExecution(
 export function buildSimulationScenariosFromDetails({
   attempts,
   horizonYears,
-  yearlySnapshots,
+  yearlyPlans,
   details,
 }: {
   attempts: number;
   horizonYears: number;
-  yearlySnapshots: readonly SimulationYearlySnapshot[];
+  yearlyPlans: readonly SimulationYearlyPlan[];
   details: readonly SimulationDetailScenario[];
 }): Map<SimulationPercentile, SimulationScenario> {
   const yearlyTotals = Array.from({ length: horizonYears }, () => [] as number[]);
@@ -427,7 +529,7 @@ export function buildSimulationScenariosFromDetails({
   return buildSimulationScenariosFromAggregates({
     attempts,
     horizonYears,
-    yearlySnapshots,
+    yearlyPlans,
     yearlyTotals,
     yearlyLiquidTotals,
     depletionCountsByYear,
@@ -437,14 +539,14 @@ export function buildSimulationScenariosFromDetails({
 export function buildSimulationScenariosFromAggregates({
   attempts,
   horizonYears,
-  yearlySnapshots,
+  yearlyPlans,
   yearlyTotals,
   yearlyLiquidTotals,
   depletionCountsByYear,
 }: {
   attempts: number;
   horizonYears: number;
-  yearlySnapshots: readonly SimulationYearlySnapshot[];
+  yearlyPlans: readonly SimulationYearlyPlan[];
   yearlyTotals: readonly (readonly number[])[];
   yearlyLiquidTotals: readonly (readonly number[])[];
   depletionCountsByYear: readonly number[];
@@ -452,7 +554,7 @@ export function buildSimulationScenariosFromAggregates({
   return buildSimulationScenarioSummaries({
     attempts,
     horizonYears,
-    yearlySnapshots,
+    yearlyPlans,
     yearlyTotals,
     yearlyLiquidTotals,
     depletionCountsByYear,
@@ -462,33 +564,33 @@ export function buildSimulationScenariosFromAggregates({
 function buildSimulationScenarioSummaries({
   attempts,
   horizonYears,
-  yearlySnapshots,
+  yearlyPlans,
   yearlyTotals,
   yearlyLiquidTotals,
   depletionCountsByYear,
 }: {
   attempts: number;
   horizonYears: number;
-  yearlySnapshots: readonly SimulationYearlySnapshot[];
+  yearlyPlans: readonly SimulationYearlyPlan[];
   yearlyTotals: readonly (readonly number[])[];
   yearlyLiquidTotals: readonly (readonly number[])[];
   depletionCountsByYear: readonly number[];
 }): Map<SimulationPercentile, SimulationScenario> {
-  const rowCount = Math.min(horizonYears, yearlySnapshots.length);
+  const rowCount = Math.min(horizonYears, yearlyPlans.length);
   const results = new Map<SimulationPercentile, SimulationScenario>();
 
   for (const percentile of [5, 10, 25, 50, 75, 90] as const) {
     const rows: SimulationYearRow[] = [];
     for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
-      const snapshot = yearlySnapshots[rowIndex];
+      const yearlyPlan = yearlyPlans[rowIndex];
       const yearlyPercentileTotalAssets = selectPercentileValue(yearlyTotals[rowIndex] ?? [], percentile);
       const yearlyPercentileLiquidAssets = selectPercentileValue(yearlyLiquidTotals[rowIndex] ?? [], percentile);
-      if (!snapshot || yearlyPercentileTotalAssets === null) {
+      if (!yearlyPlan || yearlyPercentileTotalAssets === null) {
         continue;
       }
       rows.push({
         yearNumber: rowIndex + 1,
-        label: snapshot.label,
+        label: yearlyPlan.label,
         depletionProbability: ((depletionCountsByYear[rowIndex] ?? 0) / attempts) * 100,
         totalAssets: yearlyPercentileTotalAssets,
         liquidAssets: yearlyPercentileLiquidAssets ?? 0,
@@ -507,22 +609,28 @@ function buildSimulationScenarioSummaries({
 export function buildSimulationDetails({
   attempts,
   horizonYears,
+  yearlyPlans,
   yearlySnapshots,
   assets,
   assetCorrelations,
+  inflation,
   taxes = [],
   householdTaxProfile = null,
   nextStandardNormal = randomStandardNormal,
+  nextRandom = Math.random,
 }: BuildSimulationScenariosInput): SimulationDetailScenario[] {
   return buildSimulationExecution({
     attempts,
     horizonYears,
+    yearlyPlans,
     yearlySnapshots,
     assets,
     assetCorrelations,
+    inflation,
     taxes,
     householdTaxProfile,
     nextStandardNormal,
+    nextRandom,
   }).details;
 }
 
@@ -585,12 +693,14 @@ export function selectRepresentativeSimulationScenario(
 function runSimulationAttempts({
   attempts,
   horizonYears,
-  yearlySnapshots,
+  yearlyPlans = [],
   assets,
   assetCorrelations,
+  inflation = { mode: "fixed", fixedRate: 0 },
   taxes = [],
   householdTaxProfile = null,
-  nextStandardNormal,
+  nextStandardNormal = randomStandardNormal,
+  nextRandom = Math.random,
 }: BuildSimulationScenariosInput,
 {
   onProgress,
@@ -607,7 +717,7 @@ function runSimulationAttempts({
   const reinvestableAssetNames = normalizedAssets
     .filter((asset): asset is NormalizedSimulationInvestmentAsset => asset.kind === "investment")
     .map((asset) => asset.name);
-  const initialYear = getSnapshotYear(yearlySnapshots[0], 0);
+  const initialYear = getPlanYear(yearlyPlans[0], 0);
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const shouldCaptureScenarioDetails = detailSampleLimit === null || scenarios.length < detailSampleLimit;
@@ -618,10 +728,15 @@ function runSimulationAttempts({
     const homeState = initialState.homeState;
     let hasDepleted = false;
     const yearlyRows: SimulationDetailYearRow[] = [];
+    const realizedInflationPath = buildRealizedInflationPath({
+      yearlyPlans,
+      inflation,
+      nextRandom,
+    });
 
     for (let yearIndex = 0; yearIndex < horizonYears; yearIndex += 1) {
-      const snapshot = yearlySnapshots[yearIndex];
-      if (!snapshot) {
+      const yearlyPlan = realizedInflationPath[yearIndex];
+      if (!yearlyPlan) {
         break;
       }
 
@@ -630,7 +745,7 @@ function runSimulationAttempts({
         (total, assetName) => total + (assetValues.get(assetName) ?? 0),
         0
       );
-      const flowTotals = new Map(snapshot.flowAmounts);
+      const flowTotals = new Map(yearlyPlan.flowAmounts);
       const annualCorrelatedNormals = createCorrelatedNormals(assetNames, assetCorrelations, nextStandardNormal);
       const annualPriceReturns = new Map(
         normalizedAssets.map((asset) => [
@@ -648,7 +763,7 @@ function runSimulationAttempts({
       );
       const assetReturnAmounts = new Map(normalizedAssets.map((asset) => [asset.name, 0]));
 
-      const snapshotYear = getSnapshotYear(snapshot, yearIndex);
+      const snapshotYear = getPlanYear(yearlyPlan, yearIndex);
       const purchaseCashFlow = applyHomePurchasesForYear(
         snapshotYear,
         normalizedAssets,
@@ -657,13 +772,13 @@ function runSimulationAttempts({
         flowTotals
       );
       const contributionAmounts = new Map(
-        reinvestableAssetNames.map((assetName) => [assetName, Math.max(0, snapshot.flowAmounts.get(assetName) ?? 0)])
+        reinvestableAssetNames.map((assetName) => [assetName, Math.max(0, yearlyPlan.flowAmounts.get(assetName) ?? 0)])
       );
       let saleResult: SaleIterationResult = {
         assetValues,
         assetCostBases,
         flowTotals,
-        taxInput: cloneHouseholdTaxInput(snapshot.householdTaxInput),
+        taxInput: cloneHouseholdTaxInput(yearlyPlan.householdTaxInput),
         preTaxCashBalance: 0,
         taxableGains: 0,
       };
@@ -703,7 +818,7 @@ function runSimulationAttempts({
 
         generatedExpenseTotal += taxInputWithCashGeneration.expenseTotal;
         generatedCashTotal += taxInputWithCashGeneration.generatedCashTotal;
-        cashBalance += snapshot.netAmount / 2 + taxInputWithCashGeneration.generatedCashTotal;
+        cashBalance += yearlyPlan.netAmount / 2 + taxInputWithCashGeneration.generatedCashTotal;
 
         saleResult = resolveSalesForCashNeed({
           cashNeeded: Math.max(0, -cashBalance),
@@ -717,7 +832,7 @@ function runSimulationAttempts({
         cashBalance += saleResult.preTaxCashBalance;
       }
 
-      const baseCashBalance = purchaseCashFlow + snapshot.netAmount + generatedCashTotal;
+      const baseCashBalance = purchaseCashFlow + yearlyPlan.netAmount + generatedCashTotal;
       const filingStatus = householdTaxProfile?.filingStatus ?? "individual";
       let effectiveTaxInput = applyCapitalLossCarryforward(saleResult.taxInput, capitalLossCarryforward, filingStatus);
       let endingCapitalLossCarryforward = getCapitalLossCarryforward(
@@ -767,7 +882,7 @@ function runSimulationAttempts({
         flowTotalsWithTaxes.set("Taxes paid", -taxBreakdown.totalTax);
       }
 
-      const totalExpenses = snapshot.totalExpenses + generatedExpenseTotal + taxBreakdown.totalTax;
+      const totalExpenses = yearlyPlan.totalExpenses + generatedExpenseTotal + taxBreakdown.totalTax;
       const postTaxCashBalance = cashBalance - taxBreakdown.totalTax;
       const postTaxShortfall = Math.max(0, -postTaxCashBalance);
       const postTaxSurplus = Math.max(0, postTaxCashBalance);
@@ -830,7 +945,10 @@ function runSimulationAttempts({
       if (shouldCaptureScenarioDetails) {
         yearlyRows.push({
           yearNumber: yearIndex + 1,
-          label: snapshot.label,
+          label: yearlyPlan.label,
+          inflationMode: inflation.mode,
+          inflationRateApplied: yearlyPlan.inflationRateApplied,
+          inflationRegime: yearlyPlan.inflationRegime,
           startingAssets: startingTotalAssets,
           endingAssets: finalTotalAssets,
           liquidAssets: endingInvestmentAssets,
@@ -887,12 +1005,150 @@ function selectPercentileValue(values: readonly number[], percentile: Simulation
   return sortedValues[index] ?? null;
 }
 
-function getSnapshotYear(snapshot: SimulationYearlySnapshot | undefined, fallbackIndex: number): number {
-  if (snapshot?.year !== undefined && Number.isInteger(snapshot.year)) {
-    return snapshot.year;
+function buildRealizedInflationPath({
+  yearlyPlans,
+  inflation,
+  nextRandom,
+}: {
+  yearlyPlans: readonly SimulationYearlyPlan[];
+  inflation: SimulationInflationConfig;
+  nextRandom: () => number;
+}): RealizedYearlyPlan[] {
+  const realizedPlans: RealizedYearlyPlan[] = [];
+  let cumulativeInflationMultiplier = 1;
+  let currentRegime: "low" | "high" | null = null;
+
+  if (inflation.mode === "regime-switching") {
+    currentRegime = selectInitialInflationRegime(inflation, nextRandom);
   }
 
-  const parsedLabelYear = Number.parseInt(snapshot?.label ?? "", 10);
+  for (let yearIndex = 0; yearIndex < yearlyPlans.length; yearIndex += 1) {
+    const yearlyPlan = yearlyPlans[yearIndex];
+    if (!yearlyPlan) {
+      continue;
+    }
+
+    if (yearlyPlan.legacySnapshot) {
+      realizedPlans.push({
+        year: yearlyPlan.year,
+        label: yearlyPlan.label,
+        flowAmounts: new Map(yearlyPlan.legacySnapshot.flowAmounts),
+        netAmount: yearlyPlan.legacySnapshot.netAmount,
+        totalExpenses: yearlyPlan.legacySnapshot.totalExpenses,
+        householdTaxInput: cloneHouseholdTaxInput(yearlyPlan.legacySnapshot.householdTaxInput),
+        inflationRateApplied: inflation.mode === "fixed" ? inflation.fixedRate : inflation.lowRate,
+        inflationRegime: inflation.mode === "fixed" ? "fixed" : "low",
+      });
+      continue;
+    }
+
+    let inflationRateApplied = 0;
+    let inflationRegime: "fixed" | "low" | "high" = "fixed";
+
+    if (inflation.mode === "fixed") {
+      inflationRateApplied = inflation.fixedRate;
+      inflationRegime = "fixed";
+      if (yearIndex > 0) {
+        cumulativeInflationMultiplier *= 1 + inflationRateApplied;
+      }
+    } else {
+      if (currentRegime === null) {
+        currentRegime = selectInitialInflationRegime(inflation, nextRandom);
+      } else if (yearIndex > 0) {
+        currentRegime = selectNextInflationRegime(currentRegime, inflation, nextRandom);
+      }
+
+      inflationRegime = currentRegime;
+      inflationRateApplied = currentRegime === "low" ? inflation.lowRate : inflation.highRate;
+      if (yearIndex > 0) {
+        cumulativeInflationMultiplier *= 1 + inflationRateApplied;
+      }
+    }
+
+    const flowAmounts = new Map<string, number>();
+    const householdTaxInput = createEmptySimulationHouseholdTaxInput();
+    let netAmount = 0;
+    let totalExpenses = 0;
+
+    for (const flow of yearlyPlan.flows) {
+      const realizedAmount =
+        flow.type === "expense" && flow.inflationAdjusted
+          ? flow.baseSignedAmount * cumulativeInflationMultiplier
+          : flow.baseSignedAmount;
+      flowAmounts.set(flow.name, realizedAmount);
+      netAmount += realizedAmount;
+      if (realizedAmount < 0) {
+        totalExpenses += Math.abs(realizedAmount);
+      }
+      applyTaxTreatmentAmount(householdTaxInput, flow.taxTreatment, Math.abs(realizedAmount));
+    }
+
+    realizedPlans.push({
+      year: yearlyPlan.year,
+      label: yearlyPlan.label,
+      flowAmounts,
+      netAmount,
+      totalExpenses,
+      householdTaxInput,
+      inflationRateApplied,
+      inflationRegime,
+    });
+  }
+
+  return realizedPlans;
+}
+
+function selectInitialInflationRegime(
+  inflation: SimulationRegimeSwitchingInflationConfig,
+  nextRandom: () => number
+): "low" | "high" {
+  const switchToHighProbability = 1 - inflation.stayLowProbability;
+  const switchToLowProbability = 1 - inflation.stayHighProbability;
+  const stationaryHighProbability =
+    switchToHighProbability + switchToLowProbability <= 0
+      ? 0.5
+      : switchToHighProbability / (switchToHighProbability + switchToLowProbability);
+
+  return nextRandom() < stationaryHighProbability ? "high" : "low";
+}
+
+function selectNextInflationRegime(
+  currentRegime: "low" | "high",
+  inflation: SimulationRegimeSwitchingInflationConfig,
+  nextRandom: () => number
+): "low" | "high" {
+  if (currentRegime === "low") {
+    return nextRandom() < inflation.stayLowProbability ? "low" : "high";
+  }
+
+  return nextRandom() < inflation.stayHighProbability ? "high" : "low";
+}
+
+function createEmptySimulationHouseholdTaxInput(): HouseholdTaxInput {
+  return {
+    wages: 0,
+    ordinaryIncome: 0,
+    qualifiedDividends: 0,
+    shortTermCapitalGains: 0,
+    longTermCapitalGains: 0,
+    capitalLossDeduction: 0,
+    taxExemptIncome: 0,
+    stateLocalExemptIncome: 0,
+    tripleExemptIncome: 0,
+    deductibleExpenses: 0,
+    saltTaxesPaid: 0,
+    homeMortgageInterestPaid: 0,
+    homeMortgageAverageBalance: 0,
+    homeMortgageInterestDebtLimit: 0,
+  };
+}
+
+function getPlanYear(plan: SimulationYearlyPlan | RealizedYearlyPlan | undefined, fallbackIndex: number): number {
+  if (plan?.year !== undefined && Number.isInteger(plan.year)) {
+    return plan.year;
+  }
+
+  const parsedLabelYear = Number.parseInt(plan?.label ?? "", 10);
   if (Number.isInteger(parsedLabelYear)) {
     return parsedLabelYear;
   }

@@ -55,9 +55,10 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
       {
         attempts: message.input.attempts,
         horizonYears: message.input.horizonYears,
-        yearlySnapshots: message.input.yearlySnapshots,
+        yearlyPlans: message.input.yearlyPlans,
         assets: message.input.assets,
         assetCorrelations: message.input.assetCorrelations,
+        inflation: message.input.inflation,
         householdTaxProfile: message.input.householdTaxProfile,
         taxes: message.input.taxes.map((tax) => new Tax(tax)),
       },

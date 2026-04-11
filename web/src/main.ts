@@ -15,10 +15,13 @@ import {
   buildSimulationScenariosFromAggregates,
   getAssetCorrelationValue,
   selectRepresentativeSimulationScenario,
+  type SimulationInflationConfig,
+  type SimulationInflationMode,
   type SimulationDetailScenario,
   type SimulationDetailYearRow,
   type SimulationPercentile,
   type SimulationScenario,
+  type SimulationYearlyPlan,
 } from "./simulation.js";
 import {
   getSimulationAssetReturnEntries,
@@ -255,7 +258,14 @@ interface SimulationDraft {
   startYear: string;
   attempts: number;
   horizonYears: number;
-  inflationRate: string;
+  inflationMode: SimulationInflationMode;
+  fixedInflationRate: string;
+  regimeSwitchingInflation: {
+    lowRate: string;
+    highRate: string;
+    stayLowProbability: string;
+    stayHighProbability: string;
+  };
   taxPreset: TaxPreset;
   assetRows: SimulationAssetDraft[];
   variableSweep: VariableSweepDraft;
@@ -458,7 +468,14 @@ function createSimulationDraft(): SimulationDraft {
     startYear: String(new Date().getFullYear()),
     attempts: 10000,
     horizonYears: 10,
-    inflationRate: String(DEFAULT_EXPENSE_INFLATION_RATE * 100),
+    inflationMode: "fixed",
+    fixedInflationRate: String(DEFAULT_EXPENSE_INFLATION_RATE * 100),
+    regimeSwitchingInflation: {
+      lowRate: "2.5",
+      highRate: "6",
+      stayLowProbability: "90",
+      stayHighProbability: "60",
+    },
     taxPreset: "nyc",
     assetRows: [],
     variableSweep: {
@@ -1205,6 +1222,65 @@ function buildSnapshotsFromPlannerData({
   return snapshots;
 }
 
+function buildYearlyPlansFromPlannerData({
+  startYearInput,
+  yearsToShow,
+  variables: variableDefinitions,
+  flows: flowDefinitions,
+  events,
+}: {
+  startYearInput: string;
+  yearsToShow: number;
+  variables: readonly VariableDefinition[];
+  flows: readonly FlowDefinition[];
+  events: readonly Event[];
+}): SimulationYearlyPlan[] {
+  const startYear = parseYearInput(normalizeYearInput(startYearInput));
+  const yearlyPlans: SimulationYearlyPlan[] = [];
+
+  for (let offset = 0; offset < yearsToShow; offset += 1) {
+    const variables = cloneVariables(variableDefinitions);
+    const flows = cloneFlows(flowDefinitions);
+
+    for (let step = 0; step <= offset; step += 1) {
+      applyEventsForYear(events, addYears(startYear, step), { variables, flows });
+    }
+
+    const currentYear = addYears(startYear, offset);
+    const context = createFormulaContext(variables);
+    yearlyPlans.push({
+      year: currentYear.year,
+      label: yearLabel(currentYear),
+      flows: flows.map((flow) => ({
+        name: flow.name,
+        type: flow.type,
+        taxTreatment: flow.taxTreatment,
+        inflationAdjusted: isFlowInflationAdjusted(flow),
+        baseSignedAmount: flow.evaluateSignedYearlyAmount(context),
+      })),
+    });
+  }
+
+  return yearlyPlans;
+}
+
+function buildSimulationInflationConfig(): SimulationInflationConfig {
+  if (simulationDraft.inflationMode === "regime-switching") {
+    return {
+      mode: "regime-switching",
+      lowRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate) / 100,
+      highRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate) / 100,
+      stayLowProbability: parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability) / 100,
+      stayHighProbability: parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability) / 100,
+    };
+  }
+
+  return {
+    mode: "fixed",
+    fixedRate: parseEditableNumber(simulationDraft.fixedInflationRate) / 100,
+  };
+}
+
 function buildSnapshots(startYearInput: string, yearsToShow: number): YearlySnapshot[] {
   return buildSnapshotsFromPlannerData({
     startYearInput,
@@ -1313,26 +1389,18 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
     simulationDraft.taxPreset,
     plannerState.taxProfile.filingStatus
   );
-  const yearlySnapshots = buildSnapshotsFromPlannerData({
+  const yearlyPlans = buildYearlyPlansFromPlannerData({
     startYearInput: simulationDraft.startYear,
     yearsToShow: simulationDraft.horizonYears,
-    inflationRate: parseEditableNumber(simulationDraft.inflationRate) / 100,
     variables: buildSimulationVariableDefinitions(variableOverride),
     flows: plannerState.flows,
     events: plannerState.events,
-  }).map((snapshot) => ({
-    year: snapshot.year.year,
-    label: snapshot.label,
-    netAmount: snapshot.netAmount,
-    totalExpenses: snapshot.totalExpenses,
-    flowAmounts: new Map(snapshot.flowAmounts),
-    householdTaxInput: { ...snapshot.householdTaxInput },
-  }));
+  });
 
   return {
     attempts: simulationDraft.attempts,
     horizonYears: simulationDraft.horizonYears,
-    yearlySnapshots,
+    yearlyPlans,
     assets: simulationDraft.assetRows.map((asset) =>
       asset.kind === "home"
         ? {
@@ -1383,6 +1451,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
     taxes: selectedTaxPreset.taxes,
     householdTaxProfile: selectedTaxPreset.householdTaxProfile,
     assetCorrelations: plannerState.assetCorrelations,
+    inflation: buildSimulationInflationConfig(),
   };
 }
 
@@ -2225,12 +2294,33 @@ function getSimulationSubmitState(): { disabled: boolean; reason: string } {
     }
   }
 
-  const inflationRate = parseEditableNumber(simulationDraft.inflationRate);
-  if (!Number.isFinite(inflationRate)) {
-    return {
-      disabled: true,
-      reason: "Simulation inflation rate must be a finite number.",
-    };
+  if (simulationDraft.inflationMode === "fixed") {
+    const inflationRate = parseEditableNumber(simulationDraft.fixedInflationRate);
+    if (!Number.isFinite(inflationRate)) {
+      return {
+        disabled: true,
+        reason: "Simulation inflation rate must be a finite number.",
+      };
+    }
+  } else {
+    const lowRate = parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate);
+    const highRate = parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate);
+    const stayLowProbability = parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability);
+    const stayHighProbability = parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability);
+
+    if (![lowRate, highRate, stayLowProbability, stayHighProbability].every(Number.isFinite)) {
+      return {
+        disabled: true,
+        reason: "All regime-switching inflation fields must be finite numbers.",
+      };
+    }
+
+    if (stayLowProbability < 0 || stayLowProbability > 100 || stayHighProbability < 0 || stayHighProbability > 100) {
+      return {
+        disabled: true,
+        reason: "Inflation persistence probabilities must be between 0 and 100.",
+      };
+    }
   }
 
   return {
@@ -2566,9 +2656,36 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
     simulationTaxPreset: simulationDraft.taxPreset,
     simulationHorizonYears: simulationDraft.horizonYears,
     simulationInflationRate:
-      Number.isFinite(parseEditableNumber(simulationDraft.inflationRate))
-        ? parseEditableNumber(simulationDraft.inflationRate)
+      simulationDraft.inflationMode === "fixed" && Number.isFinite(parseEditableNumber(simulationDraft.fixedInflationRate))
+        ? parseEditableNumber(simulationDraft.fixedInflationRate)
         : undefined,
+    simulationInflation: {
+      mode: simulationDraft.inflationMode,
+      ...(simulationDraft.inflationMode === "fixed" &&
+      Number.isFinite(parseEditableNumber(simulationDraft.fixedInflationRate))
+        ? {
+            fixedRate: parseEditableNumber(simulationDraft.fixedInflationRate),
+          }
+        : {}),
+      ...(simulationDraft.inflationMode === "regime-switching"
+        ? {
+            regimeSwitching: {
+              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate))
+                ? { lowRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate) }
+                : {}),
+              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate))
+                ? { highRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate) }
+                : {}),
+              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability))
+                ? { stayLowProbability: parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability) }
+                : {}),
+              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability))
+                ? { stayHighProbability: parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability) }
+                : {}),
+            },
+          }
+        : {}),
+    },
     simulationVariableSweep: {
       enabled: simulationDraft.variableSweep.enabled,
       variableName: simulationDraft.variableSweep.variableName,
@@ -2637,6 +2754,18 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
                 <tr>
                   <th>Liquid assets</th>
                   <td>${formatCurrency(row.liquidAssets ?? 0)}</td>
+                </tr>
+                <tr>
+                  <th>Inflation mode</th>
+                  <td>${escapeHtml(row.inflationMode === "regime-switching" ? "Regime switching" : "Fixed")}</td>
+                </tr>
+                <tr>
+                  <th>Inflation regime</th>
+                  <td>${escapeHtml(row.inflationRegime === "fixed" ? "Fixed" : row.inflationRegime)}</td>
+                </tr>
+                <tr>
+                  <th>Inflation rate applied</th>
+                  <td>${formatPercentage(row.inflationRateApplied * 100)}</td>
                 </tr>
                 ${assetValueEntries
                   .map(
@@ -3006,12 +3135,13 @@ function renderSimulationBoard(): string {
             <input name="simulationHorizonYears" type="number" min="1" max="50" value="${simulationDraft.horizonYears}" />
           </label>
           <label>
-            Inflation rate (%)
-            <input
-              name="simulationInflationRate"
-              ${renderEditableNumberInputAttributes()}
-              value="${escapeHtml(formatEditableNumberInput(simulationDraft.inflationRate))}"
-            />
+            Inflation mode
+            <select name="simulationInflationMode">
+              <option value="fixed" ${simulationDraft.inflationMode === "fixed" ? "selected" : ""}>Fixed</option>
+              <option value="regime-switching" ${simulationDraft.inflationMode === "regime-switching" ? "selected" : ""}>
+                Regime switching
+              </option>
+            </select>
           </label>
           <label>
             Attempts
@@ -3019,6 +3149,59 @@ function renderSimulationBoard(): string {
             <span class="summary-meta">${simulationDraft.attempts.toLocaleString("en-US")} attempts</span>
           </label>
         </div>
+
+        <section class="simulation-sweep-config">
+          ${
+            simulationDraft.inflationMode === "fixed"
+              ? `
+          <label>
+            Inflation rate (%)
+            <input
+              name="simulationFixedInflationRate"
+              ${renderEditableNumberInputAttributes()}
+              value="${escapeHtml(formatEditableNumberInput(simulationDraft.fixedInflationRate))}"
+            />
+          </label>
+              `
+              : `
+          <p class="helper-copy">Expenses switch between low and high annual inflation regimes once per simulated year.</p>
+          <div class="simulation-sweep-fields">
+            <label>
+              Low rate (%)
+              <input
+                name="simulationInflationLowRate"
+                ${renderEditableNumberInputAttributes()}
+                value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.lowRate))}"
+              />
+            </label>
+            <label>
+              High rate (%)
+              <input
+                name="simulationInflationHighRate"
+                ${renderEditableNumberInputAttributes()}
+                value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.highRate))}"
+              />
+            </label>
+            <label>
+              Stay low (%)
+              <input
+                name="simulationInflationStayLowProbability"
+                ${renderEditableNumberInputAttributes()}
+                value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.stayLowProbability))}"
+              />
+            </label>
+            <label>
+              Stay high (%)
+              <input
+                name="simulationInflationStayHighProbability"
+                ${renderEditableNumberInputAttributes()}
+                value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.stayHighProbability))}"
+              />
+            </label>
+          </div>
+              `
+          }
+        </section>
 
         <section class="simulation-sweep-config">
           <label class="checkbox-field">
@@ -4348,8 +4531,22 @@ function bindHandlers(user: UserIdentity): void {
       plannerState.startYear = normalizedYear;
     } else if (target.name === "simulationHorizonYears") {
       simulationDraft.horizonYears = Math.max(1, Math.min(50, Number(target.value) || 1));
-    } else if (target.name === "simulationInflationRate") {
-      simulationDraft.inflationRate = target.value;
+    } else if (target.name === "simulationInflationMode" && target instanceof HTMLSelectElement) {
+      simulationDraft.inflationMode = target.value as SimulationInflationMode;
+      invalidateSimulationState();
+      renderPlanner(user);
+      void persistPlannerState(user);
+      return;
+    } else if (target.name === "simulationFixedInflationRate") {
+      simulationDraft.fixedInflationRate = target.value;
+    } else if (target.name === "simulationInflationLowRate") {
+      simulationDraft.regimeSwitchingInflation.lowRate = target.value;
+    } else if (target.name === "simulationInflationHighRate") {
+      simulationDraft.regimeSwitchingInflation.highRate = target.value;
+    } else if (target.name === "simulationInflationStayLowProbability") {
+      simulationDraft.regimeSwitchingInflation.stayLowProbability = target.value;
+    } else if (target.name === "simulationInflationStayHighProbability") {
+      simulationDraft.regimeSwitchingInflation.stayHighProbability = target.value;
     } else if (target.name === "simulationAttempts") {
       simulationDraft.attempts = Math.max(5000, Math.min(100000, Number(target.value) || 5000));
       invalidateSimulationState();
@@ -4536,7 +4733,7 @@ function bindHandlers(user: UserIdentity): void {
             : buildSimulationScenariosFromAggregates({
                 attempts: run.input.attempts,
                 horizonYears: run.input.horizonYears,
-                yearlySnapshots: run.input.yearlySnapshots,
+                yearlyPlans: run.input.yearlyPlans ?? [],
                 yearlyTotals: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
                   run.taskIds.flatMap((taskId) => yearlyTotalsByTask.get(taskId)?.[rowIndex] ?? [])
                 ),
@@ -7170,10 +7367,36 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
     typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
       ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
       : fallbackSimulationDraft.horizonYears;
-  simulationDraft.inflationRate =
-    typeof partialState.simulationInflationRate === "number" && Number.isFinite(partialState.simulationInflationRate)
-      ? formatEditableNumberInput(String(partialState.simulationInflationRate))
-      : fallbackSimulationDraft.inflationRate;
+  simulationDraft.inflationMode =
+    partialState.simulationInflation?.mode === "regime-switching" || partialState.simulationInflation?.mode === "fixed"
+      ? partialState.simulationInflation.mode
+      : "fixed";
+  simulationDraft.fixedInflationRate =
+    typeof partialState.simulationInflation?.fixedRate === "number" && Number.isFinite(partialState.simulationInflation.fixedRate)
+      ? formatEditableNumberInput(String(partialState.simulationInflation.fixedRate))
+      : typeof partialState.simulationInflationRate === "number" && Number.isFinite(partialState.simulationInflationRate)
+        ? formatEditableNumberInput(String(partialState.simulationInflationRate))
+        : fallbackSimulationDraft.fixedInflationRate;
+  simulationDraft.regimeSwitchingInflation.lowRate =
+    typeof partialState.simulationInflation?.regimeSwitching?.lowRate === "number" &&
+    Number.isFinite(partialState.simulationInflation.regimeSwitching.lowRate)
+      ? formatEditableNumberInput(String(partialState.simulationInflation.regimeSwitching.lowRate))
+      : fallbackSimulationDraft.regimeSwitchingInflation.lowRate;
+  simulationDraft.regimeSwitchingInflation.highRate =
+    typeof partialState.simulationInflation?.regimeSwitching?.highRate === "number" &&
+    Number.isFinite(partialState.simulationInflation.regimeSwitching.highRate)
+      ? formatEditableNumberInput(String(partialState.simulationInflation.regimeSwitching.highRate))
+      : fallbackSimulationDraft.regimeSwitchingInflation.highRate;
+  simulationDraft.regimeSwitchingInflation.stayLowProbability =
+    typeof partialState.simulationInflation?.regimeSwitching?.stayLowProbability === "number" &&
+    Number.isFinite(partialState.simulationInflation.regimeSwitching.stayLowProbability)
+      ? formatEditableNumberInput(String(partialState.simulationInflation.regimeSwitching.stayLowProbability))
+      : fallbackSimulationDraft.regimeSwitchingInflation.stayLowProbability;
+  simulationDraft.regimeSwitchingInflation.stayHighProbability =
+    typeof partialState.simulationInflation?.regimeSwitching?.stayHighProbability === "number" &&
+    Number.isFinite(partialState.simulationInflation.regimeSwitching.stayHighProbability)
+      ? formatEditableNumberInput(String(partialState.simulationInflation.regimeSwitching.stayHighProbability))
+      : fallbackSimulationDraft.regimeSwitchingInflation.stayHighProbability;
   simulationDraft.variableSweep.enabled = partialState.simulationVariableSweep?.enabled === true;
   simulationDraft.variableSweep.variableName =
     typeof partialState.simulationVariableSweep?.variableName === "string"
