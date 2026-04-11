@@ -94,6 +94,13 @@ export interface HouseholdTaxBreakdown {
   taxByName: Map<string, number>;
 }
 
+export interface NetCapitalGainSummary {
+  shortTermCapitalGains: number;
+  longTermCapitalGains: number;
+  shortTermCapitalLossCarryforward: number;
+  longTermCapitalLossCarryforward: number;
+}
+
 function assertFiniteNumber(value: number, message: string): void {
   if (!Number.isFinite(value)) {
     throw new Error(message);
@@ -302,8 +309,10 @@ export function computeHouseholdTaxes(
   const wages = sanitizeAmount(input.wages);
   const ordinaryIncome = sanitizeAmount(input.ordinaryIncome);
   const qualifiedDividends = sanitizeAmount(input.qualifiedDividends);
-  const shortTermCapitalGains = sanitizeAmount(input.shortTermCapitalGains);
-  const longTermCapitalGains = sanitizeAmount(input.longTermCapitalGains);
+  const { shortTermCapitalGains, longTermCapitalGains } = summarizeNetCapitalGainAmounts(
+    sanitizeSignedAmount(input.shortTermCapitalGains),
+    sanitizeSignedAmount(input.longTermCapitalGains)
+  );
   const taxExemptIncome = sanitizeAmount(input.taxExemptIncome);
   const stateLocalExemptIncome = sanitizeAmount(input.stateLocalExemptIncome);
   const deductibleExpenses = sanitizeAmount(input.deductibleExpenses);
@@ -416,6 +425,40 @@ function sanitizeAmount(value: number | undefined): number {
   const normalizedValue = value ?? 0;
   assertFiniteNumber(normalizedValue, "Tax inputs must be finite.");
   return Math.max(0, normalizedValue);
+}
+
+function sanitizeSignedAmount(value: number | undefined): number {
+  const normalizedValue = value ?? 0;
+  assertFiniteNumber(normalizedValue, "Tax inputs must be finite.");
+  return normalizedValue;
+}
+
+export function summarizeNetCapitalGainAmounts(
+  shortTermCapitalGains: number,
+  longTermCapitalGains: number
+): NetCapitalGainSummary {
+  assertFiniteNumber(shortTermCapitalGains, "Tax inputs must be finite.");
+  assertFiniteNumber(longTermCapitalGains, "Tax inputs must be finite.");
+
+  let netShortTermCapitalGains = shortTermCapitalGains;
+  let netLongTermCapitalGains = longTermCapitalGains;
+
+  if (netShortTermCapitalGains > 0 && netLongTermCapitalGains < 0) {
+    const offsetAmount = Math.min(netShortTermCapitalGains, Math.abs(netLongTermCapitalGains));
+    netShortTermCapitalGains -= offsetAmount;
+    netLongTermCapitalGains += offsetAmount;
+  } else if (netShortTermCapitalGains < 0 && netLongTermCapitalGains > 0) {
+    const offsetAmount = Math.min(Math.abs(netShortTermCapitalGains), netLongTermCapitalGains);
+    netShortTermCapitalGains += offsetAmount;
+    netLongTermCapitalGains -= offsetAmount;
+  }
+
+  return {
+    shortTermCapitalGains: Math.max(0, netShortTermCapitalGains),
+    longTermCapitalGains: Math.max(0, netLongTermCapitalGains),
+    shortTermCapitalLossCarryforward: Math.max(0, -netShortTermCapitalGains),
+    longTermCapitalLossCarryforward: Math.max(0, -netLongTermCapitalGains),
+  };
 }
 
 function getFederalDeduction(

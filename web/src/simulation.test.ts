@@ -483,6 +483,94 @@ describe("buildSimulationScenarios", () => {
     expect(row?.assetValues.get("Stocks")).toBeCloseTo(79.166666752, 5);
   });
 
+  it("carries forward realized capital losses to offset realized gains in later years", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "",
+      federalQualifiedTaxName: "Federal qualified dividends / long-term gains",
+      stateTaxName: "",
+      localTaxName: "",
+      niitTaxName: "",
+    };
+
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 3,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+        {
+          label: "2028",
+          netAmount: -50,
+          totalExpenses: 50,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+        {
+          label: "2029",
+          netAmount: -100,
+          totalExpenses: 100,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Winner",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 0,
+          saleTax: {
+            costBasis: 50,
+            taxTreatment: "long-term-capital-gains",
+          },
+        },
+        {
+          name: "Loser",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 50,
+          sellProportion: 1,
+          saleTax: {
+            costBasis: 100,
+            taxTreatment: "long-term-capital-gains",
+          },
+        },
+      ],
+      assetCorrelations: [],
+      taxes: [new Tax({ name: "Federal qualified dividends / long-term gains", taxRates: [{ rate: 0.1 }] })],
+      householdTaxProfile: profile,
+      nextStandardNormal: createDeterministicNormals([0, -1, 0, 0, 0, 0]),
+    });
+
+    const lossYear = scenarios[0]?.rows[1];
+    const gainYear = scenarios[0]?.rows[2];
+    expect(lossYear?.startingAssets).toBeCloseTo(150, 6);
+    expect(lossYear?.taxableGains).toBeCloseTo(-50, 6);
+    expect(lossYear?.taxAmount).toBeCloseTo(0, 6);
+    expect(lossYear?.householdTaxInput.longTermCapitalGains).toBeCloseTo(0, 6);
+    expect(lossYear?.flowTotals.get("Loser realized gain")).toBeCloseTo(-50, 6);
+    expect(lossYear?.flowTotals.get("Taxes paid")).toBeUndefined();
+    expect(lossYear?.assetValues.get("Winner")).toBeCloseTo(100, 6);
+    expect(lossYear?.assetValues.get("Loser")).toBeCloseTo(0, 6);
+
+    expect(gainYear?.startingAssets).toBeCloseTo(100, 6);
+    expect(gainYear?.taxableGains).toBeCloseTo(50, 6);
+    expect(gainYear?.taxAmount).toBeCloseTo(0, 6);
+    expect(gainYear?.householdTaxInput.longTermCapitalGains).toBeCloseTo(0, 6);
+    expect(gainYear?.taxBreakdown.federalPreferentialIncome).toBeCloseTo(0, 6);
+    expect(gainYear?.flowTotals.get("Winner realized gain")).toBeCloseTo(50, 6);
+    expect(gainYear?.flowTotals.get("Taxes paid")).toBeUndefined();
+    expect(gainYear?.assetValues.get("Winner")).toBeCloseTo(0, 6);
+  });
+
   it("falls back to other assets when the preferred sale bucket is exhausted", () => {
     const scenarios = buildSimulationDetails({
       attempts: 1,

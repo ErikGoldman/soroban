@@ -206,6 +206,78 @@ describe("calculateTax", () => {
 });
 
 describe("computeHouseholdTaxes", () => {
+  it("nets short-term losses against long-term gains before taxing the remainder", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "Federal ordinary income",
+      federalQualifiedTaxName: "Federal qualified dividends / long-term gains",
+      stateTaxName: "",
+      localTaxName: "",
+      niitTaxName: "",
+    };
+    const taxes = [
+      new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.2 }] }),
+      new Tax({ name: "Federal qualified dividends / long-term gains", taxRates: [{ rate: 0.1 }] }),
+    ];
+
+    const result = computeHouseholdTaxes(
+      {
+        wages: 0,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: -400,
+        longTermCapitalGains: 1000,
+        taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
+        deductibleExpenses: 0,
+      },
+      profile,
+      taxes
+    );
+
+    expect(result.federalOrdinaryTaxableIncome).toBe(0);
+    expect(result.federalPreferentialIncome).toBe(600);
+    expect(result.totalTax).toBeCloseTo(60, 6);
+  });
+
+  it("does not let net capital losses reduce ordinary taxable income below zero", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "Federal ordinary income",
+      federalQualifiedTaxName: "Federal qualified dividends / long-term gains",
+      stateTaxName: "",
+      localTaxName: "",
+      niitTaxName: "",
+    };
+    const taxes = [
+      new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.2 }] }),
+      new Tax({ name: "Federal qualified dividends / long-term gains", taxRates: [{ rate: 0.1 }] }),
+    ];
+
+    const result = computeHouseholdTaxes(
+      {
+        wages: 1000,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: -1500,
+        longTermCapitalGains: 0,
+        taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
+        deductibleExpenses: 0,
+      },
+      profile,
+      taxes
+    );
+
+    expect(result.federalOrdinaryTaxableIncome).toBe(1000);
+    expect(result.federalPreferentialIncome).toBe(0);
+    expect(result.totalTax).toBeCloseTo(200, 6);
+  });
+
   it("limits NIIT to MAGI above the threshold when investment income is larger", () => {
     const profile = {
       ...createDefaultHouseholdTaxProfile(),

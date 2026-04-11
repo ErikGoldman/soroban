@@ -12,6 +12,7 @@ import {
   type HouseholdTaxBreakdown,
   type HouseholdTaxInput,
   type HouseholdTaxProfileDefinition,
+  summarizeNetCapitalGainAmounts,
   type Tax,
 } from "./tax.js";
 
@@ -121,6 +122,11 @@ type NormalizedSimulationAsset = NormalizedSimulationInvestmentAsset | Normalize
 interface HomeSimulationState {
   marketValues: Map<string, number>;
   mortgageBalances: Map<string, number>;
+}
+
+interface CapitalLossCarryforwardState {
+  shortTermCapitalLoss: number;
+  longTermCapitalLoss: number;
 }
 
 interface SaleIterationResult {
@@ -578,6 +584,7 @@ function runSimulationAttempts({
     const initialState = initializeSimulationState(normalizedAssets, initialYear);
     let assetValues = initialState.assetValues;
     let assetCostBases = initialState.assetCostBases;
+    let capitalLossCarryforward = createEmptyCapitalLossCarryforwardState();
     const homeState = initialState.homeState;
     let hasDepleted = false;
     const yearlyRows: SimulationDetailYearRow[] = [];
@@ -689,11 +696,13 @@ function runSimulationAttempts({
       }
 
       const baseCashBalance = purchaseCashFlow + snapshot.netAmount + generatedCashTotal;
+      let effectiveTaxInput = applyCapitalLossCarryforward(saleResult.taxInput, capitalLossCarryforward);
+      let endingCapitalLossCarryforward = getCapitalLossCarryforward(saleResult.taxInput, capitalLossCarryforward);
 
       let taxBreakdown =
         householdTaxProfile === null
           ? emptyHouseholdTaxBreakdown()
-          : computeHouseholdTaxes(saleResult.taxInput, householdTaxProfile, taxes);
+          : computeHouseholdTaxes(effectiveTaxInput, householdTaxProfile, taxes);
 
       for (let iteration = 0; iteration < 5; iteration += 1) {
         const postTaxCashBalance = cashBalance - taxBreakdown.totalTax;
@@ -714,10 +723,12 @@ function runSimulationAttempts({
         if (saleResult.preTaxCashBalance <= 0.000001) {
           break;
         }
+        effectiveTaxInput = applyCapitalLossCarryforward(saleResult.taxInput, capitalLossCarryforward);
+        endingCapitalLossCarryforward = getCapitalLossCarryforward(saleResult.taxInput, capitalLossCarryforward);
         taxBreakdown =
           householdTaxProfile === null
             ? emptyHouseholdTaxBreakdown()
-            : computeHouseholdTaxes(saleResult.taxInput, householdTaxProfile, taxes);
+            : computeHouseholdTaxes(effectiveTaxInput, householdTaxProfile, taxes);
       }
 
       const flowTotalsWithTaxes = new Map(saleResult.flowTotals);
@@ -770,6 +781,7 @@ function runSimulationAttempts({
       hasDepleted ||= depletedThisYear;
       assetValues = saleResult.assetValues;
       assetCostBases = saleResult.assetCostBases;
+      capitalLossCarryforward = endingCapitalLossCarryforward;
       yearlyTotals[yearIndex]?.push(finalTotalAssets);
       if (hasDepleted) {
         depletionCountsByYear[yearIndex] += 1;
@@ -787,7 +799,7 @@ function runSimulationAttempts({
           taxAmount: taxBreakdown.totalTax,
           depleted: hasDepleted,
           depletionProbability: ((depletionCountsByYear[yearIndex] ?? 0) / Math.max(1, attempt + 1)) * 100,
-          householdTaxInput: saleResult.taxInput,
+          householdTaxInput: effectiveTaxInput,
           flowTotals: flowTotalsWithTaxes,
           assetValues: yearAssetValues,
           assetReturns,
@@ -1160,7 +1172,7 @@ function resolveSalesForCashNeed({
   while (remainingCashNeed > 0.000001) {
     const weightedSellableAssets = assets.filter(
       (asset): asset is NormalizedSimulationInvestmentAsset =>
-        asset.kind === "investment" && asset.sellProportion > 0 && (nextAssetValues.get(asset.name) ?? 0) > 0
+        asset.kind === "investment" && asset.sellProportion > 0 && (nextAssetValues.get(asset.name) ?? 0) > 0.000001
     );
     const totalSellWeight = weightedSellableAssets.reduce((total, asset) => total + asset.sellProportion, 0);
     const sellableAssets =
@@ -1168,7 +1180,7 @@ function resolveSalesForCashNeed({
         ? weightedSellableAssets
         : assets.filter(
             (asset): asset is NormalizedSimulationInvestmentAsset =>
-              asset.kind === "investment" && (nextAssetValues.get(asset.name) ?? 0) > 0
+              asset.kind === "investment" && (nextAssetValues.get(asset.name) ?? 0) > 0.000001
           );
     const totalFallbackValue =
       totalSellWeight > 0
@@ -1191,14 +1203,14 @@ function resolveSalesForCashNeed({
 
       const currentCostBasis = nextAssetCostBases.get(asset.name) ?? 0;
       const basisReduction = currentValue <= 0 ? 0 : Math.min(currentCostBasis, currentCostBasis * (amountSold / currentValue));
-      const realizedGain = Math.max(0, amountSold - basisReduction);
+      const realizedGain = amountSold - basisReduction;
 
       nextAssetValues.set(asset.name, currentValue - amountSold);
       nextAssetCostBases.set(asset.name, Math.max(0, currentCostBasis - basisReduction));
       nextFlowTotals.set(`${asset.name} sale proceeds`, (nextFlowTotals.get(`${asset.name} sale proceeds`) ?? 0) + amountSold);
       grossProceedsThisRound += amountSold;
 
-      if (realizedGain > 0.000001) {
+      if (Math.abs(realizedGain) > 0.000001) {
         taxableGains += realizedGain;
         applyTaxTreatmentAmount(nextTaxInput, asset.saleTax?.taxTreatment ?? "long-term-capital-gains", realizedGain);
         nextFlowTotals.set(`${asset.name} realized gain`, (nextFlowTotals.get(`${asset.name} realized gain`) ?? 0) + realizedGain);
@@ -1420,6 +1432,44 @@ function cloneHouseholdTaxInput(input: HouseholdTaxInput): HouseholdTaxInput {
     homeMortgageInterestPaid: input.homeMortgageInterestPaid ?? 0,
     homeMortgageAverageBalance: input.homeMortgageAverageBalance ?? 0,
     homeMortgageInterestDebtLimit: input.homeMortgageInterestDebtLimit ?? 0,
+  };
+}
+
+function createEmptyCapitalLossCarryforwardState(): CapitalLossCarryforwardState {
+  return {
+    shortTermCapitalLoss: 0,
+    longTermCapitalLoss: 0,
+  };
+}
+
+function applyCapitalLossCarryforward(
+  taxInput: HouseholdTaxInput,
+  capitalLossCarryforward: CapitalLossCarryforwardState
+): HouseholdTaxInput {
+  const nextTaxInput = cloneHouseholdTaxInput(taxInput);
+  const capitalGainSummary = summarizeNetCapitalGainAmounts(
+    nextTaxInput.shortTermCapitalGains - capitalLossCarryforward.shortTermCapitalLoss,
+    nextTaxInput.longTermCapitalGains - capitalLossCarryforward.longTermCapitalLoss
+  );
+
+  nextTaxInput.shortTermCapitalGains = capitalGainSummary.shortTermCapitalGains;
+  nextTaxInput.longTermCapitalGains = capitalGainSummary.longTermCapitalGains;
+
+  return nextTaxInput;
+}
+
+function getCapitalLossCarryforward(
+  taxInput: HouseholdTaxInput,
+  capitalLossCarryforward: CapitalLossCarryforwardState
+): CapitalLossCarryforwardState {
+  const capitalGainSummary = summarizeNetCapitalGainAmounts(
+    taxInput.shortTermCapitalGains - capitalLossCarryforward.shortTermCapitalLoss,
+    taxInput.longTermCapitalGains - capitalLossCarryforward.longTermCapitalLoss
+  );
+
+  return {
+    shortTermCapitalLoss: capitalGainSummary.shortTermCapitalLossCarryforward,
+    longTermCapitalLoss: capitalGainSummary.longTermCapitalLossCarryforward,
   };
 }
 
