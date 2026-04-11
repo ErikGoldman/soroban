@@ -7,6 +7,12 @@ import {
   parseEditableNumber,
   parseOptionalEditableNumber,
 } from "./editable-number.js";
+import {
+  formatFormulaNumberToken,
+  formatFormulaText,
+  isFormulaNumberToken,
+  tokenizeFormulaText,
+} from "./formula-format.js";
 import { buildScenarioFileContents, extractScenarioPlannerState } from "./scenario.js";
 import { createPlanningStorage, type SavedPlannerState } from "./storage.js";
 import {
@@ -38,6 +44,7 @@ import {
   applyFlowExpenseInflation,
   applyEventsForYear,
   collectFormulaVariableNames,
+  collectReferencedVariableNames,
   createAssetCorrelationDefinition,
   createOneTimeExpenseSchedule,
   DEFAULT_EXPENSE_INFLATION_RATE,
@@ -45,7 +52,9 @@ import {
   deleteEventAndPruneVariables,
   deleteFlowAndPruneVariables,
   createFormulaContext,
+  evaluateFormula,
   isFlowInflationAdjusted,
+  resolveAssetValueFormula,
   type FlowTaxTreatment,
   type AssetCashTaxTreatment,
   type AssetCashGenerationDefinition,
@@ -405,6 +414,7 @@ let activeFlowEventEdit: ActiveFlowEventEdit | null = null;
 let activeSummaryTab: SummaryTab = "variables";
 let activePlannerBoardTab: PlannerBoardTab = "setup";
 let activeInlineAssetValueEditName: string | null = null;
+let activeInlineExpenseValueEditName: string | null = null;
 let selectedSimulationPercentile: SimulationPercentile = 50;
 let selectedSimulationChartMetric: SimulationChartMetric = "totalAssets";
 let simulationResults: Map<SimulationPercentile, SimulationScenario> | null = null;
@@ -657,30 +667,173 @@ function getAssetCashGenerations(asset: AssetDefinition): readonly AssetCashGene
       : [];
 }
 
-function getAssetSummaryValue(asset: AssetDefinition): number {
-  return isHomeAsset(asset) ? asset.initialCost : asset.startingValue;
+function buildPlannerFormulaContext(): Record<string, number> {
+  return Object.fromEntries(plannerState.variables.map((variable) => [variable.name, variable.value]));
 }
 
-function buildAssetDraftFromDefinition(asset: AssetDefinition): AssetDraft {
+function ensurePlannerVariablesExist(variableNames: Iterable<string>): string[] {
+  const existingNames = new Set(plannerState.variables.map((variable) => variable.name));
+  const createdNames: string[] = [];
+
+  for (const variableName of variableNames) {
+    const normalizedName = variableName.trim();
+    if (!normalizedName || existingNames.has(normalizedName)) {
+      continue;
+    }
+
+    plannerState.variables.push({
+      name: normalizedName,
+      value: 0,
+    });
+    existingNames.add(normalizedName);
+    createdNames.push(normalizedName);
+  }
+
+  if (createdNames.length > 0) {
+    syncSimulationVariableSweepDraft();
+  }
+
+  return createdNames;
+}
+
+function collectMissingFormulaVariables(
+  formulas: readonly string[],
+  additionalKnownVariableNames: readonly string[] = []
+): string[] {
+  const knownVariables = new Set([
+    ...plannerState.variables.map((variable) => variable.name),
+    ...additionalKnownVariableNames.map((name) => name.trim()).filter(Boolean),
+  ]);
+  const missingVariables = new Set<string>();
+
+  for (const formula of formulas) {
+    for (const variableName of collectFormulaVariableNames(formula)) {
+      if (!knownVariables.has(variableName)) {
+        missingVariables.add(variableName);
+      }
+    }
+  }
+
+  return [...missingVariables];
+}
+
+function getAssetDefinitionFormulas(asset: AssetDefinition): string[] {
+  if (isHomeAsset(asset)) {
+    return asset.initialCostFormula ? [asset.initialCostFormula] : [];
+  }
+
+  return asset.startingValueFormula ? [asset.startingValueFormula] : [];
+}
+
+function getEventFormulas(event: Pick<Event, "schedule">): string[] {
+  return event.schedule.flatMap((entry) =>
+    entry.actions.flatMap((action) => {
+      switch (action.kind) {
+        case "set-flow-formula":
+          return [action.formula];
+        case "add-flow":
+          return [action.flow.formula];
+        default:
+          return [];
+      }
+    })
+  );
+}
+
+function collectFormulaVariables(formulas: readonly string[]): Set<string> {
+  const names = new Set<string>();
+
+  for (const formula of formulas) {
+    for (const variableName of collectFormulaVariableNames(formula)) {
+      names.add(variableName);
+    }
+  }
+
+  return names;
+}
+
+function collectRemovedFormulaVariables(previousFormulas: readonly string[], nextFormulas: readonly string[]): string[] {
+  const previousNames = collectFormulaVariables(previousFormulas);
+  const nextNames = collectFormulaVariables(nextFormulas);
+
+  return [...previousNames].filter((name) => !nextNames.has(name));
+}
+
+function pruneUnusedPlannerVariables(variableNames: Iterable<string>): void {
+  const candidateNames = new Set([...variableNames].map((name) => name.trim()).filter(Boolean));
+  if (candidateNames.size === 0) {
+    return;
+  }
+
+  const snapshot = createPlannerSnapshot();
+  const referencedNames = collectReferencedVariableNames(snapshot.flows, snapshot.events);
+  for (const asset of plannerState.assets) {
+    for (const variableName of collectFormulaVariables(getAssetDefinitionFormulas(asset))) {
+      referencedNames.add(variableName);
+    }
+  }
+
+  const previousCount = plannerState.variables.length;
+  plannerState.variables = plannerState.variables.filter(
+    (variable) => !candidateNames.has(variable.name) || referencedNames.has(variable.name)
+  );
+
+  if (plannerState.variables.length !== previousCount) {
+    syncSimulationVariableSweepDraft();
+  }
+}
+
+function resolvePlannerAssetDefinition(asset: AssetDefinition): AssetDefinition {
+  return resolveAssetValueFormula(asset, buildPlannerFormulaContext());
+}
+
+function getAssetValueFormulaInput(asset: AssetDefinition): string {
+  const resolvedAsset = resolvePlannerAssetDefinition(asset);
+
+  if (isHomeAsset(resolvedAsset)) {
+    return resolvedAsset.initialCostFormula ?? formatFormulaText(String(resolvedAsset.initialCost));
+  }
+
+  return resolvedAsset.startingValueFormula ?? formatFormulaText(String(resolvedAsset.startingValue));
+}
+
+function getAssetSummaryValue(asset: AssetDefinition): number {
+  const resolvedAsset = resolvePlannerAssetDefinition(asset);
+  return isHomeAsset(resolvedAsset) ? resolvedAsset.initialCost : resolvedAsset.startingValue;
+}
+
+function buildAssetDraftFromDefinition(
+  asset: AssetDefinition,
+  options: {
+    preserveFormulaSource?: boolean;
+  } = {}
+): AssetDraft {
   const cashGenerations = getAssetCashGenerations(asset);
+  const resolvedAsset = resolvePlannerAssetDefinition(asset);
   return {
     kind: asset.kind === "home" ? "home" : "investment",
     name: asset.name,
-    startingValue: String(isInvestmentAsset(asset) ? asset.startingValue : 0),
+    startingValue:
+      options.preserveFormulaSource && isInvestmentAsset(asset)
+        ? getAssetValueFormulaInput(asset)
+        : String(isInvestmentAsset(resolvedAsset) ? resolvedAsset.startingValue : 0),
     expectedReturn: String(asset.expectedReturn),
     volatility: String(asset.volatility),
-    initialCost: String(isHomeAsset(asset) ? asset.initialCost : 0),
-    cashPurchasePercent: String(isHomeAsset(asset) ? asset.cashPurchasePercent * 100 : 20),
-    mortgageType: isHomeAsset(asset) ? asset.mortgageType ?? "amortizing" : "amortizing",
+    initialCost:
+      options.preserveFormulaSource && isHomeAsset(asset)
+        ? getAssetValueFormulaInput(asset)
+        : String(isHomeAsset(resolvedAsset) ? resolvedAsset.initialCost : 0),
+    cashPurchasePercent: String(isHomeAsset(resolvedAsset) ? resolvedAsset.cashPurchasePercent * 100 : 20),
+    mortgageType: isHomeAsset(resolvedAsset) ? resolvedAsset.mortgageType ?? "amortizing" : "amortizing",
     interestOnlyMaturityAction:
-      isHomeAsset(asset) && asset.mortgageType === "interest-only"
-        ? asset.interestOnlyMaturityAction ?? "payoff"
+      isHomeAsset(resolvedAsset) && resolvedAsset.mortgageType === "interest-only"
+        ? resolvedAsset.interestOnlyMaturityAction ?? "payoff"
         : "payoff",
-    mortgageRate: String(isHomeAsset(asset) ? asset.mortgageRate : 6),
-    mortgageTermYears: String(isHomeAsset(asset) ? asset.mortgageTermYears : 30),
-    monthlyNonTaxCosts: String(isHomeAsset(asset) ? asset.monthlyNonTaxCosts : 0),
-    propertyTaxRate: String(isHomeAsset(asset) ? asset.propertyTaxRate : 1),
-    purchaseYear: String(isHomeAsset(asset) ? asset.purchaseYear : new Date().getFullYear()),
+    mortgageRate: String(isHomeAsset(resolvedAsset) ? resolvedAsset.mortgageRate : 6),
+    mortgageTermYears: String(isHomeAsset(resolvedAsset) ? resolvedAsset.mortgageTermYears : 30),
+    monthlyNonTaxCosts: String(isHomeAsset(resolvedAsset) ? resolvedAsset.monthlyNonTaxCosts : 0),
+    propertyTaxRate: String(isHomeAsset(resolvedAsset) ? resolvedAsset.propertyTaxRate : 1),
+    purchaseYear: String(isHomeAsset(resolvedAsset) ? resolvedAsset.purchaseYear : new Date().getFullYear()),
     cashGenerationEnabled: cashGenerations.length > 0,
     cashGenerations:
       cashGenerations.length > 0
@@ -692,21 +845,26 @@ function buildAssetDraftFromDefinition(asset: AssetDefinition): AssetDraft {
             taxTreatment: cashGeneration.taxTreatment ?? "ordinary-income",
           }))
         : [createAssetCashGenerationDraft()],
-    saleTaxEnabled: isInvestmentAsset(asset) && Boolean(asset.saleTax),
-    saleTaxCostBasis: String(isInvestmentAsset(asset) ? asset.saleTax?.costBasis ?? 0 : 0),
+    saleTaxEnabled: isInvestmentAsset(resolvedAsset) && Boolean(resolvedAsset.saleTax),
+    saleTaxCostBasis: String(isInvestmentAsset(resolvedAsset) ? resolvedAsset.saleTax?.costBasis ?? 0 : 0),
     saleTaxTreatment:
-      isInvestmentAsset(asset) ? asset.saleTax?.taxTreatment ?? "long-term-capital-gains" : "long-term-capital-gains",
+      isInvestmentAsset(resolvedAsset)
+        ? resolvedAsset.saleTax?.taxTreatment ?? "long-term-capital-gains"
+        : "long-term-capital-gains",
   };
 }
 
 function migratePersistedAsset(
-  asset: SavedPlannerState["assets"][number]
+  asset: SavedPlannerState["assets"][number],
+  context: Record<string, number>
 ): AssetDefinition {
   if (asset.kind === "home") {
-    return new Asset({
+    return resolveAssetValueFormula(
+      new Asset({
       kind: "home",
       name: asset.name,
       initialCost: asset.initialCost ?? 0,
+      ...(asset.initialCostFormula ? { initialCostFormula: asset.initialCostFormula } : {}),
       expectedReturn: asset.expectedReturn,
       volatility: asset.volatility,
       cashPurchasePercent: asset.cashPurchasePercent ?? 0,
@@ -718,7 +876,9 @@ function migratePersistedAsset(
       monthlyNonTaxCosts: asset.monthlyNonTaxCosts ?? 0,
       propertyTaxRate: asset.propertyTaxRate ?? 0,
       purchaseYear: asset.purchaseYear ?? new Date().getFullYear(),
-    }).toDefinition();
+      }).toDefinition(),
+      context
+    );
   }
 
   const persistedCashGenerations =
@@ -728,9 +888,11 @@ function migratePersistedAsset(
         ? [asset.cashGeneration]
         : [];
 
-  return new Asset({
+  return resolveAssetValueFormula(
+    new Asset({
     name: asset.name,
     startingValue: asset.startingValue ?? 0,
+    ...(asset.startingValueFormula ? { startingValueFormula: asset.startingValueFormula } : {}),
     expectedReturn: asset.expectedReturn,
     volatility: asset.volatility,
     sellProportion:
@@ -755,14 +917,18 @@ function migratePersistedAsset(
           },
         }
       : {}),
-  }).toDefinition();
+    }).toDefinition(),
+    context
+  );
 }
 
 function migratePersistedAssets(
   assets: readonly SavedPlannerState["assets"][number][],
-  assetSellWeightMode: SavedPlannerState["assetSellWeightMode"] | undefined
+  assetSellWeightMode: SavedPlannerState["assetSellWeightMode"] | undefined,
+  variables: readonly VariableDefinition[]
 ): AssetDefinition[] {
-  const migratedAssets = assets.map((asset) => migratePersistedAsset(asset));
+  const context = Object.fromEntries(variables.map((variable) => [variable.name, variable.value]));
+  const migratedAssets = assets.map((asset) => migratePersistedAsset(asset, context));
 
   if (assetSellWeightMode === "portfolio-proportion-multiplier") {
     return migratedAssets;
@@ -1841,23 +2007,14 @@ function renderSetupAssetArea(): string {
                   activeInlineAssetValueEditName === asset.name
                     ? `
                   <form class="inline-asset-value-form" data-inline-asset-value-form="${escapeAttribute(asset.name)}">
-                    <input
-                      class="inline-asset-value-input"
-                      name="${isHomeAsset(asset) ? "initialCost" : "startingValue"}"
-                      data-inline-asset-value-input="true"
-                      ${renderEditableNumberInputAttributes()}
-                      value="${escapeAttribute(
-                        formatEditableNumberInput(String(isHomeAsset(asset) ? asset.initialCost : asset.startingValue))
-                      )}"
-                    />
-                    <button type="submit" class="secondary-button">Save</button>
-                    <button
-                      type="button"
-                      class="ghost-button"
-                      data-cancel-inline-asset-value="${escapeAttribute(asset.name)}"
-                    >
-                      Cancel
-                    </button>
+                    <div data-inline-asset-value-input="true">
+                      ${renderFormulaEditor({
+                        inputName: isHomeAsset(asset) ? "initialCost" : "startingValue",
+                        value: getAssetValueFormulaInput(asset),
+                        placeholder: isHomeAsset(asset) ? "salary * 4" : "salary * 2",
+                        variablesScope: "planner",
+                      })}
+                    </div>
                   </form>
                     `
                     : `
@@ -1941,7 +2098,31 @@ function renderSetupExpenseArea(expenseRows: Array<{ flow: FlowDefinition; yearl
                     </div>
                     ${expenseValuePath ? `<p class="workspace-item-copy">${escapeHtml(expenseValuePath)}</p>` : ""}
                   </div>
-                  <strong class="workspace-item-value">${formatCurrency(yearlyAmount)}</strong>
+                  ${
+                    activeInlineExpenseValueEditName === flow.name
+                      ? `
+                    <form class="inline-asset-value-form" data-inline-expense-value-form="${escapeAttribute(flow.name)}">
+                      <div data-inline-expense-value-input="true">
+                        ${renderFormulaEditor({
+                          inputName: "formula",
+                          value: flow.formula,
+                          placeholder: "rent * 0.1",
+                          variablesScope: "planner",
+                        })}
+                      </div>
+                    </form>
+                      `
+                      : `
+                    <button
+                      type="button"
+                      class="link-button workspace-item-value-button"
+                      data-edit-expense-value="${escapeAttribute(flow.name)}"
+                      aria-label="Edit ${escapeAttribute(flow.name)} amount"
+                    >
+                      ${formatCurrency(yearlyAmount)}
+                    </button>
+                      `
+                  }
                 </div>
               </article>
             `;
@@ -2716,36 +2897,40 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
     userId: user.id,
     email: user.email,
     variables: snapshot.variables,
-    assets: snapshot.assets.map((asset) =>
-      isHomeAsset(asset)
+    assets: snapshot.assets.map((asset) => {
+      const resolvedAsset = resolveAssetValueFormula(asset, buildPlannerFormulaContext());
+
+      return isHomeAsset(resolvedAsset)
         ? {
             kind: "home" as const,
-            name: asset.name,
-            initialCost: asset.initialCost,
-            expectedReturn: asset.expectedReturn,
-            volatility: asset.volatility,
-            cashPurchasePercent: asset.cashPurchasePercent,
-            mortgageType: asset.mortgageType,
-            ...(asset.mortgageType === "interest-only"
+            name: resolvedAsset.name,
+            initialCost: resolvedAsset.initialCost,
+            ...(resolvedAsset.initialCostFormula ? { initialCostFormula: resolvedAsset.initialCostFormula } : {}),
+            expectedReturn: resolvedAsset.expectedReturn,
+            volatility: resolvedAsset.volatility,
+            cashPurchasePercent: resolvedAsset.cashPurchasePercent,
+            mortgageType: resolvedAsset.mortgageType,
+            ...(resolvedAsset.mortgageType === "interest-only"
               ? {
-                  interestOnlyMaturityAction: asset.interestOnlyMaturityAction,
+                  interestOnlyMaturityAction: resolvedAsset.interestOnlyMaturityAction,
                 }
               : {}),
-            mortgageRate: asset.mortgageRate,
-            mortgageTermYears: asset.mortgageTermYears,
-            monthlyNonTaxCosts: asset.monthlyNonTaxCosts,
-            propertyTaxRate: asset.propertyTaxRate,
-            purchaseYear: asset.purchaseYear,
+            mortgageRate: resolvedAsset.mortgageRate,
+            mortgageTermYears: resolvedAsset.mortgageTermYears,
+            monthlyNonTaxCosts: resolvedAsset.monthlyNonTaxCosts,
+            propertyTaxRate: resolvedAsset.propertyTaxRate,
+            purchaseYear: resolvedAsset.purchaseYear,
           }
         : {
-            name: asset.name,
-            startingValue: asset.startingValue,
-            expectedReturn: asset.expectedReturn,
-            volatility: asset.volatility,
-            sellProportion: asset.sellProportion,
-            ...(asset.cashGenerations && asset.cashGenerations.length > 0
+            name: resolvedAsset.name,
+            startingValue: resolvedAsset.startingValue,
+            ...(resolvedAsset.startingValueFormula ? { startingValueFormula: resolvedAsset.startingValueFormula } : {}),
+            expectedReturn: resolvedAsset.expectedReturn,
+            volatility: resolvedAsset.volatility,
+            sellProportion: resolvedAsset.sellProportion,
+            ...(resolvedAsset.cashGenerations && resolvedAsset.cashGenerations.length > 0
               ? {
-                  cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
+                  cashGenerations: resolvedAsset.cashGenerations.map((cashGeneration) => ({
                     name: cashGeneration.name,
                     rate: cashGeneration.rate,
                     volatility: cashGeneration.volatility,
@@ -2753,16 +2938,16 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
                   })),
                 }
               : {}),
-            ...(asset.saleTax
+            ...(resolvedAsset.saleTax
               ? {
                   saleTax: {
-                    costBasis: asset.saleTax.costBasis,
-                    taxTreatment: asset.saleTax.taxTreatment,
+                    costBasis: resolvedAsset.saleTax.costBasis,
+                    taxTreatment: resolvedAsset.saleTax.taxTreatment,
                   },
                 }
               : {}),
-          }
-    ),
+          };
+    }),
     assetSellWeightMode: "portfolio-proportion-multiplier",
     taxes: snapshot.taxes.map((tax) => ({
       name: tax.name,
@@ -3975,12 +4160,12 @@ function renderAssetCoreFields(draft: AssetDraft): string {
     return `
       <label>
         Initial cost
-        <input
-          name="initialCost"
-          ${renderEditableNumberInputAttributes()}
-          value="${escapeHtml(formatEditableNumberInput(draft.initialCost))}"
-          required
-        />
+        ${renderFormulaEditor({
+          inputName: "initialCost",
+          value: draft.initialCost,
+          placeholder: "salary * 4",
+          variablesScope: "planner",
+        })}
       </label>
       <label>
         Cash purchase (%)
@@ -4042,12 +4227,12 @@ function renderAssetCoreFields(draft: AssetDraft): string {
   return `
     <label>
       Starting value
-      <input
-        name="startingValue"
-        ${renderEditableNumberInputAttributes()}
-        value="${escapeHtml(formatEditableNumberInput(draft.startingValue))}"
-        required
-      />
+      ${renderFormulaEditor({
+        inputName: "startingValue",
+        value: draft.startingValue,
+        placeholder: "salary * 2",
+        variablesScope: "planner",
+      })}
     </label>
   `;
 }
@@ -4732,6 +4917,7 @@ function bindHandlers(user: UserIdentity): void {
   bindEditableNumberInputs();
   bindSimulationChartTooltip();
   focusInlineAssetValueInput();
+  focusInlineExpenseValueInput();
 
   const openAssetButton = document.querySelector<HTMLButtonElement>("#open-asset-composer");
   const openFlowButton = document.querySelector<HTMLButtonElement>("#open-flow-composer");
@@ -5431,6 +5617,7 @@ function bindHandlers(user: UserIdentity): void {
       }
 
       updateInitialVariableValue(variableName, nextValue);
+      syncSimulationDraftAssetRows();
       invalidateSimulationState();
       await persistPlannerState(user);
       renderPlanner(user);
@@ -5445,52 +5632,101 @@ function bindHandlers(user: UserIdentity): void {
       }
 
       activeInlineAssetValueEditName = assetName;
+      activeInlineExpenseValueEditName = null;
       renderPlanner(user);
     });
   }
 
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-cancel-inline-asset-value]")) {
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-edit-expense-value]")) {
     button.addEventListener("click", () => {
+      const flowName = button.dataset.editExpenseValue;
+      if (!flowName) {
+        return;
+      }
+
+      activeInlineExpenseValueEditName = flowName;
       activeInlineAssetValueEditName = null;
       renderPlanner(user);
     });
   }
 
   for (const form of document.querySelectorAll<HTMLFormElement>("[data-inline-asset-value-form]")) {
-    const input = form.querySelector<HTMLInputElement>("[data-inline-asset-value-input]");
+    const hiddenInput = form.querySelector<HTMLInputElement>(".formula-editor-hidden-input");
+    const editor = form.querySelector<HTMLDivElement>(".formula-editor-input");
+    const wrapper = form.querySelector<HTMLElement>("[data-inline-asset-value-input]");
     const assetName = form.dataset.inlineAssetValueForm;
-    if (!input || !assetName) {
+    if (!hiddenInput || !editor || !wrapper || !assetName) {
       continue;
     }
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const existingAsset = plannerState.assets.find((asset) => asset.name === assetName);
-      if (!existingAsset) {
-        return;
-      }
+    let canceledByEscape = false;
 
-      const nextValue = parseEditableNumber(input.value);
-      if (!Number.isFinite(nextValue)) {
-        return;
-      }
+    wrapper.addEventListener("focusout", () => {
+      window.setTimeout(() => {
+        if (canceledByEscape || activeInlineAssetValueEditName !== assetName) {
+          return;
+        }
 
-      updateAsset(assetName, {
-        ...existingAsset,
-        ...(isInvestmentAsset(existingAsset) ? { startingValue: nextValue } : { initialCost: nextValue }),
-      });
-      syncSimulationDraftAssetRows();
-      invalidateSimulationState();
-      activeInlineAssetValueEditName = null;
-      await persistPlannerState(user);
-      renderPlanner(user);
+        if (wrapper.contains(document.activeElement)) {
+          return;
+        }
+
+        void saveInlineAssetValue(assetName, hiddenInput.value, user);
+      }, 0);
     });
 
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        activeInlineAssetValueEditName = null;
-        renderPlanner(user);
+    editor.addEventListener("focus", () => {
+      canceledByEscape = false;
+    });
+
+    editor.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") {
+        return;
       }
+
+      canceledByEscape = true;
+      activeInlineAssetValueEditName = null;
+      renderPlanner(user);
+    });
+  }
+
+  for (const form of document.querySelectorAll<HTMLFormElement>("[data-inline-expense-value-form]")) {
+    const hiddenInput = form.querySelector<HTMLInputElement>(".formula-editor-hidden-input");
+    const editor = form.querySelector<HTMLDivElement>(".formula-editor-input");
+    const wrapper = form.querySelector<HTMLElement>("[data-inline-expense-value-input]");
+    const flowName = form.dataset.inlineExpenseValueForm;
+    if (!hiddenInput || !editor || !wrapper || !flowName) {
+      continue;
+    }
+
+    let canceledByEscape = false;
+
+    wrapper.addEventListener("focusout", () => {
+      window.setTimeout(() => {
+        if (canceledByEscape || activeInlineExpenseValueEditName !== flowName) {
+          return;
+        }
+
+        if (wrapper.contains(document.activeElement)) {
+          return;
+        }
+
+        void saveInlineExpenseValue(flowName, hiddenInput.value, user);
+      }, 0);
+    });
+
+    editor.addEventListener("focus", () => {
+      canceledByEscape = false;
+    });
+
+    editor.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      canceledByEscape = true;
+      activeInlineExpenseValueEditName = null;
+      renderPlanner(user);
     });
   }
 
@@ -5509,15 +5745,31 @@ function focusInlineAssetValueInput(): void {
     return;
   }
 
-  const input = document.querySelector<HTMLInputElement>(
-    `[data-inline-asset-value-form="${CSS.escape(activeInlineAssetValueEditName)}"] [data-inline-asset-value-input]`
+  const editor = document.querySelector<HTMLDivElement>(
+    `[data-inline-asset-value-form="${CSS.escape(activeInlineAssetValueEditName)}"] [data-inline-asset-value-input] .formula-editor-input`
   );
-  if (!input) {
+  if (!editor) {
     return;
   }
 
-  input.focus();
-  input.select();
+  editor.focus();
+  setCaretCharacterOffset(editor, editor.textContent?.length ?? 0);
+}
+
+function focusInlineExpenseValueInput(): void {
+  if (!activeInlineExpenseValueEditName) {
+    return;
+  }
+
+  const editor = document.querySelector<HTMLDivElement>(
+    `[data-inline-expense-value-form="${CSS.escape(activeInlineExpenseValueEditName)}"] [data-inline-expense-value-input] .formula-editor-input`
+  );
+  if (!editor) {
+    return;
+  }
+
+  editor.focus();
+  setCaretCharacterOffset(editor, editor.textContent?.length ?? 0);
 }
 
 function bindFormulaEditors(): void {
@@ -5581,6 +5833,21 @@ function bindFormulaEditors(): void {
 
     editor.addEventListener("keydown", (event) => {
       const suggestions = getFormulaSuggestions(binding);
+      if (event.key === "Enter" && suggestions.length === 0) {
+        event.preventDefault();
+
+        if (
+          wrapper.closest("[data-inline-asset-value-form]") ||
+          wrapper.closest("[data-inline-expense-value-form]")
+        ) {
+          editor.blur();
+          return;
+        }
+
+        form.requestSubmit();
+        return;
+      }
+
       if (suggestions.length === 0) {
         return;
       }
@@ -5743,6 +6010,26 @@ function syncFormulaDraftField(wrapper: HTMLElement, formula: string): void {
   }
 
   const inputName = wrapper.querySelector<HTMLInputElement>(".formula-editor-hidden-input")?.name;
+  if (inputName === "startingValue" || inputName === "initialCost") {
+    if (wrapper.closest("#asset-form")) {
+      if (inputName === "startingValue") {
+        assetDraft.startingValue = formula;
+      } else {
+        assetDraft.initialCost = formula;
+      }
+      return;
+    }
+
+    if (wrapper.closest("#asset-edit-form")) {
+      if (inputName === "startingValue") {
+        assetEditDraft.startingValue = formula;
+      } else {
+        assetEditDraft.initialCost = formula;
+      }
+      return;
+    }
+  }
+
   if (inputName === "formula") {
     if (wrapper.closest("#flow-form")) {
       flowDraft.formula = formula;
@@ -5765,24 +6052,60 @@ function normalizeEditorText(value: string): string {
   return value.replace(/\u00a0/g, " ").replace(/\n/g, "").trim();
 }
 
-function formatFormulaText(formula: string): string {
-  return (formula.match(/[A-Za-z_][A-Za-z0-9_]*|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+|\s+|./g) ?? [])
-    .map((token) =>
-      /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$|^\d+(?:\.\d+)?$|^\.\d+$/.test(token)
-        ? formatFormulaNumberToken(token)
-        : token
-    )
-    .join("");
+function isPlainNumericFormula(formula: string): boolean {
+  return /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$|^[+-]?\.\d+$/.test(formula.trim());
 }
 
-function formatFormulaNumberToken(token: string): string {
-  if (token.startsWith(".")) {
-    return token;
+function resolveAssetValueInput(
+  input: string,
+  fieldLabel: "Starting value" | "Initial cost"
+): {
+  value: number;
+  formula?: string;
+} {
+  const formula = input.trim();
+  if (!formula) {
+    throw new Error(`${fieldLabel} is required.`);
   }
 
-  const [integerPart, fractionalPart] = token.replaceAll(",", "").split(".");
-  const groupedIntegerPart = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return fractionalPart === undefined ? groupedIntegerPart : `${groupedIntegerPart}.${fractionalPart}`;
+  const value = evaluateFormula(formula, buildPlannerFormulaContext());
+  if (!Number.isFinite(value)) {
+    throw new Error(`${fieldLabel} must resolve to a finite number.`);
+  }
+
+  return {
+    value,
+    ...(isPlainNumericFormula(formula) ? {} : { formula }),
+  };
+}
+
+function getFlowDraftVariableDefinitionNames(): string[] {
+  return flowDraft.variables.map((variable) => variable.name.trim()).filter(Boolean);
+}
+
+function getEventDraftVariableDefinitionNames(): string[] {
+  return eventDraft.entries
+    .flatMap((entry) => entry.actions)
+    .filter((action) => action.kind === "add-variable")
+    .map((action) => action.variableDefinitionName.trim())
+    .filter(Boolean);
+}
+
+function getEventDraftFormulas(draft: EventDraft): string[] {
+  return draft.entries.flatMap((entry) =>
+    entry.actions.flatMap((action) => {
+      switch (action.kind) {
+        case "set-flow-formula":
+          return [action.formula.trim()];
+        case "add-flow":
+          return [action.flowDefinitionFormula.trim()];
+        case "one-time-expense":
+          return [action.oneTimeExpenseFormula.trim()];
+        default:
+          return [];
+      }
+    })
+  );
 }
 
 function validateFormula(formula: string, availableVariables: readonly string[]): FormulaValidationResult {
@@ -5801,8 +6124,8 @@ function validateFormula(formula: string, availableVariables: readonly string[])
 
     if (unknownVariables.length > 0) {
       return {
-        valid: false,
-        message: `Unknown variable${unknownVariables.length === 1 ? "" : "s"}: ${unknownVariables.join(", ")}`,
+        valid: true,
+        message: `Will create variable${unknownVariables.length === 1 ? "" : "s"} on save: ${unknownVariables.join(", ")}`,
         unknownVariables,
       };
     }
@@ -5826,7 +6149,7 @@ function updateFormulaEditorValidation(binding: FormulaEditorBinding): void {
   binding.wrapper.dataset.invalid = result.valid ? "false" : "true";
   binding.status.textContent = result.message;
   binding.status.dataset.invalid = result.valid ? "false" : "true";
-  binding.status.hidden = result.valid;
+  binding.status.hidden = result.message.length === 0;
 }
 
 function updateFormSubmissionState(form: HTMLFormElement): void {
@@ -5848,8 +6171,7 @@ function renderFormulaEditorTokens(
   preferredCaretOffset: number
 ): void {
   const variables = new Set(binding.getVariables());
-  const tokens =
-    formula.match(/[A-Za-z_][A-Za-z0-9_]*|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+|\s+|./g) ?? [];
+  const tokens = tokenizeFormulaText(formula);
 
   binding.editor.innerHTML = tokens
     .map((token) => {
@@ -5862,7 +6184,7 @@ function renderFormulaEditorTokens(
         return token.replaceAll(" ", "&nbsp;");
       }
 
-      if (/^\d{1,3}(?:,\d{3})+(?:\.\d+)?$|^\d+(?:\.\d+)?$|^\.\d+$/.test(token)) {
+      if (isFormulaNumberToken(token)) {
         return `<span class="formula-token formula-token-number">${escapeHtml(formatFormulaNumberToken(token))}</span>`;
       }
 
@@ -6134,6 +6456,9 @@ function bindAssetComposer(user: UserIdentity): void {
     event.preventDefault();
 
     try {
+      ensurePlannerVariablesExist(
+        collectMissingFormulaVariables([assetDraft.kind === "home" ? assetDraft.initialCost : assetDraft.startingValue])
+      );
       const nextAsset = buildAssetDefinition(assetDraft);
       assertAssetNameAvailable(nextAsset.name, null);
       plannerState.assets.push(nextAsset);
@@ -6288,13 +6613,22 @@ function bindAssetEditor(user: UserIdentity): void {
   assetEditForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
+    const previousAsset = plannerState.assets.find((asset) => asset.name === assetEditDraft.originalName);
+    const previousFormulas = previousAsset ? getAssetDefinitionFormulas(previousAsset) : [];
     try {
+      ensurePlannerVariablesExist(
+        collectMissingFormulaVariables([assetEditDraft.kind === "home" ? assetEditDraft.initialCost : assetEditDraft.startingValue])
+      );
       const nextAsset = buildAssetDefinition(assetEditDraft);
       assertAssetNameAvailable(nextAsset.name, assetEditDraft.originalName);
       updateAsset(assetEditDraft.originalName, nextAsset);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Asset could not be saved.");
       return;
+    }
+    const nextAsset = plannerState.assets.find((asset) => asset.name === assetEditDraft.name.trim());
+    if (nextAsset) {
+      pruneUnusedPlannerVariables(collectRemovedFormulaVariables(previousFormulas, getAssetDefinitionFormulas(nextAsset)));
     }
     updateAssetCorrelations(assetEditDraft.originalName, assetEditDraft.name.trim(), assetEditDraft.correlations);
     syncSimulationDraftAssetRows();
@@ -6669,6 +7003,8 @@ function bindFlowComposer(user: UserIdentity): void {
       return;
     }
 
+    ensurePlannerVariablesExist(collectMissingFormulaVariables([flowDraft.formula.trim()], getFlowDraftVariableDefinitionNames()));
+
     for (const variable of flowDraft.variables) {
       plannerState.variables.push({
         name: variable.name.trim(),
@@ -6812,6 +7148,14 @@ function bindEventComposer(user: UserIdentity): void {
       return;
     }
 
+    const previousEvent = eventDraft.originalName
+      ? plannerState.events.find((event) => event.name === eventDraft.originalName) ?? null
+      : null;
+    const previousFormulas = previousEvent ? getEventFormulas(previousEvent) : [];
+    ensurePlannerVariablesExist(
+      collectMissingFormulaVariables(getEventDraftFormulas(eventDraft), getEventDraftVariableDefinitionNames())
+    );
+
     const nextEvent = new Event({
       name: eventDraft.name.trim(),
       flowName: eventDraft.flowName.trim(),
@@ -6825,6 +7169,8 @@ function bindEventComposer(user: UserIdentity): void {
     } else {
       plannerState.events.push(nextEvent);
     }
+
+    pruneUnusedPlannerVariables(collectRemovedFormulaVariables(previousFormulas, getEventFormulas(nextEvent)));
 
     invalidateSimulationState();
     closeEventComposer();
@@ -6936,6 +7282,10 @@ function bindFlowEditor(user: UserIdentity): void {
       return;
     }
 
+    const previousFlow = plannerState.flows.find((flow) => flow.name === flowEditDraft.originalName);
+    const previousFormulas = previousFlow ? [previousFlow.formula] : [];
+    ensurePlannerVariablesExist(collectMissingFormulaVariables([flowEditDraft.formula.trim()]));
+
     updateFlow(flowEditDraft.originalName, {
       name: flowEditDraft.name.trim(),
       type: "expense",
@@ -6943,6 +7293,7 @@ function bindFlowEditor(user: UserIdentity): void {
       inflationAdjusted: flowEditDraft.inflationAdjusted,
       taxTreatment: flowEditDraft.taxTreatment,
     });
+    pruneUnusedPlannerVariables(collectRemovedFormulaVariables(previousFormulas, [flowEditDraft.formula.trim()]));
     syncExpenseOneTimeReset(flowEditDraft.name.trim(), flowEditDraft.oneTime);
     invalidateSimulationState();
     closeFlowEditor();
@@ -6960,11 +7311,22 @@ function bindFlowEditor(user: UserIdentity): void {
         return;
       }
 
+      const previousEvent = flowEventDraft.originalName
+        ? plannerState.events.find((event) => event.name === flowEventDraft.originalName) ?? null
+        : null;
+      const previousFormulas = previousEvent ? getEventFormulas(previousEvent) : [];
+      ensurePlannerVariablesExist(collectMissingFormulaVariables([flowEventDraft.formula.trim()]));
       upsertExpenseChangeEvent(
         flowEventDraft.originalName,
         flowEditDraft.originalName,
         normalizeYearInput(flowEventDraft.year),
         flowEventDraft.formula
+      );
+      const nextEvent = plannerState.events.find(
+        (event) => event.name === createExpenseChangeEventName(flowEditDraft.originalName, normalizeYearInput(flowEventDraft.year))
+      );
+      pruneUnusedPlannerVariables(
+        collectRemovedFormulaVariables(previousFormulas, nextEvent ? getEventFormulas(nextEvent) : [])
       );
       resetFlowEventDraft(flowEditDraft.originalName, flowEditDraft.formula);
       activeFlowEventEdit = null;
@@ -7254,10 +7616,12 @@ function findAssetCashGenerationDraft(
 
 function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
   if (draft.kind === "home") {
+    const initialCost = resolveAssetValueInput(draft.initialCost, "Initial cost");
     return new Asset({
       kind: "home",
       name: draft.name,
-      initialCost: parseEditableNumber(draft.initialCost),
+      initialCost: initialCost.value,
+      ...(initialCost.formula ? { initialCostFormula: initialCost.formula } : {}),
       expectedReturn: Number(draft.expectedReturn),
       volatility: Number(draft.volatility),
       cashPurchasePercent: Number(draft.cashPurchasePercent) / 100,
@@ -7275,9 +7639,11 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
     }).toDefinition();
   }
 
+  const startingValue = resolveAssetValueInput(draft.startingValue, "Starting value");
   return new Asset({
     name: draft.name,
-    startingValue: parseEditableNumber(draft.startingValue),
+    startingValue: startingValue.value,
+    ...(startingValue.formula ? { startingValueFormula: startingValue.formula } : {}),
     expectedReturn: Number(draft.expectedReturn),
     volatility: Number(draft.volatility),
     sellProportion: 1,
@@ -7438,7 +7804,7 @@ function openAssetEditor(assetName: string): void {
     throw new Error(`Unknown asset "${assetName}".`);
   }
 
-  const nextDraft = buildAssetDraftFromDefinition(asset);
+  const nextDraft = buildAssetDraftFromDefinition(asset, { preserveFormulaSource: true });
   assetEditorOpen = true;
   assetEditDraft.originalName = asset.name;
   Object.assign(assetEditDraft, nextDraft);
@@ -7548,6 +7914,7 @@ function closeTransientPlannerUi(): void {
   closeFlowEditor();
   closeEventComposer();
   activeInlineAssetValueEditName = null;
+  activeInlineExpenseValueEditName = null;
 }
 
 function openEventEditor(eventName: string): void {
@@ -7577,6 +7944,91 @@ function updateAsset(assetName: string, nextAsset: AssetDefinition): void {
   plannerState.assets = plannerState.assets.map((asset) =>
     asset.name === assetName ? nextAsset : asset
   );
+}
+
+async function saveInlineAssetValue(assetName: string, formula: string, user: UserIdentity): Promise<boolean> {
+  const existingAsset = plannerState.assets.find((asset) => asset.name === assetName);
+  if (!existingAsset) {
+    return false;
+  }
+
+  const previousFormulas = getAssetDefinitionFormulas(existingAsset);
+  try {
+    ensurePlannerVariablesExist(collectMissingFormulaVariables([formula]));
+    const resolvedValue = isInvestmentAsset(existingAsset)
+      ? resolveAssetValueInput(formula, "Starting value")
+      : resolveAssetValueInput(formula, "Initial cost");
+
+    updateAsset(
+      assetName,
+      isInvestmentAsset(existingAsset)
+        ? (() => {
+            const { startingValueFormula: _startingValueFormula, ...nextAsset } = existingAsset;
+            return {
+              ...nextAsset,
+              startingValue: resolvedValue.value,
+              ...(resolvedValue.formula ? { startingValueFormula: resolvedValue.formula } : {}),
+            };
+          })()
+        : (() => {
+            const { initialCostFormula: _initialCostFormula, ...nextAsset } = existingAsset;
+            return {
+              ...nextAsset,
+              initialCost: resolvedValue.value,
+              ...(resolvedValue.formula ? { initialCostFormula: resolvedValue.formula } : {}),
+            };
+          })()
+    );
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Asset value could not be saved.");
+    return false;
+  }
+
+  const nextAsset = plannerState.assets.find((asset) => asset.name === assetName);
+  if (nextAsset) {
+    pruneUnusedPlannerVariables(collectRemovedFormulaVariables(previousFormulas, getAssetDefinitionFormulas(nextAsset)));
+  }
+
+  syncSimulationDraftAssetRows();
+  invalidateSimulationState();
+  activeInlineAssetValueEditName = null;
+  await persistPlannerState(user);
+  renderPlanner(user);
+  return true;
+}
+
+async function saveInlineExpenseValue(flowName: string, formula: string, user: UserIdentity): Promise<boolean> {
+  const existingFlow = plannerState.flows.find((flow) => flow.name === flowName);
+  if (!existingFlow) {
+    return false;
+  }
+
+  const trimmedFormula = formula.trim();
+  const previousFormulas = [existingFlow.formula];
+
+  try {
+    const validation = validateFormula(trimmedFormula, plannerState.variables.map((variable) => variable.name));
+    if (!validation.valid) {
+      throw new Error(validation.message);
+    }
+
+    ensurePlannerVariablesExist(collectMissingFormulaVariables([trimmedFormula]));
+    updateFlow(flowName, {
+      ...existingFlow,
+      formula: trimmedFormula,
+    });
+    pruneUnusedPlannerVariables(collectRemovedFormulaVariables(previousFormulas, [trimmedFormula]));
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "Expense value could not be saved.");
+    return false;
+  }
+
+  syncSimulationDraftAssetRows();
+  invalidateSimulationState();
+  activeInlineExpenseValueEditName = null;
+  await persistPlannerState(user);
+  renderPlanner(user);
+  return true;
 }
 
 function updateAssetCorrelations(
@@ -7712,7 +8164,7 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
 
   plannerState.variables = Array.isArray(partialState.variables) ? partialState.variables : fallbackState.variables;
   plannerState.assets = Array.isArray(partialState.assets)
-    ? migratePersistedAssets(partialState.assets, partialState.assetSellWeightMode)
+    ? migratePersistedAssets(partialState.assets, partialState.assetSellWeightMode, plannerState.variables)
     : fallbackState.assets;
   assertUniqueAssetNames(plannerState.assets);
   plannerState.taxes = Array.isArray(partialState.taxes)

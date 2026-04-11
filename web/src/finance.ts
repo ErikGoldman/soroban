@@ -27,6 +27,7 @@ interface AssetDefinitionBase {
 export interface InvestmentAssetDefinition extends AssetDefinitionBase {
   kind?: "investment";
   startingValue: number;
+  startingValueFormula?: string;
   sellProportion: number;
   cashGeneration?: AssetCashGenerationDefinition;
   cashGenerations?: readonly AssetCashGenerationDefinition[];
@@ -36,6 +37,7 @@ export interface InvestmentAssetDefinition extends AssetDefinitionBase {
 export interface HomeAssetDefinition extends AssetDefinitionBase {
   kind: "home";
   initialCost: number;
+  initialCostFormula?: string;
   cashPurchasePercent: number;
   mortgageType: "amortizing" | "interest-only";
   interestOnlyMaturityAction?: "payoff" | "refinance" | "sell";
@@ -133,10 +135,12 @@ export class Asset {
   readonly volatility: number;
   readonly kind: "investment" | "home";
   readonly startingValue: number;
+  readonly startingValueFormula?: string;
   readonly sellProportion: number;
   readonly cashGenerations: readonly AssetCashGenerationDefinition[];
   readonly saleTax: AssetSaleTaxDefinition | null;
   readonly initialCost: number;
+  readonly initialCostFormula?: string;
   readonly cashPurchasePercent: number;
   readonly mortgageType: "amortizing" | "interest-only";
   readonly interestOnlyMaturityAction: "payoff" | "refinance" | "sell";
@@ -164,10 +168,12 @@ export class Asset {
       this.expectedReturn = definition.expectedReturn;
       this.volatility = definition.volatility;
       this.startingValue = 0;
+      this.startingValueFormula = undefined;
       this.sellProportion = 0;
       this.cashGenerations = [];
       this.saleTax = null;
       this.initialCost = normalizedHome.initialCost;
+      this.initialCostFormula = definition.initialCostFormula?.trim() || undefined;
       this.cashPurchasePercent = normalizedHome.cashPurchasePercent;
       this.mortgageType = normalizedHome.mortgageType;
       this.interestOnlyMaturityAction = normalizedHome.interestOnlyMaturityAction;
@@ -196,12 +202,14 @@ export class Asset {
     this.name = normalizedName;
     this.kind = "investment";
     this.startingValue = definition.startingValue;
+    this.startingValueFormula = definition.startingValueFormula?.trim() || undefined;
     this.expectedReturn = definition.expectedReturn;
     this.volatility = definition.volatility;
     this.sellProportion = definition.sellProportion;
     this.cashGenerations = normalizedCashGenerations;
     this.saleTax = normalizedSaleTax;
     this.initialCost = 0;
+    this.initialCostFormula = undefined;
     this.cashPurchasePercent = 0;
     this.mortgageType = "amortizing";
     this.interestOnlyMaturityAction = "payoff";
@@ -218,6 +226,7 @@ export class Asset {
         kind: "home",
         name: this.name,
         initialCost: this.initialCost,
+        ...(this.initialCostFormula ? { initialCostFormula: this.initialCostFormula } : {}),
         cashPurchasePercent: this.cashPurchasePercent,
         mortgageType: this.mortgageType,
         ...(this.mortgageType === "interest-only"
@@ -238,6 +247,7 @@ export class Asset {
     return {
       name: this.name,
       startingValue: this.startingValue,
+      ...(this.startingValueFormula ? { startingValueFormula: this.startingValueFormula } : {}),
       expectedReturn: this.expectedReturn,
       volatility: this.volatility,
       sellProportion: this.sellProportion,
@@ -374,6 +384,39 @@ export function evaluateFormula(formula: string, context: FormulaContext = {}): 
   const parser = new FormulaParser(formula);
   const ast = parser.parse();
   return evaluateNode(ast, context);
+}
+
+export function resolveAssetValueFormula(
+  definition: AssetDefinition,
+  context: FormulaContext = {}
+): AssetDefinition {
+  if (definition.kind === "home") {
+    const formula = definition.initialCostFormula?.trim();
+    if (!formula) {
+      return definition;
+    }
+
+    const initialCost = evaluateFormula(formula, context);
+    assertFiniteNumber(initialCost, `Initial cost for asset "${definition.name}" must resolve to a finite number.`);
+    return {
+      ...definition,
+      initialCost,
+      initialCostFormula: formula,
+    };
+  }
+
+  const formula = definition.startingValueFormula?.trim();
+  if (!formula) {
+    return definition;
+  }
+
+  const startingValue = evaluateFormula(formula, context);
+  assertFiniteNumber(startingValue, `Starting value for asset "${definition.name}" must resolve to a finite number.`);
+  return {
+    ...definition,
+    startingValue,
+    startingValueFormula: formula,
+  };
 }
 
 export function sumSignedYearlyFlows(flows: readonly Flow[], context: FormulaContext): number {

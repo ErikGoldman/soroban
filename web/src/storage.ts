@@ -36,10 +36,12 @@ export interface PersistedAssetDefinition {
   name: string;
   kind?: "investment" | "home";
   startingValue?: number;
+  startingValueFormula?: string;
   expectedReturn: number;
   volatility: number;
   sellProportion?: number;
   initialCost?: number;
+  initialCostFormula?: string;
   cashPurchasePercent?: number;
   mortgageType?: "amortizing" | "interest-only";
   interestOnlyMaturityAction?: "payoff" | "refinance" | "sell";

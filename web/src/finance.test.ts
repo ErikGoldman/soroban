@@ -16,6 +16,7 @@ import {
   applyEventsForYear,
   createFormulaContext,
   evaluateFormula,
+  resolveAssetValueFormula,
   sumSignedYearlyFlows,
 } from "./finance.js";
 
@@ -288,6 +289,26 @@ describe("Asset", () => {
     });
   });
 
+  it("preserves an investment starting value formula", () => {
+    const asset = new Asset({
+      name: "Index fund",
+      startingValue: 12000,
+      startingValueFormula: "salary * 2",
+      expectedReturn: 7.5,
+      volatility: 14.2,
+      sellProportion: 0.25,
+    });
+
+    expect(asset.toDefinition()).toEqual({
+      name: "Index fund",
+      startingValue: 12000,
+      startingValueFormula: "salary * 2",
+      expectedReturn: 7.5,
+      volatility: 14.2,
+      sellProportion: 0.25,
+    });
+  });
+
   it("captures a home asset definition", () => {
     const asset = new Asset({
       kind: "home",
@@ -308,6 +329,40 @@ describe("Asset", () => {
       kind: "home",
       name: "Primary residence",
       initialCost: 800000,
+      expectedReturn: 4,
+      volatility: 12,
+      cashPurchasePercent: 0.2,
+      mortgageType: "amortizing",
+      mortgageRate: 6.5,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1200,
+      propertyTaxRate: 1.25,
+      purchaseYear: 2024,
+    });
+  });
+
+  it("preserves a home initial cost formula", () => {
+    const asset = new Asset({
+      kind: "home",
+      name: "Primary residence",
+      initialCost: 800000,
+      initialCostFormula: "salary * 3",
+      expectedReturn: 4,
+      volatility: 12,
+      cashPurchasePercent: 0.2,
+      mortgageType: "amortizing",
+      mortgageRate: 6.5,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1200,
+      propertyTaxRate: 1.25,
+      purchaseYear: 2024,
+    });
+
+    expect(asset.toDefinition()).toEqual({
+      kind: "home",
+      name: "Primary residence",
+      initialCost: 800000,
+      initialCostFormula: "salary * 3",
       expectedReturn: 4,
       volatility: 12,
       cashPurchasePercent: 0.2,
@@ -508,6 +563,68 @@ describe("Asset", () => {
     expect(asset.toDefinition()).toMatchObject({
       name: "Tilting fund",
       sellProportion: 2.5,
+    });
+  });
+});
+
+describe("resolveAssetValueFormula", () => {
+  it("resolves investment starting value formulas from the provided context", () => {
+    expect(
+      resolveAssetValueFormula(
+        {
+          name: "Brokerage",
+          startingValue: 0,
+          startingValueFormula: "salary * 2",
+          expectedReturn: 7,
+          volatility: 15,
+          sellProportion: 1,
+        },
+        { salary: 250000 }
+      )
+    ).toEqual({
+      name: "Brokerage",
+      startingValue: 500000,
+      startingValueFormula: "salary * 2",
+      expectedReturn: 7,
+      volatility: 15,
+      sellProportion: 1,
+    });
+  });
+
+  it("resolves home initial cost formulas from the provided context", () => {
+    expect(
+      resolveAssetValueFormula(
+        {
+          kind: "home",
+          name: "Primary home",
+          initialCost: 0,
+          initialCostFormula: "salary * 3",
+          expectedReturn: 3,
+          volatility: 6,
+          cashPurchasePercent: 0.25,
+          mortgageType: "amortizing",
+          mortgageRate: 6.2,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 1400,
+          propertyTaxRate: 1.15,
+          purchaseYear: 2028,
+        },
+        { salary: 250000 }
+      )
+    ).toEqual({
+      kind: "home",
+      name: "Primary home",
+      initialCost: 750000,
+      initialCostFormula: "salary * 3",
+      expectedReturn: 3,
+      volatility: 6,
+      cashPurchasePercent: 0.25,
+      mortgageType: "amortizing",
+      mortgageRate: 6.2,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1400,
+      propertyTaxRate: 1.15,
+      purchaseYear: 2028,
     });
   });
 });
