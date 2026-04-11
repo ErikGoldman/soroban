@@ -129,8 +129,10 @@ function createScenarioPlannerState(): ScenarioPlannerState {
     simulationInflation: {
       mode: "regime-switching",
       regimeSwitching: {
-        lowRate: 2.5,
-        highRate: 6,
+        lowAverageRate: 2.5,
+        lowVolatility: 1,
+        highAverageRate: 6,
+        highVolatility: 2,
         stayLowProbability: 90,
         stayHighProbability: 60,
       },
@@ -171,8 +173,10 @@ describe("scenario save and load", () => {
     expect(parsedFile.plannerState.simulationInflation).toEqual({
       mode: "regime-switching",
       regimeSwitching: {
-        lowRate: 2.5,
-        highRate: 6,
+        lowAverageRate: 2.5,
+        lowVolatility: 1,
+        highAverageRate: 6,
+        highVolatility: 2,
         stayLowProbability: 90,
         stayHighProbability: 60,
       },

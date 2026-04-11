@@ -231,8 +231,14 @@ describe("buildSimulationScenarios", () => {
       assetCorrelations: [],
       inflation: {
         mode: "regime-switching",
-        lowRate: 0.02,
-        highRate: 0.08,
+        lowRegime: {
+          averageRate: 0.02,
+          volatility: 0,
+        },
+        highRegime: {
+          averageRate: 0.08,
+          volatility: 0,
+        },
         stayLowProbability: 0.9,
         stayHighProbability: 0.6,
       },
@@ -280,8 +286,14 @@ describe("buildSimulationScenarios", () => {
       assetCorrelations: [],
       inflation: {
         mode: "regime-switching",
-        lowRate: 0.02,
-        highRate: 0.08,
+        lowRegime: {
+          averageRate: 0.02,
+          volatility: 0,
+        },
+        highRegime: {
+          averageRate: 0.08,
+          volatility: 0,
+        },
         stayLowProbability: 0.9,
         stayHighProbability: 0.6,
       },
@@ -293,6 +305,58 @@ describe("buildSimulationScenarios", () => {
     expect(row?.inflationRegime).toBe("low");
     expect(row?.inflationRateApplied).toBeCloseTo(0.02, 6);
     expect(row?.flowTotals.get("Rent")).toBeCloseTo(-100, 6);
+  });
+
+  it("samples yearly inflation from each regime average and volatility", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 3,
+      yearlyPlans: [
+        createYearlyPlan("2027", [{ name: "Rent", amount: -100, inflationAdjusted: true }], 2027),
+        createYearlyPlan("2028", [{ name: "Rent", amount: -100, inflationAdjusted: true }], 2028),
+        createYearlyPlan("2029", [{ name: "Rent", amount: -100, inflationAdjusted: true }], 2029),
+      ],
+      assets: [
+        {
+          name: "Cash",
+          startingValue: 500,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      inflation: {
+        mode: "regime-switching",
+        lowRegime: {
+          averageRate: 0.02,
+          volatility: 0.01,
+        },
+        highRegime: {
+          averageRate: 0.08,
+          volatility: 0.02,
+        },
+        stayLowProbability: 0.9,
+        stayHighProbability: 0.6,
+      },
+      nextRandom: (() => {
+        const values = [0.1, 0.95, 0.2];
+        let index = 0;
+        return () => values[index++] ?? 0;
+      })(),
+      nextStandardNormal: createDeterministicNormals([1, -2, 0, 0, 0, 0]),
+    });
+
+    const [yearOne, yearTwo, yearThree] = scenarios[0]?.rows ?? [];
+    expect(yearOne?.inflationRegime).toBe("high");
+    expect(yearTwo?.inflationRegime).toBe("low");
+    expect(yearThree?.inflationRegime).toBe("low");
+    expect(yearOne?.inflationRateApplied).toBeCloseTo(0.1, 6);
+    expect(yearTwo?.inflationRateApplied).toBeCloseTo(0, 6);
+    expect(yearThree?.inflationRateApplied).toBeCloseTo(0.02, 6);
+    expect(yearOne?.flowTotals.get("Rent")).toBeCloseTo(-100, 6);
+    expect(yearTwo?.flowTotals.get("Rent")).toBeCloseTo(-100, 6);
+    expect(yearThree?.flowTotals.get("Rent")).toBeCloseTo(-102, 6);
   });
 
   it("keeps home appreciation out of cash flows and tracks market value separately from equity", () => {

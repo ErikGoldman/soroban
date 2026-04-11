@@ -36,10 +36,15 @@ export interface SimulationFixedInflationConfig {
   fixedRate: number;
 }
 
+export interface SimulationInflationRegimeSettings {
+  averageRate: number;
+  volatility: number;
+}
+
 export interface SimulationRegimeSwitchingInflationConfig {
   mode: "regime-switching";
-  lowRate: number;
-  highRate: number;
+  lowRegime: SimulationInflationRegimeSettings;
+  highRegime: SimulationInflationRegimeSettings;
   stayLowProbability: number;
   stayHighProbability: number;
 }
@@ -731,6 +736,7 @@ function runSimulationAttempts({
     const realizedInflationPath = buildRealizedInflationPath({
       yearlyPlans,
       inflation,
+      nextStandardNormal,
       nextRandom,
     });
 
@@ -1008,10 +1014,12 @@ function selectPercentileValue(values: readonly number[], percentile: Simulation
 function buildRealizedInflationPath({
   yearlyPlans,
   inflation,
+  nextStandardNormal,
   nextRandom,
 }: {
   yearlyPlans: readonly SimulationYearlyPlan[];
   inflation: SimulationInflationConfig;
+  nextStandardNormal: () => number;
   nextRandom: () => number;
 }): RealizedYearlyPlan[] {
   const realizedPlans: RealizedYearlyPlan[] = [];
@@ -1036,7 +1044,7 @@ function buildRealizedInflationPath({
         netAmount: yearlyPlan.legacySnapshot.netAmount,
         totalExpenses: yearlyPlan.legacySnapshot.totalExpenses,
         householdTaxInput: cloneHouseholdTaxInput(yearlyPlan.legacySnapshot.householdTaxInput),
-        inflationRateApplied: inflation.mode === "fixed" ? inflation.fixedRate : inflation.lowRate,
+        inflationRateApplied: inflation.mode === "fixed" ? inflation.fixedRate : inflation.lowRegime.averageRate,
         inflationRegime: inflation.mode === "fixed" ? "fixed" : "low",
       });
       continue;
@@ -1059,7 +1067,7 @@ function buildRealizedInflationPath({
       }
 
       inflationRegime = currentRegime;
-      inflationRateApplied = currentRegime === "low" ? inflation.lowRate : inflation.highRate;
+      inflationRateApplied = sampleInflationRateForRegime(currentRegime, inflation, nextStandardNormal);
       if (yearIndex > 0) {
         cumulativeInflationMultiplier *= 1 + inflationRateApplied;
       }
@@ -1096,6 +1104,19 @@ function buildRealizedInflationPath({
   }
 
   return realizedPlans;
+}
+
+function sampleInflationRateForRegime(
+  regime: "low" | "high",
+  inflation: SimulationRegimeSwitchingInflationConfig,
+  nextStandardNormal: () => number
+): number {
+  const regimeSettings = regime === "low" ? inflation.lowRegime : inflation.highRegime;
+  const sampledRate =
+    regimeSettings.volatility > 0
+      ? regimeSettings.averageRate + regimeSettings.volatility * nextStandardNormal()
+      : regimeSettings.averageRate;
+  return clampAnnualReturn(sampledRate);
 }
 
 function selectInitialInflationRegime(

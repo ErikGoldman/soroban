@@ -261,8 +261,10 @@ interface SimulationDraft {
   inflationPreset: SimulationInflationPreset;
   fixedInflationRate: string;
   regimeSwitchingInflation: {
-    lowRate: string;
-    highRate: string;
+    lowAverageRate: string;
+    lowVolatility: string;
+    highAverageRate: string;
+    highVolatility: string;
     stayLowProbability: string;
     stayHighProbability: string;
   };
@@ -331,8 +333,10 @@ const ENABLE_VARIABLE_SWEEP_WORKER_FANOUT = true;
 const VARIABLE_SWEEP_DETAIL_SAMPLE_LIMIT = 128;
 const DEFAULT_SIMULATION_FIXED_INFLATION_RATE = "2.5";
 const DEFAULT_SIMULATION_REGIME_INFLATION = {
-  lowRate: "2.5",
-  highRate: "6",
+  lowAverageRate: "2.5",
+  lowVolatility: "1",
+  highAverageRate: "6",
+  highVolatility: "2",
   stayLowProbability: "90",
   stayHighProbability: "60",
 } as const;
@@ -533,6 +537,37 @@ function normalizeSimulationInflationPreset(
   }
 
   return "regime";
+}
+
+function getSavedRegimeSwitchingInflationValue(
+  regimeSwitching:
+    | {
+        lowAverageRate?: number;
+        lowVolatility?: number;
+        highAverageRate?: number;
+        highVolatility?: number;
+        lowRate?: number;
+        highRate?: number;
+        stayLowProbability?: number;
+        stayHighProbability?: number;
+      }
+    | undefined,
+  field:
+    | "lowAverageRate"
+    | "lowVolatility"
+    | "highAverageRate"
+    | "highVolatility"
+    | "stayLowProbability"
+    | "stayHighProbability"
+): number | null {
+  const rawValue =
+    field === "lowAverageRate"
+      ? regimeSwitching?.lowAverageRate ?? regimeSwitching?.lowRate
+      : field === "highAverageRate"
+        ? regimeSwitching?.highAverageRate ?? regimeSwitching?.highRate
+        : regimeSwitching?.[field];
+
+  return typeof rawValue === "number" && Number.isFinite(rawValue) ? rawValue : null;
 }
 
 function createTaxRateDraft(): TaxRateDraft {
@@ -1316,8 +1351,14 @@ function buildSimulationInflationConfig(): SimulationInflationConfig {
   if (simulationDraft.inflationPreset === "regime") {
     return {
       mode: "regime-switching",
-      lowRate: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.lowRate) / 100,
-      highRate: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.highRate) / 100,
+      lowRegime: {
+        averageRate: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.lowAverageRate) / 100,
+        volatility: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.lowVolatility) / 100,
+      },
+      highRegime: {
+        averageRate: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.highAverageRate) / 100,
+        volatility: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.highVolatility) / 100,
+      },
       stayLowProbability: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.stayLowProbability) / 100,
       stayHighProbability: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.stayHighProbability) / 100,
     };
@@ -1326,8 +1367,14 @@ function buildSimulationInflationConfig(): SimulationInflationConfig {
   if (simulationDraft.inflationPreset === "regime-custom") {
     return {
       mode: "regime-switching",
-      lowRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate) / 100,
-      highRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate) / 100,
+      lowRegime: {
+        averageRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowAverageRate) / 100,
+        volatility: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowVolatility) / 100,
+      },
+      highRegime: {
+        averageRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.highAverageRate) / 100,
+        volatility: parseEditableNumber(simulationDraft.regimeSwitchingInflation.highVolatility) / 100,
+      },
       stayLowProbability: parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability) / 100,
       stayHighProbability: parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability) / 100,
     };
@@ -2362,15 +2409,33 @@ function getSimulationSubmitState(): { disabled: boolean; reason: string } {
       };
     }
   } else if (simulationDraft.inflationPreset === "regime-custom") {
-    const lowRate = parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate);
-    const highRate = parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate);
+    const lowAverageRate = parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowAverageRate);
+    const lowVolatility = parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowVolatility);
+    const highAverageRate = parseEditableNumber(simulationDraft.regimeSwitchingInflation.highAverageRate);
+    const highVolatility = parseEditableNumber(simulationDraft.regimeSwitchingInflation.highVolatility);
     const stayLowProbability = parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability);
     const stayHighProbability = parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability);
 
-    if (![lowRate, highRate, stayLowProbability, stayHighProbability].every(Number.isFinite)) {
+    if (
+      ![
+        lowAverageRate,
+        lowVolatility,
+        highAverageRate,
+        highVolatility,
+        stayLowProbability,
+        stayHighProbability,
+      ].every(Number.isFinite)
+    ) {
       return {
         disabled: true,
         reason: "All regime-switching inflation fields must be finite numbers.",
+      };
+    }
+
+    if (lowVolatility < 0 || highVolatility < 0) {
+      return {
+        disabled: true,
+        reason: "Inflation regime volatilities must be zero or greater.",
       };
     }
 
@@ -2731,11 +2796,17 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
       ...(getSimulationInflationModeForPreset(simulationDraft.inflationPreset) === "regime-switching"
         ? {
             regimeSwitching: {
-              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate))
-                ? { lowRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate) }
+              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowAverageRate))
+                ? { lowAverageRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowAverageRate) }
                 : {}),
-              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate))
-                ? { highRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate) }
+              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowVolatility))
+                ? { lowVolatility: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowVolatility) }
+                : {}),
+              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.highAverageRate))
+                ? { highAverageRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.highAverageRate) }
+                : {}),
+              ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.highVolatility))
+                ? { highVolatility: parseEditableNumber(simulationDraft.regimeSwitchingInflation.highVolatility) }
                 : {}),
               ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability))
                 ? { stayLowProbability: parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability) }
@@ -3152,7 +3223,7 @@ function getSimulationInflationSummary(): string {
     return "Default";
   }
 
-  return `Regime ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate))}-${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate))}%, ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability))}%/${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability))}%`;
+  return `Regime low ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowAverageRate))}% +/- ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowVolatility))}%, high ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.highAverageRate))}% +/- ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.highVolatility))}%, ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability))}%/${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability))}%`;
 }
 
 function getSimulationTaxPresetLabel(): string {
@@ -3308,22 +3379,38 @@ function renderSimulationBoard(): string {
                 </label>
                     `
                     : `
-                <p class="helper-copy">Expenses switch between low and high annual inflation regimes once per simulated year.</p>
+                <p class="helper-copy">Each simulated year picks a low or high inflation regime, then samples that year's inflation from the regime's average and volatility.</p>
                 <div class="simulation-sweep-fields">
                   <label>
-                    Low rate (%)
+                    Low average (%)
                     <input
-                      name="simulationInflationLowRate"
+                      name="simulationInflationLowAverageRate"
                       ${renderEditableNumberInputAttributes()}
-                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.lowRate))}"
+                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.lowAverageRate))}"
                     />
                   </label>
                   <label>
-                    High rate (%)
+                    Low volatility (%)
                     <input
-                      name="simulationInflationHighRate"
+                      name="simulationInflationLowVolatility"
                       ${renderEditableNumberInputAttributes()}
-                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.highRate))}"
+                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.lowVolatility))}"
+                    />
+                  </label>
+                  <label>
+                    High average (%)
+                    <input
+                      name="simulationInflationHighAverageRate"
+                      ${renderEditableNumberInputAttributes()}
+                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.highAverageRate))}"
+                    />
+                  </label>
+                  <label>
+                    High volatility (%)
+                    <input
+                      name="simulationInflationHighVolatility"
+                      ${renderEditableNumberInputAttributes()}
+                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.highVolatility))}"
                     />
                   </label>
                   <label>
@@ -4812,10 +4899,14 @@ function bindHandlers(user: UserIdentity): void {
       return;
     } else if (target.name === "simulationFixedInflationRate") {
       simulationDraft.fixedInflationRate = target.value;
-    } else if (target.name === "simulationInflationLowRate") {
-      simulationDraft.regimeSwitchingInflation.lowRate = target.value;
-    } else if (target.name === "simulationInflationHighRate") {
-      simulationDraft.regimeSwitchingInflation.highRate = target.value;
+    } else if (target.name === "simulationInflationLowAverageRate") {
+      simulationDraft.regimeSwitchingInflation.lowAverageRate = target.value;
+    } else if (target.name === "simulationInflationLowVolatility") {
+      simulationDraft.regimeSwitchingInflation.lowVolatility = target.value;
+    } else if (target.name === "simulationInflationHighAverageRate") {
+      simulationDraft.regimeSwitchingInflation.highAverageRate = target.value;
+    } else if (target.name === "simulationInflationHighVolatility") {
+      simulationDraft.regimeSwitchingInflation.highVolatility = target.value;
     } else if (target.name === "simulationInflationStayLowProbability") {
       simulationDraft.regimeSwitchingInflation.stayLowProbability = target.value;
     } else if (target.name === "simulationInflationStayHighProbability") {
@@ -7686,25 +7777,41 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
       : typeof partialState.simulationInflationRate === "number" && Number.isFinite(partialState.simulationInflationRate)
         ? formatEditableNumberInput(String(partialState.simulationInflationRate))
         : fallbackSimulationDraft.fixedInflationRate;
-  simulationDraft.regimeSwitchingInflation.lowRate =
-    typeof partialState.simulationInflation?.regimeSwitching?.lowRate === "number" &&
-    Number.isFinite(partialState.simulationInflation.regimeSwitching.lowRate)
-      ? formatEditableNumberInput(String(partialState.simulationInflation.regimeSwitching.lowRate))
-      : fallbackSimulationDraft.regimeSwitchingInflation.lowRate;
-  simulationDraft.regimeSwitchingInflation.highRate =
-    typeof partialState.simulationInflation?.regimeSwitching?.highRate === "number" &&
-    Number.isFinite(partialState.simulationInflation.regimeSwitching.highRate)
-      ? formatEditableNumberInput(String(partialState.simulationInflation.regimeSwitching.highRate))
-      : fallbackSimulationDraft.regimeSwitchingInflation.highRate;
+  simulationDraft.regimeSwitchingInflation.lowAverageRate =
+    getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "lowAverageRate") !== null
+      ? formatEditableNumberInput(
+          String(getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "lowAverageRate"))
+        )
+      : fallbackSimulationDraft.regimeSwitchingInflation.lowAverageRate;
+  simulationDraft.regimeSwitchingInflation.lowVolatility =
+    getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "lowVolatility") !== null
+      ? formatEditableNumberInput(
+          String(getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "lowVolatility"))
+        )
+      : fallbackSimulationDraft.regimeSwitchingInflation.lowVolatility;
+  simulationDraft.regimeSwitchingInflation.highAverageRate =
+    getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "highAverageRate") !== null
+      ? formatEditableNumberInput(
+          String(getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "highAverageRate"))
+        )
+      : fallbackSimulationDraft.regimeSwitchingInflation.highAverageRate;
+  simulationDraft.regimeSwitchingInflation.highVolatility =
+    getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "highVolatility") !== null
+      ? formatEditableNumberInput(
+          String(getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "highVolatility"))
+        )
+      : fallbackSimulationDraft.regimeSwitchingInflation.highVolatility;
   simulationDraft.regimeSwitchingInflation.stayLowProbability =
-    typeof partialState.simulationInflation?.regimeSwitching?.stayLowProbability === "number" &&
-    Number.isFinite(partialState.simulationInflation.regimeSwitching.stayLowProbability)
-      ? formatEditableNumberInput(String(partialState.simulationInflation.regimeSwitching.stayLowProbability))
+    getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "stayLowProbability") !== null
+      ? formatEditableNumberInput(
+          String(getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "stayLowProbability"))
+        )
       : fallbackSimulationDraft.regimeSwitchingInflation.stayLowProbability;
   simulationDraft.regimeSwitchingInflation.stayHighProbability =
-    typeof partialState.simulationInflation?.regimeSwitching?.stayHighProbability === "number" &&
-    Number.isFinite(partialState.simulationInflation.regimeSwitching.stayHighProbability)
-      ? formatEditableNumberInput(String(partialState.simulationInflation.regimeSwitching.stayHighProbability))
+    getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "stayHighProbability") !== null
+      ? formatEditableNumberInput(
+          String(getSavedRegimeSwitchingInflationValue(partialState.simulationInflation?.regimeSwitching, "stayHighProbability"))
+        )
       : fallbackSimulationDraft.regimeSwitchingInflation.stayHighProbability;
   simulationDraft.variableSweep.enabled = partialState.simulationVariableSweep?.enabled === true;
   simulationDraft.variableSweep.variableName =

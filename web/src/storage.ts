@@ -168,6 +168,10 @@ export interface SavedPlannerState {
     mode?: "fixed" | "regime-switching";
     fixedRate?: number;
     regimeSwitching?: {
+      lowAverageRate?: number;
+      lowVolatility?: number;
+      highAverageRate?: number;
+      highVolatility?: number;
       lowRate?: number;
       highRate?: number;
       stayLowProbability?: number;
