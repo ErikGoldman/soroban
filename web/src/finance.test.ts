@@ -320,6 +320,40 @@ describe("Asset", () => {
     });
   });
 
+  it("captures an interest-only maturity action for home assets", () => {
+    const asset = new Asset({
+      kind: "home",
+      name: "IO residence",
+      initialCost: 800000,
+      expectedReturn: 4,
+      volatility: 12,
+      cashPurchasePercent: 0.2,
+      mortgageType: "interest-only",
+      interestOnlyMaturityAction: "sell",
+      mortgageRate: 6.5,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1200,
+      propertyTaxRate: 1.25,
+      purchaseYear: 2024,
+    });
+
+    expect(asset.toDefinition()).toEqual({
+      kind: "home",
+      name: "IO residence",
+      initialCost: 800000,
+      expectedReturn: 4,
+      volatility: 12,
+      cashPurchasePercent: 0.2,
+      mortgageType: "interest-only",
+      interestOnlyMaturityAction: "sell",
+      mortgageRate: 6.5,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1200,
+      propertyTaxRate: 1.25,
+      purchaseYear: 2024,
+    });
+  });
+
   it("rejects non-finite asset inputs", () => {
     expect(() =>
       new Asset({
@@ -361,6 +395,16 @@ describe("Asset", () => {
         },
       })
     ).toThrow('Cost basis for asset "Broken asset" cannot be negative.');
+
+    expect(() =>
+      new Asset({
+        name: "Broken asset",
+        startingValue: 1000,
+        expectedReturn: 7,
+        volatility: 12,
+        sellProportion: -0.5,
+      })
+    ).toThrow('Sell multiplier for asset "Broken asset" cannot be negative.');
   });
 
   it("supports multiple cash generation streams on one asset", () => {
@@ -450,6 +494,21 @@ describe("Asset", () => {
 
     expect(result.assets.map((asset) => asset.name)).toEqual(["Bonds", "Cash"]);
     expect(result.correlations).toEqual([{ assetA: "Bonds", assetB: "Cash", correlation: 0.2 }]);
+  });
+
+  it("allows sell multipliers above one", () => {
+    const asset = new Asset({
+      name: "Tilting fund",
+      startingValue: 5000,
+      expectedReturn: 6,
+      volatility: 10,
+      sellProportion: 2.5,
+    });
+
+    expect(asset.toDefinition()).toMatchObject({
+      name: "Tilting fund",
+      sellProportion: 2.5,
+    });
   });
 });
 

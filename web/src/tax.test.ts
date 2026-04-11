@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { calculateTax, computeHouseholdTaxes, createDefaultHouseholdTaxProfile, Tax, TaxExclusion, TaxRate } from "./tax.js";
+import {
+  calculateTax,
+  computeHouseholdTaxes,
+  createDefaultHouseholdTaxProfile,
+  normalizeFilingStatus,
+  Tax,
+  TaxExclusion,
+  TaxRate,
+} from "./tax.js";
+
+describe("normalizeFilingStatus", () => {
+  it("maps legacy filing statuses onto the supported filing options", () => {
+    expect(normalizeFilingStatus("single")).toBe("individual");
+    expect(normalizeFilingStatus("head-of-household")).toBe("individual");
+    expect(normalizeFilingStatus("married-filing-separately")).toBe("individual");
+    expect(normalizeFilingStatus("married-filing-jointly")).toBe("married-couple-jointly");
+  });
+});
 
 describe("TaxRate", () => {
   it("rejects invalid rate inputs", () => {
@@ -242,7 +259,7 @@ describe("computeHouseholdTaxes", () => {
     expect(result.totalTax).toBeCloseTo(60, 6);
   });
 
-  it("does not let net capital losses reduce ordinary taxable income below zero", () => {
+  it("applies the annual capital-loss deduction without reducing ordinary taxable income below zero", () => {
     const profile = {
       ...createDefaultHouseholdTaxProfile(),
       federalStandardDeduction: 0,
@@ -273,9 +290,42 @@ describe("computeHouseholdTaxes", () => {
       taxes
     );
 
-    expect(result.federalOrdinaryTaxableIncome).toBe(1000);
+    expect(result.federalOrdinaryTaxableIncome).toBe(0);
     expect(result.federalPreferentialIncome).toBe(0);
-    expect(result.totalTax).toBeCloseTo(200, 6);
+    expect(result.totalTax).toBeCloseTo(0, 6);
+  });
+
+  it("uses the full annual capital-loss deduction for individual filing", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      filingStatus: "individual" as const,
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "Federal ordinary income",
+      federalQualifiedTaxName: "",
+      stateTaxName: "",
+      localTaxName: "",
+      niitTaxName: "",
+    };
+    const taxes = [new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.2 }] })];
+
+    const result = computeHouseholdTaxes(
+      {
+        wages: 2000,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: -2000,
+        longTermCapitalGains: 0,
+        taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
+        deductibleExpenses: 0,
+      },
+      profile,
+      taxes
+    );
+
+    expect(result.federalOrdinaryTaxableIncome).toBe(0);
+    expect(result.totalTax).toBeCloseTo(0, 6);
   });
 
   it("limits NIIT to MAGI above the threshold when investment income is larger", () => {

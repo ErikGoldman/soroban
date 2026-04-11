@@ -62,7 +62,7 @@ function createScenarioPlannerState(): ScenarioPlannerState {
       },
     ],
     taxProfile: {
-      filingStatus: "married-filing-jointly",
+      filingStatus: "married-couple-jointly",
       deductionMode: "itemized",
       federalStandardDeduction: 29200,
       otherSaltTaxesPaid: 12000,

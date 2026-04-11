@@ -21,6 +21,13 @@ import {
   type SimulationScenario,
 } from "./simulation.js";
 import {
+  getSimulationAssetReturnEntries,
+  getSimulationAssetValueEntries,
+  getSimulationCashFlowEntries,
+  getSimulationSaleEntries,
+  getVisibleSimulationFlowEntries,
+} from "./simulation-detail.js";
+import {
   Asset,
   Event,
   Flow,
@@ -59,6 +66,7 @@ import {
   type FilingStatus,
   type HouseholdTaxInput,
   type HouseholdTaxProfileDefinition,
+  normalizeFilingStatus,
   type TaxDefinition,
   type TaxExclusionDefinition,
   type TaxRateDefinition,
@@ -156,6 +164,7 @@ interface AssetDraft {
   initialCost: string;
   cashPurchasePercent: string;
   mortgageType: "amortizing" | "interest-only";
+  interestOnlyMaturityAction: "payoff" | "refinance" | "sell";
   mortgageRate: string;
   mortgageTermYears: string;
   monthlyNonTaxCosts: string;
@@ -409,6 +418,7 @@ function createAssetDraft(): AssetDraft {
     initialCost: "0",
     cashPurchasePercent: "20",
     mortgageType: "amortizing",
+    interestOnlyMaturityAction: "payoff",
     mortgageRate: "6",
     mortgageTermYears: "30",
     monthlyNonTaxCosts: "0",
@@ -558,6 +568,10 @@ function buildAssetDraftFromDefinition(asset: AssetDefinition): AssetDraft {
     initialCost: String(isHomeAsset(asset) ? asset.initialCost : 0),
     cashPurchasePercent: String(isHomeAsset(asset) ? asset.cashPurchasePercent * 100 : 20),
     mortgageType: isHomeAsset(asset) ? asset.mortgageType ?? "amortizing" : "amortizing",
+    interestOnlyMaturityAction:
+      isHomeAsset(asset) && asset.mortgageType === "interest-only"
+        ? asset.interestOnlyMaturityAction ?? "payoff"
+        : "payoff",
     mortgageRate: String(isHomeAsset(asset) ? asset.mortgageRate : 6),
     mortgageTermYears: String(isHomeAsset(asset) ? asset.mortgageTermYears : 30),
     monthlyNonTaxCosts: String(isHomeAsset(asset) ? asset.monthlyNonTaxCosts : 0),
@@ -593,6 +607,8 @@ function migratePersistedAsset(
       volatility: asset.volatility,
       cashPurchasePercent: asset.cashPurchasePercent ?? 0,
       mortgageType: asset.mortgageType ?? "amortizing",
+      interestOnlyMaturityAction:
+        asset.mortgageType === "interest-only" ? asset.interestOnlyMaturityAction ?? "payoff" : undefined,
       mortgageRate: asset.mortgageRate ?? 0,
       mortgageTermYears: asset.mortgageTermYears ?? 30,
       monthlyNonTaxCosts: asset.monthlyNonTaxCosts ?? 0,
@@ -607,34 +623,6 @@ function migratePersistedAsset(
       : asset.cashGeneration
         ? [asset.cashGeneration]
         : [];
-  const legacyTaxNames = persistedCashGenerations.flatMap((cashGeneration) => cashGeneration.taxNames ?? []);
-  const legacySaleTaxNames = asset.saleTax?.taxNames ?? [];
-  const inferredCashGenerationTaxTreatment: AssetCashTaxTreatment =
-    legacyTaxNames.some((name) => /qualified|capital/i.test(name))
-      ? "qualified-dividends"
-      : legacyTaxNames.some((name) => /exempt/i.test(name))
-        ? "tax-exempt-income"
-        : "ordinary-income";
-  const inferredSaleTaxTreatment: AssetSaleTaxTreatment =
-    legacySaleTaxNames.some((name) => /short/i.test(name))
-      ? "short-term-capital-gains"
-      : legacySaleTaxNames.some((name) => /capital|qualified/i.test(name))
-        ? "long-term-capital-gains"
-        : "long-term-capital-gains";
-
-  const migratedSaleTax =
-    asset.saleTax === undefined
-      ? undefined
-      : {
-          costBasis:
-            typeof asset.saleTax.costBasis === "number"
-              ? asset.saleTax.costBasis
-              : (asset.startingValue ?? 0) * (1 - Math.max(0, Math.min(1, asset.saleTax.taxableGainProportion ?? 0))),
-          taxTreatment:
-            "taxTreatment" in asset.saleTax && asset.saleTax.taxTreatment
-              ? asset.saleTax.taxTreatment
-              : inferredSaleTaxTreatment,
-        };
 
   return new Asset({
     name: asset.name,
@@ -644,22 +632,71 @@ function migratePersistedAsset(
     sellProportion:
       typeof asset.sellProportion === "number" && Number.isFinite(asset.sellProportion)
         ? asset.sellProportion
-        : 0,
+        : 1,
     ...(persistedCashGenerations.length > 0
       ? {
           cashGenerations: persistedCashGenerations.map((cashGeneration, index) => ({
             name: cashGeneration.name ?? `Cash generation ${index + 1}`,
             rate: cashGeneration.rate,
             volatility: cashGeneration.volatility,
-            taxTreatment:
-              "taxTreatment" in cashGeneration && cashGeneration.taxTreatment
-                ? cashGeneration.taxTreatment
-                : inferredCashGenerationTaxTreatment,
+            taxTreatment: cashGeneration.taxTreatment ?? "ordinary-income",
           })),
         }
       : {}),
-    ...(migratedSaleTax ? { saleTax: migratedSaleTax } : {}),
+    ...(asset.saleTax
+      ? {
+          saleTax: {
+            costBasis: asset.saleTax.costBasis ?? 0,
+            taxTreatment: asset.saleTax.taxTreatment ?? "long-term-capital-gains",
+          },
+        }
+      : {}),
   }).toDefinition();
+}
+
+function migratePersistedAssets(
+  assets: readonly SavedPlannerState["assets"][number][],
+  assetSellWeightMode: SavedPlannerState["assetSellWeightMode"] | undefined
+): AssetDefinition[] {
+  const migratedAssets = assets.map((asset) => migratePersistedAsset(asset));
+
+  if (assetSellWeightMode === "portfolio-proportion-multiplier") {
+    return migratedAssets;
+  }
+
+  const investmentAssets = migratedAssets.filter(isInvestmentAsset);
+  if (investmentAssets.length === 0) {
+    return migratedAssets;
+  }
+
+  const totalLegacySellProportion = investmentAssets.reduce((total, asset) => total + asset.sellProportion, 0);
+  const looksLikeLegacyPercentages = investmentAssets.every(
+    (asset) => asset.sellProportion >= 0 && asset.sellProportion <= 1.000001
+  );
+  if (!looksLikeLegacyPercentages || Math.abs(totalLegacySellProportion - 1) > 0.000001) {
+    return migratedAssets;
+  }
+
+  const totalStartingValue = investmentAssets.reduce((total, asset) => total + Math.max(0, asset.startingValue), 0);
+  return migratedAssets.map((asset) => {
+    if (!isInvestmentAsset(asset)) {
+      return asset;
+    }
+
+    if (asset.sellProportion <= 0.000001) {
+      return { ...asset, sellProportion: 0 };
+    }
+
+    if (totalStartingValue <= 0.000001 || asset.startingValue <= 0.000001) {
+      return { ...asset, sellProportion: 1 };
+    }
+
+    const portfolioShare = asset.startingValue / totalStartingValue;
+    return {
+      ...asset,
+      sellProportion: asset.sellProportion / portfolioShare,
+    };
+  });
 }
 
 function buildTaxProfileDefinitionFromSaved(
@@ -674,7 +711,7 @@ function buildTaxProfileDefinitionFromSaved(
   const availableTaxNames = new Set(taxes.map((tax) => tax.name));
 
   return {
-    filingStatus: next.filingStatus,
+    filingStatus: normalizeFilingStatus(next.filingStatus),
     deductionMode: next.deductionMode,
     federalStandardDeduction: Number(next.federalStandardDeduction) || fallback.federalStandardDeduction,
     otherSaltTaxesPaid: Number((savedProfile as { saltDeduction?: number } | undefined)?.saltDeduction ?? next.otherSaltTaxesPaid) || 0,
@@ -841,6 +878,12 @@ function formatPercentage(value: number): string {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 2,
   }).format(value) + "%";
+}
+
+function formatMultiplier(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+  }).format(value) + "x";
 }
 
 function formatEditableNumber(value: number): string {
@@ -1195,7 +1238,7 @@ function syncSimulationDraftAssetRows(): void {
     const baseDraft = buildAssetDraftFromDefinition(asset);
     return {
       ...baseDraft,
-      sellProportion: existing?.sellProportion ?? String(isInvestmentAsset(asset) ? asset.sellProportion * 100 : 0),
+      sellProportion: existing?.sellProportion ?? String(isInvestmentAsset(asset) ? asset.sellProportion : 0),
     };
   });
   if (simulationDraft.assetRows.map((row) => row.name).join("|") !== previousNames) {
@@ -1297,6 +1340,11 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
             volatility: Number(asset.volatility),
             cashPurchasePercent: Number(asset.cashPurchasePercent) / 100,
             mortgageType: asset.mortgageType,
+            ...(asset.mortgageType === "interest-only"
+              ? {
+                  interestOnlyMaturityAction: asset.interestOnlyMaturityAction,
+                }
+              : {}),
             mortgageRate: Number(asset.mortgageRate),
             mortgageTermYears: Number(asset.mortgageTermYears),
             monthlyNonTaxCosts: Number(asset.monthlyNonTaxCosts),
@@ -1308,7 +1356,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
             startingValue: Number(asset.startingValue),
             expectedReturn: Number(asset.expectedReturn),
             volatility: Number(asset.volatility),
-            sellProportion: Number(asset.sellProportion) / 100,
+            sellProportion: Number(asset.sellProportion),
             ...(asset.cashGenerationEnabled
               ? {
                   cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
@@ -1644,7 +1692,7 @@ function renderSetupAssetArea(): string {
                 <span><strong>Type</strong>${isHomeAsset(asset) ? "Home" : "Investment"}</span>
                 <span><strong>Expected return</strong>${formatPercentage(asset.expectedReturn)}</span>
                 <span><strong>Volatility</strong>${formatPercentage(asset.volatility)}</span>
-                <span><strong>${isHomeAsset(asset) ? "Sale behavior" : "Sell proportion"}</strong>${isHomeAsset(asset) ? "Not sellable" : formatPercentage(isInvestmentAsset(asset) ? asset.sellProportion : 0)}</span>
+                <span><strong>${isHomeAsset(asset) ? "Sale behavior" : "Sell multiplier"}</strong>${isHomeAsset(asset) ? "Not sellable" : formatMultiplier(isInvestmentAsset(asset) ? asset.sellProportion : 0)}</span>
               </div>
             </article>
           `
@@ -1723,7 +1771,7 @@ function renderSetupExpenseArea(expenseRows: Array<{ flow: FlowDefinition; yearl
 
 function renderVariablesCard(): string {
   return `
-    <section class="panel workspace-sidecard">
+    <section class="panel workspace-section">
       <div class="workspace-section-header workspace-section-header-compact">
         <div class="panel-heading">
           <p class="kicker">Variables</p>
@@ -1747,6 +1795,21 @@ function renderVariablesCard(): string {
           )
           .join("")}
       </div>
+    </section>
+  `;
+}
+
+function renderTaxProfileCard(): string {
+  return `
+    <section class="panel workspace-section">
+      <div class="workspace-section-header workspace-section-header-compact">
+        <div class="panel-heading">
+          <p class="kicker">Taxes</p>
+          <h2>Household tax profile</h2>
+        </div>
+        <p class="helper-copy">Choose the filing assumption used by the tax preset and simulation calculations.</p>
+      </div>
+      ${renderTaxProfileEditor()}
     </section>
   `;
 }
@@ -1778,7 +1841,10 @@ function renderSetupBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAmoun
         </section>
       </div>
 
-      ${renderVariablesCard()}
+      <div class="workspace-sidecard setup-side">
+        ${renderVariablesCard()}
+        ${renderTaxProfileCard()}
+      </div>
     </div>
   `;
 }
@@ -1966,10 +2032,8 @@ function renderTaxProfileEditor(): string {
         <label>
           Filing status
           <select name="filingStatus">
-            <option value="single" ${taxProfileDraft.filingStatus === "single" ? "selected" : ""}>Single</option>
-            <option value="married-filing-jointly" ${taxProfileDraft.filingStatus === "married-filing-jointly" ? "selected" : ""}>Married filing jointly</option>
-            <option value="married-filing-separately" ${taxProfileDraft.filingStatus === "married-filing-separately" ? "selected" : ""}>Married filing separately</option>
-            <option value="head-of-household" ${taxProfileDraft.filingStatus === "head-of-household" ? "selected" : ""}>Head of household</option>
+            <option value="individual" ${taxProfileDraft.filingStatus === "individual" ? "selected" : ""}>Individual</option>
+            <option value="married-couple-jointly" ${taxProfileDraft.filingStatus === "married-couple-jointly" ? "selected" : ""}>Married couple jointly</option>
           </select>
         </label>
         <label>
@@ -2118,19 +2182,10 @@ function renderExpenseTaxTreatmentOptions(selectedValue: FlowTaxTreatment): stri
 }
 
 function getSimulationSubmitState(): { disabled: boolean; reason: string } {
-  const sellableAssets = simulationDraft.assetRows.filter((asset) => asset.kind !== "home");
-  const sellProportionTotal = sellableAssets.reduce((total, asset) => total + (Number(asset.sellProportion) || 0), 0);
   if (simulationDraft.assetRows.length === 0) {
     return {
       disabled: true,
       reason: "Create at least one asset to run a simulation.",
-    };
-  }
-
-  if (sellableAssets.length > 0 && Math.abs(sellProportionTotal - 100) > 0.000001) {
-    return {
-      disabled: true,
-      reason: `Sell proportions must add up to 100%. Current total: ${sellProportionTotal.toFixed(2)}%.`,
     };
   }
 
@@ -2314,17 +2369,10 @@ function buildSimulationExampleExport(
 ): string {
   const exportedRows = scenario.rows.map((row) => {
     const exampleYear = getExampleSimulationYear(detailScenario, row.yearNumber);
-    const visibleFlowTotals = exampleYear
-      ? [...exampleYear.flowTotals.entries()]
-          .filter(([, amount]) => Math.abs(amount) > 0.000001)
-          .sort((left, right) => compareSignedAmounts(left[1], right[1]))
-      : [];
-    const saleEntries = visibleFlowTotals.filter(
-      ([entryName]) => entryName.endsWith(" sale proceeds") || entryName.endsWith(" realized gain")
-    );
-    const operatingEntries = visibleFlowTotals.filter(
-      ([entryName]) => !entryName.endsWith(" sale proceeds") && !entryName.endsWith(" realized gain")
-    );
+    const visibleFlowTotals = exampleYear ? getVisibleSimulationFlowEntries(exampleYear) : [];
+    const saleEntries = exampleYear ? getSimulationSaleEntries(exampleYear) : [];
+    const cashFlowEntries = exampleYear ? getSimulationCashFlowEntries(exampleYear) : [];
+    const assetValueEntries = exampleYear ? getSimulationAssetValueEntries(exampleYear) : [];
     const assetReturns = exampleYear
       ? [...exampleYear.assetReturns.entries()]
           .filter(
@@ -2343,6 +2391,7 @@ function buildSimulationExampleExport(
           label: exampleYear.label,
           startingAssets: exampleYear.startingAssets,
           endingAssets: exampleYear.endingAssets,
+          liquidAssets: exampleYear.liquidAssets ?? 0,
           expenses: Math.max(0, exampleYear.totalExpenses - exampleYear.taxAmount),
           totalExpenses: exampleYear.totalExpenses,
           totalGains: exampleYear.totalGains,
@@ -2350,7 +2399,7 @@ function buildSimulationExampleExport(
           taxAmount: exampleYear.taxAmount,
           totalAssets: exampleYear.totalAssets,
           depletionProbability: exampleYear.depletionProbability,
-          cashFlows: operatingEntries.map(([label, amount]) => ({ label, amount })),
+          cashFlows: cashFlowEntries.map(({ label, amount }) => ({ label, amount })),
           assetReturns,
           taxInputs: {
             wages: exampleYear.householdTaxInput.wages,
@@ -2383,8 +2432,9 @@ function buildSimulationExampleExport(
               .sort((left, right) => right[1] - left[1])
               .map(([name, amount]) => ({ name, amount })),
           },
-          assetSales: saleEntries.map(([label, amount]) => ({ label, amount })),
-          assetValues: [...exampleYear.assetValues.entries()].map(([asset, amount]) => ({ asset, amount })),
+          assetSales: saleEntries.map(({ label, amount }) => ({ label, amount })),
+          assetValues: assetValueEntries.map(({ label, amount }) => ({ asset: label, amount })),
+          assetMarketValues: [...(exampleYear.assetMarketValues?.entries() ?? [])].map(([asset, amount]) => ({ asset, amount })),
           flowTotals: visibleFlowTotals.map(([label, amount]) => ({ label, amount })),
         }
       : null;
@@ -2450,6 +2500,11 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
             volatility: asset.volatility,
             cashPurchasePercent: asset.cashPurchasePercent,
             mortgageType: asset.mortgageType,
+            ...(asset.mortgageType === "interest-only"
+              ? {
+                  interestOnlyMaturityAction: asset.interestOnlyMaturityAction,
+                }
+              : {}),
             mortgageRate: asset.mortgageRate,
             mortgageTermYears: asset.mortgageTermYears,
             monthlyNonTaxCosts: asset.monthlyNonTaxCosts,
@@ -2482,6 +2537,7 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
               : {}),
           }
     ),
+    assetSellWeightMode: "portfolio-proportion-multiplier",
     taxes: snapshot.taxes.map((tax) => ({
       name: tax.name,
       taxRates: tax.taxRates.map((rate) => ({ ...rate })),
@@ -2535,49 +2591,13 @@ function getExampleSimulationYear(
   return detailScenario.rows.find((candidateRow) => candidateRow.yearNumber === yearNumber) ?? null;
 }
 
-function compareSignedAmounts(leftAmount: number, rightAmount: number): number {
-  const leftPositive = leftAmount > 0;
-  const rightPositive = rightAmount > 0;
-
-  if (leftPositive !== rightPositive) {
-    return leftPositive ? -1 : 1;
-  }
-
-  if (leftPositive) {
-    return rightAmount - leftAmount;
-  }
-
-  return leftAmount - rightAmount;
-}
-
 function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
-  const visibleFlowTotals = [...row.flowTotals.entries()]
-    .filter(([, amount]) => Math.abs(amount) > 0.000001)
-    .sort((left, right) => compareSignedAmounts(left[1], right[1]));
-  const saleEntries = visibleFlowTotals.filter(
+  const saleEntries = getVisibleSimulationFlowEntries(row).filter(
     ([entryName]) => entryName.endsWith(" sale proceeds") || entryName.endsWith(" realized gain")
   );
-  const operatingEntries = visibleFlowTotals.filter(
-    ([entryName]) => !entryName.endsWith(" sale proceeds") && !entryName.endsWith(" realized gain")
-  );
-  const assetReturnEntries = [...row.assetReturns.entries()]
-    .filter(
-    ([, assetReturn]) => Math.abs(assetReturn.amount) > 0.000001 || Math.abs(assetReturn.percentage) > 0.000001
-    )
-    .map(([assetName, assetReturn]) => ({
-      label: `${assetName} return`,
-      amount: assetReturn.amount,
-      detail: ` (${formatPercentage(assetReturn.percentage)})`,
-    }));
-  const cashFlowEntries = [
-    ...operatingEntries.map(([entryName, amount]) => ({
-      label: entryName,
-      amount,
-      detail: "",
-    })),
-    ...assetReturnEntries,
-  ].sort((left, right) => compareSignedAmounts(left.amount, right.amount));
-  const assetValueEntries = [...row.assetValues.entries()].sort((left, right) => right[1] - left[1]);
+  const cashFlowEntries = getSimulationCashFlowEntries(row);
+  const assetReturnEntries = getSimulationAssetReturnEntries(row);
+  const assetValueEntries = getSimulationAssetValueEntries(row);
   const expensesWithoutTaxes = Math.max(0, row.totalExpenses - row.taxAmount);
 
   return `
@@ -2598,12 +2618,16 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
                   <th>Ending assets</th>
                   <td>${formatCurrency(row.endingAssets)}</td>
                 </tr>
+                <tr>
+                  <th>Liquid assets</th>
+                  <td>${formatCurrency(row.liquidAssets ?? 0)}</td>
+                </tr>
                 ${assetValueEntries
                   .map(
-                    ([assetName, amount]) => `
+                    (entry) => `
                 <tr>
-                  <th>${escapeHtml(assetName)}</th>
-                  <td>${formatCurrency(amount)}</td>
+                  <th>${escapeHtml(entry.label)}</th>
+                  <td>${formatCurrency(entry.amount)}</td>
                 </tr>
                 `
                   )
@@ -2632,7 +2656,7 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
           <strong>Cash flows</strong>
           ${
             cashFlowEntries.length === 0
-              ? `<p class="helper-copy">No non-zero flows or asset returns were recorded for this example year.</p>`
+              ? `<p class="helper-copy">No non-zero cash flows were recorded for this example year.</p>`
               : `
           <div class="board-scroll">
             <table class="flow-table simulation-flow-detail-table">
@@ -2644,6 +2668,37 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
               </thead>
               <tbody>
                 ${cashFlowEntries
+                  .map(
+                    (entry) => `
+                      <tr>
+                        <th>${escapeHtml(entry.label)}</th>
+                        <td>${formatSignedCurrency(entry.amount)}${entry.detail}</td>
+                      </tr>
+                    `
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </div>
+              `
+          }
+        </section>
+        <section>
+          <strong>Asset returns</strong>
+          ${
+            assetReturnEntries.length === 0
+              ? `<p class="helper-copy">No unrealized asset returns were recorded for this example year.</p>`
+              : `
+          <div class="board-scroll">
+            <table class="flow-table simulation-flow-detail-table">
+              <thead>
+                <tr>
+                  <th>Entry</th>
+                  <th>Year total</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${assetReturnEntries
                   .map(
                     (entry) => `
                       <tr>
@@ -2952,11 +3007,12 @@ function renderSimulationBoard(): string {
           simulationDraft.assetRows.length === 0
             ? `<p class="helper-copy">Create at least one asset to run a simulation.</p>`
             : `
+        <p class="helper-copy">Assets are sold in proportion to their current portfolio weight. Use multipliers to tilt that weight. A multiplier of <code>1</code> keeps the current balance.</p>
         <div class="board-scroll">
           <table class="flow-table simulation-input-table">
             <thead>
               <tr>
-                <th>Sell proportion (%)</th>
+                <th>Sell multiplier</th>
                 <th>Asset</th>
                 <th>Starting value</th>
                 <th>Expected return (%)</th>
@@ -2971,7 +3027,7 @@ function renderSimulationBoard(): string {
                       <td>${
                         asset.kind === "home"
                           ? "Not sellable"
-                          : `<input type="number" min="0" max="100" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" />`
+                          : `<input type="number" min="0" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" />`
                       }</td>
                       <th>
                         <button type="button" class="link-button" data-edit-asset="${escapeHtml(asset.name)}">
@@ -3354,6 +3410,20 @@ function renderAssetCoreFields(draft: AssetDraft): string {
             <option value="interest-only" ${draft.mortgageType === "interest-only" ? "selected" : ""}>Interest-only</option>
           </select>
         </label>
+        ${
+          draft.mortgageType === "interest-only"
+            ? `
+        <label>
+          IO maturity action
+          <select name="interestOnlyMaturityAction">
+            <option value="payoff" ${draft.interestOnlyMaturityAction === "payoff" ? "selected" : ""}>Force payoff</option>
+            <option value="refinance" ${draft.interestOnlyMaturityAction === "refinance" ? "selected" : ""}>Auto refinance</option>
+            <option value="sell" ${draft.interestOnlyMaturityAction === "sell" ? "selected" : ""}>Auto sale</option>
+          </select>
+        </label>
+        `
+            : ""
+        }
         <label>
           Mortgage rate (%)
           <input name="mortgageRate" type="number" step="0.01" value="${escapeHtml(draft.mortgageRate)}" required />
@@ -4184,7 +4254,7 @@ function bindHandlers(user: UserIdentity): void {
       if (field === "sellProportion") {
         assetDraftRow.sellProportion = target.value;
         plannerState.assets = plannerState.assets.map((asset) =>
-          asset.name === assetName ? { ...asset, sellProportion: (Number(target.value) || 0) / 100 } : asset
+          asset.name === assetName ? { ...asset, sellProportion: Number(target.value) || 0 } : asset
         );
         invalidateSimulationState();
         syncSimulationSubmitState();
@@ -5309,6 +5379,13 @@ function bindAssetComposer(user: UserIdentity): void {
       assetDraft.cashPurchasePercent = target.value;
     } else if (target.name === "mortgageType") {
       assetDraft.mortgageType = target.value as AssetDraft["mortgageType"];
+      if (assetDraft.mortgageType !== "interest-only") {
+        assetDraft.interestOnlyMaturityAction = "payoff";
+      }
+      renderPlanner(user);
+      return;
+    } else if (target.name === "interestOnlyMaturityAction") {
+      assetDraft.interestOnlyMaturityAction = target.value as AssetDraft["interestOnlyMaturityAction"];
     } else if (target.name === "mortgageRate") {
       assetDraft.mortgageRate = target.value;
     } else if (target.name === "mortgageTermYears") {
@@ -5372,7 +5449,14 @@ function bindAssetComposer(user: UserIdentity): void {
   assetForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    plannerState.assets.push(buildAssetDefinition(assetDraft));
+    try {
+      const nextAsset = buildAssetDefinition(assetDraft);
+      assertAssetNameAvailable(nextAsset.name, null);
+      plannerState.assets.push(nextAsset);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Asset could not be saved.");
+      return;
+    }
     syncSimulationDraftAssetRows();
     invalidateSimulationState();
     closeAssetComposer();
@@ -5425,6 +5509,13 @@ function bindAssetEditor(user: UserIdentity): void {
       assetEditDraft.cashPurchasePercent = target.value;
     } else if (target.name === "mortgageType") {
       assetEditDraft.mortgageType = target.value as AssetDraft["mortgageType"];
+      if (assetEditDraft.mortgageType !== "interest-only") {
+        assetEditDraft.interestOnlyMaturityAction = "payoff";
+      }
+      renderPlanner(user);
+      return;
+    } else if (target.name === "interestOnlyMaturityAction") {
+      assetEditDraft.interestOnlyMaturityAction = target.value as AssetDraft["interestOnlyMaturityAction"];
     } else if (target.name === "mortgageRate") {
       assetEditDraft.mortgageRate = target.value;
     } else if (target.name === "mortgageTermYears") {
@@ -5513,7 +5604,14 @@ function bindAssetEditor(user: UserIdentity): void {
   assetEditForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    updateAsset(assetEditDraft.originalName, buildAssetDefinition(assetEditDraft));
+    try {
+      const nextAsset = buildAssetDefinition(assetEditDraft);
+      assertAssetNameAvailable(nextAsset.name, assetEditDraft.originalName);
+      updateAsset(assetEditDraft.originalName, nextAsset);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Asset could not be saved.");
+      return;
+    }
     updateAssetCorrelations(assetEditDraft.originalName, assetEditDraft.name.trim(), assetEditDraft.correlations);
     syncSimulationDraftAssetRows();
     invalidateSimulationState();
@@ -6464,6 +6562,11 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
       volatility: Number(draft.volatility),
       cashPurchasePercent: Number(draft.cashPurchasePercent) / 100,
       mortgageType: draft.mortgageType,
+      ...(draft.mortgageType === "interest-only"
+        ? {
+            interestOnlyMaturityAction: draft.interestOnlyMaturityAction,
+          }
+        : {}),
       mortgageRate: Number(draft.mortgageRate),
       mortgageTermYears: Number(draft.mortgageTermYears),
       monthlyNonTaxCosts: parseEditableNumber(draft.monthlyNonTaxCosts),
@@ -6477,7 +6580,7 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
     startingValue: parseEditableNumber(draft.startingValue),
     expectedReturn: Number(draft.expectedReturn),
     volatility: Number(draft.volatility),
-    sellProportion: 0,
+    sellProportion: 1,
     ...(draft.cashGenerationEnabled
       ? {
           cashGenerations: draft.cashGenerations.map(
@@ -6499,6 +6602,34 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
         }
       : {}),
   }).toDefinition();
+}
+
+function assertAssetNameAvailable(assetName: string, originalName: string | null): void {
+  const normalizedName = assetName.trim();
+  if (!normalizedName) {
+    return;
+  }
+
+  const duplicate = plannerState.assets.find(
+    (asset) => asset.name === normalizedName && (originalName === null || asset.name !== originalName)
+  );
+  if (duplicate) {
+    throw new Error(`Asset name "${normalizedName}" is already in use.`);
+  }
+}
+
+function assertUniqueAssetNames(assets: readonly AssetDefinition[]): void {
+  const seenNames = new Set<string>();
+  for (const asset of assets) {
+    const normalizedName = asset.name.trim();
+    if (!normalizedName) {
+      continue;
+    }
+    if (seenNames.has(normalizedName)) {
+      throw new Error(`Asset name "${normalizedName}" is already in use.`);
+    }
+    seenNames.add(normalizedName);
+  }
 }
 
 function buildTaxDefinition(draft: TaxDraft): TaxDefinition {
@@ -6881,10 +7012,9 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
 
   plannerState.variables = Array.isArray(partialState.variables) ? partialState.variables : fallbackState.variables;
   plannerState.assets = Array.isArray(partialState.assets)
-    ? partialState.assets.map(
-        (asset) => migratePersistedAsset(asset)
-      )
+    ? migratePersistedAssets(partialState.assets, partialState.assetSellWeightMode)
     : fallbackState.assets;
+  assertUniqueAssetNames(plannerState.assets);
   plannerState.taxes = Array.isArray(partialState.taxes)
     ? partialState.taxes.map((tax) => buildNormalizedTaxDefinition(tax))
     : fallbackState.taxes;

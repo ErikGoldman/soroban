@@ -113,6 +113,48 @@ describe("buildSimulationScenarios", () => {
     expect(row?.assetReturns.get("Stocks")?.percentage).toBeCloseTo(10, 6);
   });
 
+  it("keeps home appreciation out of cash flows and tracks market value separately from equity", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          kind: "home",
+          name: "Home",
+          initialCost: 100,
+          expectedReturn: 10,
+          volatility: 0,
+          cashPurchasePercent: 0.2,
+          mortgageType: "amortizing",
+          mortgageRate: 0,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 2027,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Home return")).toBeUndefined();
+    expect(row?.assetReturns.get("Home")?.amount).toBeCloseTo(10, 6);
+    expect(row?.assetReturns.get("Home")?.percentage).toBeCloseTo(10, 6);
+    expect(row?.assetMarketValues?.get("Home")).toBeCloseTo(110, 6);
+    expect(row?.assetValues.get("Home")).toBeCloseTo(32.666666666666664, 6);
+  });
+
   it("carries forward reduced balances after a one-time first-year draw", () => {
     const scenarios = buildSimulationDetails({
       attempts: 1,
@@ -556,6 +598,7 @@ describe("buildSimulationScenarios", () => {
     expect(lossYear?.taxableGains).toBeCloseTo(-50, 6);
     expect(lossYear?.taxAmount).toBeCloseTo(0, 6);
     expect(lossYear?.householdTaxInput.longTermCapitalGains).toBeCloseTo(0, 6);
+    expect(lossYear?.householdTaxInput.capitalLossDeduction).toBeCloseTo(50, 6);
     expect(lossYear?.flowTotals.get("Loser realized gain")).toBeCloseTo(-50, 6);
     expect(lossYear?.flowTotals.get("Taxes paid")).toBeUndefined();
     expect(lossYear?.assetValues.get("Winner")).toBeCloseTo(100, 6);
@@ -563,11 +606,12 @@ describe("buildSimulationScenarios", () => {
 
     expect(gainYear?.startingAssets).toBeCloseTo(100, 6);
     expect(gainYear?.taxableGains).toBeCloseTo(50, 6);
-    expect(gainYear?.taxAmount).toBeCloseTo(0, 6);
-    expect(gainYear?.householdTaxInput.longTermCapitalGains).toBeCloseTo(0, 6);
-    expect(gainYear?.taxBreakdown.federalPreferentialIncome).toBeCloseTo(0, 6);
+    expect(gainYear?.taxAmount).toBeCloseTo(5, 6);
+    expect(gainYear?.householdTaxInput.longTermCapitalGains).toBeCloseTo(50, 6);
+    expect(gainYear?.householdTaxInput.capitalLossDeduction).toBeCloseTo(0, 6);
+    expect(gainYear?.taxBreakdown.federalPreferentialIncome).toBeCloseTo(50, 6);
     expect(gainYear?.flowTotals.get("Winner realized gain")).toBeCloseTo(50, 6);
-    expect(gainYear?.flowTotals.get("Taxes paid")).toBeUndefined();
+    expect(gainYear?.flowTotals.get("Taxes paid")).toBeCloseTo(-5, 6);
     expect(gainYear?.assetValues.get("Winner")).toBeCloseTo(0, 6);
   });
 
@@ -612,6 +656,86 @@ describe("buildSimulationScenarios", () => {
     expect(row?.taxableGains).toBeCloseTo(4.545454545454554, 6);
     expect(row?.endingAssets).toBeCloseTo(170, 6);
     expect(row?.totalGains).toBeCloseTo(20, 6);
+  });
+
+  it("sells in proportion to current portfolio weights when multipliers match", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -60,
+          totalExpenses: 60,
+          flowAmounts: new Map([["Living expenses", -60]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Stocks",
+          startingValue: 200,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          name: "Bonds",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Stocks sale proceeds")).toBeCloseTo(40, 6);
+    expect(row?.flowTotals.get("Bonds sale proceeds")).toBeCloseTo(20, 6);
+    expect(row?.assetValues.get("Stocks")).toBeCloseTo(160, 6);
+    expect(row?.assetValues.get("Bonds")).toBeCloseTo(80, 6);
+  });
+
+  it("uses sell multipliers to tilt proportional sales", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -60,
+          totalExpenses: 60,
+          flowAmounts: new Map([["Living expenses", -60]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Stocks",
+          startingValue: 200,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 0.5,
+        },
+        {
+          name: "Bonds",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 2,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Stocks sale proceeds")).toBeCloseTo(21.176470588235293, 6);
+    expect(row?.flowTotals.get("Bonds sale proceeds")).toBeCloseTo(38.82352941176471, 6);
+    expect(row?.assetValues.get("Stocks")).toBeCloseTo(178.8235294117647, 6);
+    expect(row?.assetValues.get("Bonds")).toBeCloseTo(61.17647058823529, 6);
   });
 
   it("does not report a stock price return percentage after dividends fund a full liquidation", () => {
@@ -831,6 +955,7 @@ describe("buildSimulationScenarios", () => {
     const row = scenarios[0]?.rows[0];
     expect(row?.assetValues.get("Portfolio")).toBeCloseTo(150, 6);
     expect(row?.assetValues.get("Home")).toBeCloseTo(100, 6);
+    expect(row?.liquidAssets).toBeCloseTo(150, 6);
     expect(row?.depleted).toBe(false);
     expect(row?.depletionProbability).toBeCloseTo(0, 6);
   });
@@ -984,6 +1109,182 @@ describe("buildSimulationScenarios", () => {
     expect(row?.flowTotals.get("IO Home mortgage principal") ?? 0).toBeCloseTo(0, 6);
     expect(row?.flowTotals.get("IO Home mortgage interest")).toBeCloseTo(-4800, 6);
     expect(row?.assetValues.get("IO Home")).toBeCloseTo(20000, 6);
+  });
+
+  it("forces an interest-only balloon payoff at maturity", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Reserve",
+          startingValue: 80000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          kind: "home",
+          name: "IO Home",
+          initialCost: 100000,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 0.2,
+          mortgageType: "interest-only",
+          interestOnlyMaturityAction: "payoff",
+          mortgageRate: 6,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 1997,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("IO Home mortgage balloon principal")).toBeCloseTo(-80000, 6);
+    expect(row?.flowTotals.get("Reserve sale proceeds")).toBeCloseTo(80000, 6);
+    expect(row?.assetValues.get("IO Home")).toBeCloseTo(100000, 6);
+    expect(row?.assetValues.get("Reserve")).toBeCloseTo(0, 6);
+  });
+
+  it("refinances an interest-only mortgage into an amortizing loan at maturity", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          kind: "home",
+          name: "IO Home",
+          initialCost: 100000,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 0.2,
+          mortgageType: "interest-only",
+          interestOnlyMaturityAction: "refinance",
+          mortgageRate: 6,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 1997,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("IO Home mortgage balloon principal")).toBeUndefined();
+    expect((row?.flowTotals.get("IO Home mortgage principal") ?? 0) < 0).toBe(true);
+    expect((row?.flowTotals.get("IO Home mortgage interest") ?? 0) < 0).toBe(true);
+    expect((row?.assetValues.get("IO Home") ?? 0) > 20000).toBe(true);
+  });
+
+  it("auto-sells an interest-only home at maturity and preserves the residual equity", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Reserve",
+          startingValue: 0,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          kind: "home",
+          name: "IO Home",
+          initialCost: 100000,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 0.2,
+          mortgageType: "interest-only",
+          interestOnlyMaturityAction: "sell",
+          mortgageRate: 6,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 1997,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("IO Home sale proceeds")).toBeCloseTo(100000, 6);
+    expect(row?.flowTotals.get("IO Home mortgage balloon principal")).toBeCloseTo(-80000, 6);
+    expect(row?.assetValues.get("IO Home")).toBeCloseTo(0, 6);
+    expect(row?.assetValues.get("Reserve")).toBeCloseTo(20000, 6);
+  });
+
+  it("rejects duplicate asset names before running a simulation", () => {
+    expect(() =>
+      buildSimulationDetails({
+        attempts: 1,
+        horizonYears: 1,
+        yearlySnapshots: [
+          {
+            label: "2027",
+            netAmount: 0,
+            totalExpenses: 0,
+            flowAmounts: new Map(),
+            householdTaxInput: createEmptyHouseholdTaxInput(),
+          },
+        ],
+        assets: [
+          {
+            name: "Duplicate",
+            startingValue: 100,
+            expectedReturn: 0,
+            volatility: 0,
+            sellProportion: 1,
+          },
+          {
+            name: "Duplicate",
+            startingValue: 50,
+            expectedReturn: 0,
+            volatility: 0,
+            sellProportion: 1,
+          },
+        ],
+        assetCorrelations: [],
+        nextStandardNormal: createDeterministicNormals([0, 0]),
+      })
+    ).toThrow('Asset name "Duplicate" is already in use.');
   });
 
   it("reinvests yearly surplus cash into the asset that generated it", () => {

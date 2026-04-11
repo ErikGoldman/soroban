@@ -42,6 +42,7 @@ export interface PersistedAssetDefinition {
   initialCost?: number;
   cashPurchasePercent?: number;
   mortgageType?: "amortizing" | "interest-only";
+  interestOnlyMaturityAction?: "payoff" | "refinance" | "sell";
   mortgageRate?: number;
   mortgageTermYears?: number;
   monthlyNonTaxCosts?: number;
@@ -58,7 +59,6 @@ export interface PersistedAssetDefinition {
       | "state-local-exempt"
       | "triple-exempt"
       | "not-taxable";
-    taxNames?: string[];
   };
   cashGenerations?: {
     name?: string;
@@ -71,13 +71,10 @@ export interface PersistedAssetDefinition {
       | "state-local-exempt"
       | "triple-exempt"
       | "not-taxable";
-    taxNames?: string[];
   }[];
   saleTax?: {
     costBasis?: number;
     taxTreatment?: "short-term-capital-gains" | "long-term-capital-gains" | "not-taxable";
-    taxableGainProportion?: number;
-    taxNames?: string[];
   };
 }
 
@@ -116,6 +113,7 @@ export interface SavedPlannerState {
   email: string;
   variables: PersistedVariableDefinition[];
   assets: PersistedAssetDefinition[];
+  assetSellWeightMode?: "portfolio-proportion-multiplier";
   taxes?: {
     name: string;
     taxRates: {
@@ -130,7 +128,13 @@ export interface SavedPlannerState {
     maximum?: number;
   }[];
   taxProfile?: {
-    filingStatus?: "single" | "married-filing-jointly" | "married-filing-separately" | "head-of-household";
+    filingStatus?:
+      | "individual"
+      | "married-couple-jointly"
+      | "single"
+      | "married-filing-jointly"
+      | "married-filing-separately"
+      | "head-of-household";
     deductionMode?: "standard" | "itemized";
     federalStandardDeduction?: number;
     saltDeduction?: number;

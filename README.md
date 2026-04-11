@@ -78,7 +78,7 @@ yarn test
 2. Add or edit variables, flows, assets, taxes, and scheduled events in the Setup view.
 3. Optionally load the NYC 2025 tax preset.
 4. Move to the Simulation view, choose the start year, horizon, and attempt count.
-5. Set asset sell proportions so they add up to `100%`.
+5. Optionally adjust each asset's sell multiplier. A multiplier of `1` sells in line with the asset's current portfolio weight.
 6. Run the simulation and review percentile paths, depletion probability, and detailed example years.
 
 ## Project structure
@@ -167,7 +167,7 @@ Official docs:
 - Persistence is local to the browser via IndexedDB. There is no backend sync, multi-user support, or server-side storage.
 - The simulation operates on yearly snapshots and annual return assumptions.
 - The simulation UI currently exposes a single tax preset option: `NYC`.
-- Simulations require at least one asset and sell proportions that sum to `100%`.
+- Simulations require at least one asset. By default, sales track current portfolio weights, and sell multipliers let you tilt that mix.
 
 ## Notes for future extension
 

@@ -38,6 +38,7 @@ export interface HomeAssetDefinition extends AssetDefinitionBase {
   initialCost: number;
   cashPurchasePercent: number;
   mortgageType: "amortizing" | "interest-only";
+  interestOnlyMaturityAction?: "payoff" | "refinance" | "sell";
   mortgageRate: number;
   mortgageTermYears: number;
   monthlyNonTaxCosts: number;
@@ -75,14 +76,11 @@ export interface AssetCashGenerationDefinition {
   rate: number;
   volatility: number;
   taxTreatment?: AssetCashTaxTreatment;
-  taxNames?: readonly string[];
 }
 
 export interface AssetSaleTaxDefinition {
   costBasis: number;
   taxTreatment?: AssetSaleTaxTreatment;
-  taxableGainProportion?: number;
-  taxNames?: readonly string[];
 }
 
 export interface AssetCorrelationDefinition {
@@ -141,6 +139,7 @@ export class Asset {
   readonly initialCost: number;
   readonly cashPurchasePercent: number;
   readonly mortgageType: "amortizing" | "interest-only";
+  readonly interestOnlyMaturityAction: "payoff" | "refinance" | "sell";
   readonly mortgageRate: number;
   readonly mortgageTermYears: number;
   readonly monthlyNonTaxCosts: number;
@@ -171,6 +170,7 @@ export class Asset {
       this.initialCost = normalizedHome.initialCost;
       this.cashPurchasePercent = normalizedHome.cashPurchasePercent;
       this.mortgageType = normalizedHome.mortgageType;
+      this.interestOnlyMaturityAction = normalizedHome.interestOnlyMaturityAction;
       this.mortgageRate = normalizedHome.mortgageRate;
       this.mortgageTermYears = normalizedHome.mortgageTermYears;
       this.monthlyNonTaxCosts = normalizedHome.monthlyNonTaxCosts;
@@ -180,10 +180,10 @@ export class Asset {
     }
 
     assertFiniteNumber(definition.startingValue, `Starting value for asset "${normalizedName}" must be finite.`);
-    assertFiniteNumber(definition.sellProportion, `Sell proportion for asset "${normalizedName}" must be finite.`);
+    assertFiniteNumber(definition.sellProportion, `Sell multiplier for asset "${normalizedName}" must be finite.`);
 
-    if (definition.sellProportion < 0 || definition.sellProportion > 1) {
-      throw new Error(`Sell proportion for asset "${normalizedName}" must be between 0 and 1.`);
+    if (definition.sellProportion < 0) {
+      throw new Error(`Sell multiplier for asset "${normalizedName}" cannot be negative.`);
     }
 
     const normalizedCashGenerations = normalizeAssetCashGenerations(
@@ -204,6 +204,7 @@ export class Asset {
     this.initialCost = 0;
     this.cashPurchasePercent = 0;
     this.mortgageType = "amortizing";
+    this.interestOnlyMaturityAction = "payoff";
     this.mortgageRate = 0;
     this.mortgageTermYears = 0;
     this.monthlyNonTaxCosts = 0;
@@ -219,6 +220,11 @@ export class Asset {
         initialCost: this.initialCost,
         cashPurchasePercent: this.cashPurchasePercent,
         mortgageType: this.mortgageType,
+        ...(this.mortgageType === "interest-only"
+          ? {
+              interestOnlyMaturityAction: this.interestOnlyMaturityAction,
+            }
+          : {}),
         mortgageRate: this.mortgageRate,
         mortgageTermYears: this.mortgageTermYears,
         monthlyNonTaxCosts: this.monthlyNonTaxCosts,
@@ -678,7 +684,9 @@ function normalizeAssetCashGenerations(
 function normalizeHomeAssetDefinition(
   assetName: string,
   definition: HomeAssetDefinition
-): Omit<HomeAssetDefinition, "name" | "expectedReturn" | "volatility" | "kind"> {
+): Omit<HomeAssetDefinition, "name" | "expectedReturn" | "volatility" | "kind"> & {
+  interestOnlyMaturityAction: "payoff" | "refinance" | "sell";
+} {
   assertFiniteNumber(definition.initialCost, `Initial cost for asset "${assetName}" must be finite.`);
   assertFiniteNumber(
     definition.cashPurchasePercent,
@@ -722,6 +730,7 @@ function normalizeHomeAssetDefinition(
     initialCost: definition.initialCost,
     cashPurchasePercent: definition.cashPurchasePercent,
     mortgageType: definition.mortgageType ?? "amortizing",
+    interestOnlyMaturityAction: definition.interestOnlyMaturityAction ?? "payoff",
     mortgageRate: definition.mortgageRate,
     mortgageTermYears: definition.mortgageTermYears,
     monthlyNonTaxCosts: definition.monthlyNonTaxCosts,

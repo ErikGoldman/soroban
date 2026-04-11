@@ -16,11 +16,15 @@ export interface TaxDefinition {
   maximum?: number;
 }
 
-export type FilingStatus =
+export type FilingStatus = "individual" | "married-couple-jointly";
+
+export type LegacyFilingStatus =
   | "single"
   | "married-filing-jointly"
   | "married-filing-separately"
   | "head-of-household";
+
+export type PersistedFilingStatus = FilingStatus | LegacyFilingStatus;
 
 export type DeductionMode = "standard" | "itemized";
 
@@ -50,6 +54,7 @@ export interface HouseholdTaxInput {
   qualifiedDividends: number;
   shortTermCapitalGains: number;
   longTermCapitalGains: number;
+  capitalLossDeduction?: number;
   taxExemptIncome: number;
   stateLocalExemptIncome: number;
   tripleExemptIncome: number;
@@ -99,6 +104,21 @@ export interface NetCapitalGainSummary {
   longTermCapitalGains: number;
   shortTermCapitalLossCarryforward: number;
   longTermCapitalLossCarryforward: number;
+  ordinaryIncomeDeduction: number;
+}
+
+export function normalizeFilingStatus(filingStatus: PersistedFilingStatus | undefined): FilingStatus {
+  switch (filingStatus) {
+    case "married-couple-jointly":
+    case "married-filing-jointly":
+      return "married-couple-jointly";
+    case "individual":
+    case "single":
+    case "married-filing-separately":
+    case "head-of-household":
+    default:
+      return "individual";
+  }
 }
 
 function assertFiniteNumber(value: number, message: string): void {
@@ -227,7 +247,7 @@ export class Tax {
 
 export function createDefaultHouseholdTaxProfile(): HouseholdTaxProfileDefinition {
   return {
-    filingStatus: "single",
+    filingStatus: "individual",
     deductionMode: "standard",
     federalStandardDeduction: 15000,
     otherSaltTaxesPaid: 0,
@@ -248,7 +268,7 @@ export function createDefaultHouseholdTaxProfile(): HouseholdTaxProfileDefinitio
 }
 
 export function createDefaultNYCHouseholdTaxes(
-  filingStatus: FilingStatus = "single"
+  filingStatus: FilingStatus = "individual"
 ): { profile: HouseholdTaxProfileDefinition; taxes: TaxDefinition[] } {
   return {
     profile: {
@@ -309,10 +329,12 @@ export function computeHouseholdTaxes(
   const wages = sanitizeAmount(input.wages);
   const ordinaryIncome = sanitizeAmount(input.ordinaryIncome);
   const qualifiedDividends = sanitizeAmount(input.qualifiedDividends);
-  const { shortTermCapitalGains, longTermCapitalGains } = summarizeNetCapitalGainAmounts(
+  const { shortTermCapitalGains, longTermCapitalGains, ordinaryIncomeDeduction } = summarizeNetCapitalGainAmounts(
     sanitizeSignedAmount(input.shortTermCapitalGains),
-    sanitizeSignedAmount(input.longTermCapitalGains)
+    sanitizeSignedAmount(input.longTermCapitalGains),
+    profile.filingStatus
   );
+  const capitalLossDeduction = Math.max(ordinaryIncomeDeduction, sanitizeAmount(input.capitalLossDeduction));
   const taxExemptIncome = sanitizeAmount(input.taxExemptIncome);
   const stateLocalExemptIncome = sanitizeAmount(input.stateLocalExemptIncome);
   const deductibleExpenses = sanitizeAmount(input.deductibleExpenses);
@@ -323,7 +345,8 @@ export function computeHouseholdTaxes(
     stateLocalExemptIncome +
     qualifiedDividends +
     shortTermCapitalGains +
-    longTermCapitalGains;
+    longTermCapitalGains -
+    capitalLossDeduction;
   const saltDeductionUsed = getSaltDeduction(
     profile,
     sanitizeAmount(input.saltTaxesPaid) + sanitizeAmount(profile.otherSaltTaxesPaid),
@@ -343,7 +366,7 @@ export function computeHouseholdTaxes(
   );
   const ordinaryTaxBase = Math.max(
     0,
-    wages + ordinaryIncome + stateLocalExemptIncome + shortTermCapitalGains - deductibleExpenses
+    wages + ordinaryIncome + stateLocalExemptIncome + shortTermCapitalGains - deductibleExpenses - capitalLossDeduction
   );
   const federalTaxableIncome = Math.max(0, ordinaryTaxBase + preferentialIncome - federalDeduction);
   const federalPreferentialIncome = Math.min(preferentialIncome, federalTaxableIncome);
@@ -356,6 +379,7 @@ export function computeHouseholdTaxes(
       preferentialIncome +
       taxExemptIncome -
       deductibleExpenses -
+      capitalLossDeduction -
       sanitizeAmount(profile.stateTaxableIncomeAdjustment)
   );
   const localTaxableIncome = Math.max(
@@ -366,6 +390,7 @@ export function computeHouseholdTaxes(
       preferentialIncome +
       taxExemptIncome -
       deductibleExpenses -
+      capitalLossDeduction -
       sanitizeAmount(profile.localTaxableIncomeAdjustment)
   );
   const netInvestmentIncome = Math.max(
@@ -385,6 +410,7 @@ export function computeHouseholdTaxes(
       qualifiedDividends +
       shortTermCapitalGains +
       longTermCapitalGains -
+      capitalLossDeduction -
       deductibleExpenses
   );
   const niitIncomeAboveThreshold = Math.max(0, modifiedAdjustedGrossIncome - sanitizeAmount(profile.niitThreshold));
@@ -435,7 +461,8 @@ function sanitizeSignedAmount(value: number | undefined): number {
 
 export function summarizeNetCapitalGainAmounts(
   shortTermCapitalGains: number,
-  longTermCapitalGains: number
+  longTermCapitalGains: number,
+  filingStatus: FilingStatus = "individual"
 ): NetCapitalGainSummary {
   assertFiniteNumber(shortTermCapitalGains, "Tax inputs must be finite.");
   assertFiniteNumber(longTermCapitalGains, "Tax inputs must be finite.");
@@ -453,11 +480,26 @@ export function summarizeNetCapitalGainAmounts(
     netLongTermCapitalGains -= offsetAmount;
   }
 
+  const shortTermCapitalLossCarryforward = Math.max(0, -netShortTermCapitalGains);
+  const longTermCapitalLossCarryforward = Math.max(0, -netLongTermCapitalGains);
+  const capitalLossDeductionLimit = 3000;
+  let remainingOrdinaryIncomeDeduction = Math.min(
+    capitalLossDeductionLimit,
+    shortTermCapitalLossCarryforward + longTermCapitalLossCarryforward
+  );
+  const shortTermLossAfterDeduction = Math.max(0, shortTermCapitalLossCarryforward - remainingOrdinaryIncomeDeduction);
+  remainingOrdinaryIncomeDeduction = Math.max(0, remainingOrdinaryIncomeDeduction - shortTermCapitalLossCarryforward);
+  const longTermLossAfterDeduction = Math.max(0, longTermCapitalLossCarryforward - remainingOrdinaryIncomeDeduction);
+
   return {
     shortTermCapitalGains: Math.max(0, netShortTermCapitalGains),
     longTermCapitalGains: Math.max(0, netLongTermCapitalGains),
-    shortTermCapitalLossCarryforward: Math.max(0, -netShortTermCapitalGains),
-    longTermCapitalLossCarryforward: Math.max(0, -netLongTermCapitalGains),
+    shortTermCapitalLossCarryforward: shortTermLossAfterDeduction,
+    longTermCapitalLossCarryforward: longTermLossAfterDeduction,
+    ordinaryIncomeDeduction: Math.min(
+      capitalLossDeductionLimit,
+      shortTermCapitalLossCarryforward + longTermCapitalLossCarryforward
+    ),
   };
 }
 
@@ -599,13 +641,9 @@ function calculateGraduatedTax(gains: number, taxRates: readonly TaxRate[]): num
 
 function getFederalStandardDeduction(filingStatus: FilingStatus): number {
   switch (filingStatus) {
-    case "married-filing-jointly":
+    case "married-couple-jointly":
       return 30000;
-    case "married-filing-separately":
-      return 15000;
-    case "head-of-household":
-      return 22500;
-    case "single":
+    case "individual":
     default:
       return 15000;
   }
@@ -613,12 +651,9 @@ function getFederalStandardDeduction(filingStatus: FilingStatus): number {
 
 function getNiitThreshold(filingStatus: FilingStatus): number {
   switch (filingStatus) {
-    case "married-filing-jointly":
+    case "married-couple-jointly":
       return 250000;
-    case "married-filing-separately":
-      return 125000;
-    case "head-of-household":
-    case "single":
+    case "individual":
     default:
       return 200000;
   }
@@ -631,16 +666,8 @@ function getSaltDeductionDefaults(filingStatus: FilingStatus): {
   saltDeductionPhaseoutRate: number;
 } {
   switch (filingStatus) {
-    case "married-filing-separately":
-      return {
-        saltDeductionBaseCap: 20000,
-        saltDeductionFloorCap: 5000,
-        saltDeductionPhaseoutThreshold: 250000,
-        saltDeductionPhaseoutRate: 0.3,
-      };
-    case "married-filing-jointly":
-    case "head-of-household":
-    case "single":
+    case "married-couple-jointly":
+    case "individual":
     default:
       return {
         saltDeductionBaseCap: 40000,
@@ -653,7 +680,7 @@ function getSaltDeductionDefaults(filingStatus: FilingStatus): {
 
 function getFederalOrdinaryRates(filingStatus: FilingStatus): TaxRateDefinition[] {
   switch (filingStatus) {
-    case "married-filing-jointly":
+    case "married-couple-jointly":
       return [
         { rate: 0.1, upTo: 23850 },
         { rate: 0.12, upTo: 96950 },
@@ -663,27 +690,7 @@ function getFederalOrdinaryRates(filingStatus: FilingStatus): TaxRateDefinition[
         { rate: 0.35, upTo: 751600 },
         { rate: 0.37 },
       ];
-    case "married-filing-separately":
-      return [
-        { rate: 0.1, upTo: 11925 },
-        { rate: 0.12, upTo: 48475 },
-        { rate: 0.22, upTo: 103350 },
-        { rate: 0.24, upTo: 197300 },
-        { rate: 0.32, upTo: 250525 },
-        { rate: 0.35, upTo: 375800 },
-        { rate: 0.37 },
-      ];
-    case "head-of-household":
-      return [
-        { rate: 0.1, upTo: 17000 },
-        { rate: 0.12, upTo: 64850 },
-        { rate: 0.22, upTo: 103350 },
-        { rate: 0.24, upTo: 197300 },
-        { rate: 0.32, upTo: 250500 },
-        { rate: 0.35, upTo: 626350 },
-        { rate: 0.37 },
-      ];
-    case "single":
+    case "individual":
     default:
       return [
         { rate: 0.1, upTo: 11925 },
@@ -699,25 +706,13 @@ function getFederalOrdinaryRates(filingStatus: FilingStatus): TaxRateDefinition[
 
 function getFederalQualifiedRates(filingStatus: FilingStatus): TaxRateDefinition[] {
   switch (filingStatus) {
-    case "married-filing-jointly":
+    case "married-couple-jointly":
       return [
         { rate: 0, upTo: 96700 },
         { rate: 0.15, upTo: 600050 },
         { rate: 0.2 },
       ];
-    case "married-filing-separately":
-      return [
-        { rate: 0, upTo: 48350 },
-        { rate: 0.15, upTo: 300000 },
-        { rate: 0.2 },
-      ];
-    case "head-of-household":
-      return [
-        { rate: 0, upTo: 64750 },
-        { rate: 0.15, upTo: 566700 },
-        { rate: 0.2 },
-      ];
-    case "single":
+    case "individual":
     default:
       return [
         { rate: 0, upTo: 48350 },
