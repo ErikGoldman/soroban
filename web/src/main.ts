@@ -1,5 +1,12 @@
 import { formatCurrency } from "./calculator.js";
 import { StubAuthService, type UserIdentity } from "./auth.js";
+import {
+  formatEditableNumberInput,
+  isEditableNumberValid,
+  normalizeEditableNumberInput,
+  parseEditableNumber,
+  parseOptionalEditableNumber,
+} from "./editable-number.js";
 import { buildScenarioFileContents, extractScenarioPlannerState } from "./scenario.js";
 import { createPlanningStorage, type SavedPlannerState } from "./storage.js";
 import {
@@ -842,8 +849,48 @@ function formatEditableNumber(value: number): string {
   }).format(value);
 }
 
-function parseEditableNumber(value: string): number {
-  return Number(value.replaceAll(",", "").trim());
+function renderEditableNumberInputAttributes(options: { allowEmpty?: boolean } = {}): string {
+  return `type="text" inputmode="decimal" data-editable-number="true"${
+    options.allowEmpty ? ' data-editable-number-allow-empty="true"' : ""
+  }`;
+}
+
+function canEditableNumberInputBeEmpty(input: HTMLInputElement): boolean {
+  return input.dataset.editableNumberAllowEmpty === "true";
+}
+
+function syncEditableNumberInputValidity(input: HTMLInputElement): void {
+  if (isEditableNumberValid(input.value, canEditableNumberInputBeEmpty(input))) {
+    input.dataset.lastValidValue = input.value;
+  }
+}
+
+function bindEditableNumberInputs(): void {
+  for (const input of document.querySelectorAll<HTMLInputElement>("input[data-editable-number]")) {
+    syncEditableNumberInputValidity(input);
+
+    input.addEventListener("input", () => {
+      const selectionStart = input.selectionStart ?? input.value.length;
+      const { value, caret } = normalizeEditableNumberInput(input.value, selectionStart);
+
+      if (input.value !== value) {
+        input.value = value;
+      }
+
+      input.setSelectionRange(caret, caret);
+      syncEditableNumberInputValidity(input);
+    });
+
+    input.addEventListener("blur", () => {
+      if (!isEditableNumberValid(input.value, canEditableNumberInputBeEmpty(input))) {
+        input.value = input.dataset.lastValidValue ?? "";
+        return;
+      }
+
+      input.value = formatEditableNumberInput(input.value);
+      syncEditableNumberInputValidity(input);
+    });
+  }
 }
 
 function getExpenseInflationSummary(flow: Pick<FlowDefinition, "type" | "inflationAdjusted">): string {
@@ -1172,11 +1219,11 @@ function syncSimulationVariableSweepDraft(): void {
   simulationDraft.variableSweep.variableName = selectedVariable.name;
 
   if (!Number.isFinite(parseEditableNumber(simulationDraft.variableSweep.minValue))) {
-    simulationDraft.variableSweep.minValue = formatEditableNumber(selectedVariable.value);
+    simulationDraft.variableSweep.minValue = formatEditableNumberInput(String(selectedVariable.value));
   }
 
   if (!Number.isFinite(parseEditableNumber(simulationDraft.variableSweep.maxValue))) {
-    simulationDraft.variableSweep.maxValue = formatEditableNumber(selectedVariable.value);
+    simulationDraft.variableSweep.maxValue = formatEditableNumberInput(String(selectedVariable.value));
   }
 }
 
@@ -1568,9 +1615,8 @@ function renderSetupAssetArea(): string {
                     <input
                       class="inline-asset-value-input"
                       name="startingValue"
-                      type="text"
-                      inputmode="decimal"
-                      value="${escapeAttribute(formatEditableNumber(asset.startingValue))}"
+                      ${renderEditableNumberInputAttributes()}
+                      value="${escapeAttribute(formatEditableNumberInput(String(asset.startingValue)))}"
                     />
                     <button type="submit" class="secondary-button">Save</button>
                     <button
@@ -1693,9 +1739,8 @@ function renderVariablesCard(): string {
                 <span class="workspace-variable-name">${escapeHtml(variable.name)}</span>
                 <input
                   name="value"
-                  type="text"
-                  inputmode="decimal"
-                  value="${escapeHtml(formatEditableNumber(variable.value))}"
+                  ${renderEditableNumberInputAttributes()}
+                  value="${escapeHtml(formatEditableNumberInput(String(variable.value)))}"
                 />
               </label>
             `
@@ -1938,31 +1983,39 @@ function renderTaxProfileEditor(): string {
       <div class="split-fields">
         <label>
           Federal standard deduction
-          <input name="federalStandardDeduction" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.federalStandardDeduction)}" />
+          <input
+            name="federalStandardDeduction"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.federalStandardDeduction))}"
+          />
         </label>
         <label>
           NIIT threshold
-          <input name="niitThreshold" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.niitThreshold)}" />
+          <input name="niitThreshold" ${renderEditableNumberInputAttributes()} value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.niitThreshold))}" />
         </label>
       </div>
       <div class="split-fields">
         <label>
           Other SALT paid
-          <input name="otherSaltTaxesPaid" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.otherSaltTaxesPaid)}" />
+          <input name="otherSaltTaxesPaid" ${renderEditableNumberInputAttributes()} value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.otherSaltTaxesPaid))}" />
         </label>
         <label>
           SALT base cap
-          <input name="saltDeductionBaseCap" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.saltDeductionBaseCap)}" />
+          <input name="saltDeductionBaseCap" ${renderEditableNumberInputAttributes()} value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.saltDeductionBaseCap))}" />
         </label>
       </div>
       <div class="split-fields">
         <label>
           SALT floor cap
-          <input name="saltDeductionFloorCap" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.saltDeductionFloorCap)}" />
+          <input name="saltDeductionFloorCap" ${renderEditableNumberInputAttributes()} value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.saltDeductionFloorCap))}" />
         </label>
         <label>
           SALT phaseout threshold
-          <input name="saltDeductionPhaseoutThreshold" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.saltDeductionPhaseoutThreshold)}" />
+          <input
+            name="saltDeductionPhaseoutThreshold"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.saltDeductionPhaseoutThreshold))}"
+          />
         </label>
       </div>
       <div class="split-fields">
@@ -1972,17 +2025,29 @@ function renderTaxProfileEditor(): string {
         </label>
         <label>
           Other itemized deductions
-          <input name="otherItemizedDeductions" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.otherItemizedDeductions)}" />
+          <input
+            name="otherItemizedDeductions"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.otherItemizedDeductions))}"
+          />
         </label>
       </div>
       <div class="split-fields">
         <label>
           State taxable-income adjustment
-          <input name="stateTaxableIncomeAdjustment" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.stateTaxableIncomeAdjustment)}" />
+          <input
+            name="stateTaxableIncomeAdjustment"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.stateTaxableIncomeAdjustment))}"
+          />
         </label>
         <label>
           Local taxable-income adjustment
-          <input name="localTaxableIncomeAdjustment" type="number" step="0.01" value="${escapeHtml(taxProfileDraft.localTaxableIncomeAdjustment)}" />
+          <input
+            name="localTaxableIncomeAdjustment"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(taxProfileDraft.localTaxableIncomeAdjustment))}"
+          />
         </label>
       </div>
       <div class="split-fields">
@@ -2865,18 +2930,16 @@ function renderSimulationBoard(): string {
               Min value
               <input
                 name="simulationVariableSweepMinValue"
-                type="number"
-                step="any"
-                value="${escapeHtml(simulationDraft.variableSweep.minValue)}"
+                ${renderEditableNumberInputAttributes()}
+                value="${escapeHtml(formatEditableNumberInput(simulationDraft.variableSweep.minValue))}"
               />
             </label>
             <label>
               Max value
               <input
                 name="simulationVariableSweepMaxValue"
-                type="number"
-                step="any"
-                value="${escapeHtml(simulationDraft.variableSweep.maxValue)}"
+                ${renderEditableNumberInputAttributes()}
+                value="${escapeHtml(formatEditableNumberInput(simulationDraft.variableSweep.maxValue))}"
               />
             </label>
           </div>
@@ -3274,9 +3337,8 @@ function renderAssetCoreFields(draft: AssetDraft): string {
         Initial cost
         <input
           name="initialCost"
-          type="text"
-          inputmode="decimal"
-          value="${escapeHtml(draft.initialCost === "" ? "" : formatEditableNumber(parseEditableNumber(draft.initialCost)))}"
+          ${renderEditableNumberInputAttributes()}
+          value="${escapeHtml(formatEditableNumberInput(draft.initialCost))}"
           required
         />
       </label>
@@ -3304,7 +3366,12 @@ function renderAssetCoreFields(draft: AssetDraft): string {
       <div class="split-fields">
         <label>
           Non-tax monthlies
-          <input name="monthlyNonTaxCosts" type="number" step="0.01" value="${escapeHtml(draft.monthlyNonTaxCosts)}" required />
+          <input
+            name="monthlyNonTaxCosts"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(draft.monthlyNonTaxCosts))}"
+            required
+          />
         </label>
         <label>
           Property tax rate (%)
@@ -3323,9 +3390,8 @@ function renderAssetCoreFields(draft: AssetDraft): string {
       Starting value
       <input
         name="startingValue"
-        type="text"
-        inputmode="decimal"
-        value="${escapeHtml(draft.startingValue === "" ? "" : formatEditableNumber(parseEditableNumber(draft.startingValue)))}"
+        ${renderEditableNumberInputAttributes()}
+        value="${escapeHtml(formatEditableNumberInput(draft.startingValue))}"
         required
       />
     </label>
@@ -3419,11 +3485,8 @@ function renderAssetTaxModelFields(draft: AssetDraft): string {
           Starting cost basis
           <input
             name="saleTaxCostBasis"
-            type="text"
-            inputmode="decimal"
-            value="${escapeHtml(
-              draft.saleTaxCostBasis === "" ? "" : formatEditableNumber(parseEditableNumber(draft.saleTaxCostBasis))
-            )}"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(draft.saleTaxCostBasis))}"
           />
         </label>
         <label>
@@ -3471,7 +3534,12 @@ function renderTaxComposer(): string {
           </label>
           <label>
             Maximum tax
-            <input name="maximum" type="number" step="0.01" value="${escapeHtml(taxDraft.maximum)}" placeholder="Optional cap" />
+            <input
+              name="maximum"
+              ${renderEditableNumberInputAttributes({ allowEmpty: true })}
+              value="${escapeHtml(formatEditableNumberInput(taxDraft.maximum))}"
+              placeholder="Optional cap"
+            />
           </label>
           <section class="composer-subsection">
             <div class="event-entry-header">
@@ -3494,7 +3562,12 @@ function renderTaxComposer(): string {
                         </label>
                         <label>
                           Up to
-                          <input type="number" step="0.01" data-tax-rate-field="${rate.id}:upTo" value="${escapeHtml(rate.upTo)}" placeholder="Blank = uncapped" />
+                          <input
+                            ${renderEditableNumberInputAttributes({ allowEmpty: true })}
+                            data-tax-rate-field="${rate.id}:upTo"
+                            value="${escapeHtml(formatEditableNumberInput(rate.upTo))}"
+                            placeholder="Blank = uncapped"
+                          />
                         </label>
                       </div>
                     </div>
@@ -3526,11 +3599,20 @@ function renderTaxComposer(): string {
                           <div class="split-fields">
                             <label>
                               Amount
-                              <input type="number" step="0.01" data-tax-exclusion-field="${exclusion.id}:amount" value="${escapeHtml(exclusion.amount)}" />
+                              <input
+                                ${renderEditableNumberInputAttributes()}
+                                data-tax-exclusion-field="${exclusion.id}:amount"
+                                value="${escapeHtml(formatEditableNumberInput(exclusion.amount))}"
+                              />
                             </label>
                             <label>
                               Maximum
-                              <input type="number" step="0.01" data-tax-exclusion-field="${exclusion.id}:maximum" value="${escapeHtml(exclusion.maximum)}" placeholder="Optional cap" />
+                              <input
+                                ${renderEditableNumberInputAttributes({ allowEmpty: true })}
+                                data-tax-exclusion-field="${exclusion.id}:maximum"
+                                value="${escapeHtml(formatEditableNumberInput(exclusion.maximum))}"
+                                placeholder="Optional cap"
+                              />
                             </label>
                           </div>
                         </div>
@@ -3617,7 +3699,11 @@ function renderFlowComposer(): string {
                           </label>
                           <label>
                             Value
-                            <input type="number" step="0.01" data-flow-variable-field="${variable.id}:value" value="${escapeHtml(variable.value)}" />
+                            <input
+                              ${renderEditableNumberInputAttributes()}
+                              data-flow-variable-field="${variable.id}:value"
+                              value="${escapeHtml(formatEditableNumberInput(variable.value))}"
+                            />
                           </label>
                         </div>
                       `
@@ -3910,7 +3996,11 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
           </label>
           <label>
             b
-            <input type="number" step="0.01" data-field="${entryId}:${action.id}:b" value="${escapeHtml(action.b)}" />
+            <input
+              ${renderEditableNumberInputAttributes()}
+              data-field="${entryId}:${action.id}:b"
+              value="${escapeHtml(formatEditableNumberInput(action.b))}"
+            />
           </label>
         </div>
       `;
@@ -3935,7 +4025,11 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
         </label>
         <label>
           Starting value
-          <input type="number" step="0.01" data-field="${entryId}:${action.id}:variableDefinitionValue" value="${escapeHtml(action.variableDefinitionValue)}" />
+          <input
+            ${renderEditableNumberInputAttributes()}
+            data-field="${entryId}:${action.id}:variableDefinitionValue"
+            value="${escapeHtml(formatEditableNumberInput(action.variableDefinitionValue))}"
+          />
         </label>
       `;
     case "add-flow":
@@ -3981,6 +4075,7 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
 }
 
 function bindHandlers(user: UserIdentity): void {
+  bindEditableNumberInputs();
   bindSimulationChartTooltip();
   focusInlineAssetValueInput();
 
@@ -4575,8 +4670,8 @@ function bindHandlers(user: UserIdentity): void {
 
       const nextValue = parseEditableNumber(input.value);
       if (!Number.isFinite(nextValue)) {
-        input.value = formatEditableNumber(
-          plannerState.variables.find((variable) => variable.name === variableName)?.value ?? 0
+        input.value = formatEditableNumberInput(
+          String(plannerState.variables.find((variable) => variable.name === variableName)?.value ?? 0)
         );
         return;
       }
@@ -5572,7 +5667,12 @@ function bindTaxProfileForm(user: UserIdentity): void {
   }
 
   const persistTaxProfile = async (shouldRender: boolean): Promise<void> => {
-    plannerState.taxProfile = buildTaxProfileDefinition(taxProfileDraft);
+    const nextTaxProfile = buildTaxProfileDefinition(taxProfileDraft);
+    if (!nextTaxProfile) {
+      return;
+    }
+
+    plannerState.taxProfile = nextTaxProfile;
     invalidateSimulationState();
     await persistPlannerState(user);
     if (shouldRender) {
@@ -5774,7 +5874,7 @@ function bindFlowComposer(user: UserIdentity): void {
     for (const variable of flowDraft.variables) {
       plannerState.variables.push({
         name: variable.name.trim(),
-        value: Number(variable.value),
+        value: parseEditableNumber(variable.value),
       });
     }
     plannerState.flows.push({
@@ -6126,7 +6226,7 @@ function toEventAction(action: EventActionDraft, flowName: string): EventAction 
         variableName: action.variableName.trim(),
         adjustment: {
           m: Number(action.m),
-          b: Number(action.b),
+          b: parseEditableNumber(action.b),
         },
       };
     case "set-flow-formula":
@@ -6140,7 +6240,7 @@ function toEventAction(action: EventActionDraft, flowName: string): EventAction 
         kind: "add-variable",
         variable: {
           name: action.variableDefinitionName.trim(),
-          value: Number(action.variableDefinitionValue),
+          value: parseEditableNumber(action.variableDefinitionValue),
         },
       };
     case "add-flow":
@@ -6366,7 +6466,7 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
       mortgageType: draft.mortgageType,
       mortgageRate: Number(draft.mortgageRate),
       mortgageTermYears: Number(draft.mortgageTermYears),
-      monthlyNonTaxCosts: Number(draft.monthlyNonTaxCosts),
+      monthlyNonTaxCosts: parseEditableNumber(draft.monthlyNonTaxCosts),
       propertyTaxRate: Number(draft.propertyTaxRate),
       purchaseYear: Number(draft.purchaseYear),
     }).toDefinition();
@@ -6402,39 +6502,71 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
 }
 
 function buildTaxDefinition(draft: TaxDraft): TaxDefinition {
+  const maximum = parseOptionalEditableNumber(draft.maximum);
+
   return buildNormalizedTaxDefinition({
     name: draft.name,
     taxRates: draft.rates.map(
-      (rate): TaxRateDefinition => ({
-        rate: Number(rate.rate),
-        ...(rate.upTo.trim() ? { upTo: Number(rate.upTo) } : {}),
-      })
+      (rate): TaxRateDefinition => {
+        const upTo = parseOptionalEditableNumber(rate.upTo);
+
+        return {
+          rate: Number(rate.rate),
+          ...(upTo !== null ? { upTo } : {}),
+        };
+      }
     ),
-    exclusions: draft.exclusions.map(
-      (exclusion): TaxExclusionDefinition => ({
+    exclusions: draft.exclusions.map((exclusion): TaxExclusionDefinition => {
+      const maximumExclusion = parseOptionalEditableNumber(exclusion.maximum);
+
+      return {
         name: exclusion.name,
-        amount: Number(exclusion.amount),
-        ...(exclusion.maximum.trim() ? { maximum: Number(exclusion.maximum) } : {}),
-      })
-    ),
-    ...(draft.maximum.trim() ? { maximum: Number(draft.maximum) } : {}),
+        amount: parseEditableNumber(exclusion.amount),
+        ...(maximumExclusion !== null ? { maximum: maximumExclusion } : {}),
+      };
+    }),
+    ...(maximum !== null ? { maximum } : {}),
   });
 }
 
-function buildTaxProfileDefinition(draft: TaxProfileDraft): HouseholdTaxProfileDefinition {
+function buildTaxProfileDefinition(draft: TaxProfileDraft): HouseholdTaxProfileDefinition | null {
+  const federalStandardDeduction = parseEditableNumber(draft.federalStandardDeduction);
+  const otherSaltTaxesPaid = parseEditableNumber(draft.otherSaltTaxesPaid);
+  const saltDeductionBaseCap = parseEditableNumber(draft.saltDeductionBaseCap);
+  const saltDeductionFloorCap = parseEditableNumber(draft.saltDeductionFloorCap);
+  const saltDeductionPhaseoutThreshold = parseEditableNumber(draft.saltDeductionPhaseoutThreshold);
+  const otherItemizedDeductions = parseEditableNumber(draft.otherItemizedDeductions);
+  const stateTaxableIncomeAdjustment = parseEditableNumber(draft.stateTaxableIncomeAdjustment);
+  const localTaxableIncomeAdjustment = parseEditableNumber(draft.localTaxableIncomeAdjustment);
+  const niitThreshold = parseEditableNumber(draft.niitThreshold);
+
+  if (
+    !Number.isFinite(federalStandardDeduction) ||
+    !Number.isFinite(otherSaltTaxesPaid) ||
+    !Number.isFinite(saltDeductionBaseCap) ||
+    !Number.isFinite(saltDeductionFloorCap) ||
+    !Number.isFinite(saltDeductionPhaseoutThreshold) ||
+    !Number.isFinite(otherItemizedDeductions) ||
+    !Number.isFinite(stateTaxableIncomeAdjustment) ||
+    !Number.isFinite(localTaxableIncomeAdjustment) ||
+    !Number.isFinite(niitThreshold)
+  ) {
+    return null;
+  }
+
   return {
     filingStatus: draft.filingStatus,
     deductionMode: draft.deductionMode,
-    federalStandardDeduction: Number(draft.federalStandardDeduction),
-    otherSaltTaxesPaid: Number(draft.otherSaltTaxesPaid),
-    saltDeductionBaseCap: Number(draft.saltDeductionBaseCap),
-    saltDeductionFloorCap: Number(draft.saltDeductionFloorCap),
-    saltDeductionPhaseoutThreshold: Number(draft.saltDeductionPhaseoutThreshold),
+    federalStandardDeduction,
+    otherSaltTaxesPaid,
+    saltDeductionBaseCap,
+    saltDeductionFloorCap,
+    saltDeductionPhaseoutThreshold,
     saltDeductionPhaseoutRate: Number(draft.saltDeductionPhaseoutRate),
-    otherItemizedDeductions: Number(draft.otherItemizedDeductions),
-    stateTaxableIncomeAdjustment: Number(draft.stateTaxableIncomeAdjustment),
-    localTaxableIncomeAdjustment: Number(draft.localTaxableIncomeAdjustment),
-    niitThreshold: Number(draft.niitThreshold),
+    otherItemizedDeductions,
+    stateTaxableIncomeAdjustment,
+    localTaxableIncomeAdjustment,
+    niitThreshold,
     federalOrdinaryTaxName: draft.federalOrdinaryTaxName,
     federalQualifiedTaxName: draft.federalQualifiedTaxName,
     stateTaxName: draft.stateTaxName,
@@ -6816,12 +6948,12 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
   simulationDraft.variableSweep.minValue =
     typeof partialState.simulationVariableSweep?.minValue === "number" &&
     Number.isFinite(partialState.simulationVariableSweep.minValue)
-      ? formatEditableNumber(partialState.simulationVariableSweep.minValue)
+      ? formatEditableNumberInput(String(partialState.simulationVariableSweep.minValue))
       : fallbackSimulationDraft.variableSweep.minValue;
   simulationDraft.variableSweep.maxValue =
     typeof partialState.simulationVariableSweep?.maxValue === "number" &&
     Number.isFinite(partialState.simulationVariableSweep.maxValue)
-      ? formatEditableNumber(partialState.simulationVariableSweep.maxValue)
+      ? formatEditableNumberInput(String(partialState.simulationVariableSweep.maxValue))
       : fallbackSimulationDraft.variableSweep.maxValue;
   syncTaxProfileDraft();
   syncSimulationDraftAssetRows();

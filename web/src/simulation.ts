@@ -132,6 +132,13 @@ interface SaleIterationResult {
   taxableGains: number;
 }
 
+interface GeneratedCashStreamsResult {
+  taxInput: HouseholdTaxInput;
+  generatedCashTotal: number;
+  reinvestmentSources: Map<string, number>;
+  expenseTotal: number;
+}
+
 interface SimulationExecutionResult {
   scenarios: SimulationDetailScenario[];
   yearlyTotals: number[][];
@@ -596,6 +603,13 @@ function runSimulationAttempts({
           ),
         ])
       );
+      const halfYearPriceReturns = new Map(
+        normalizedAssets.map((asset) => [
+          asset.name,
+          calculatePeriodReturn(annualPriceReturns.get(asset.name) ?? 0, 0.5),
+        ])
+      );
+      const assetReturnAmounts = new Map(normalizedAssets.map((asset) => [asset.name, 0]));
 
       const snapshotYear = getSnapshotYear(snapshot, yearIndex);
       const purchaseCashFlow = applyHomePurchasesForYear(
@@ -605,38 +619,76 @@ function runSimulationAttempts({
         homeState,
         flowTotals
       );
-      const taxInputWithCashGeneration = applyGeneratedCashStreams(
-        snapshot.householdTaxInput,
-        normalizedAssets,
-        assetValues,
-        homeState,
-        snapshotYear,
-        householdTaxProfile?.filingStatus ?? "single",
-        annualCorrelatedNormals,
-        flowTotals
-      );
-
       const contributionAmounts = new Map(
         reinvestableAssetNames.map((assetName) => [assetName, Math.max(0, snapshot.flowAmounts.get(assetName) ?? 0)])
       );
-      for (const [assetName, amount] of taxInputWithCashGeneration.reinvestmentSources) {
-        contributionAmounts.set(assetName, (contributionAmounts.get(assetName) ?? 0) + amount);
-      }
-
-      let saleResult = resolveSalesForCashNeed({
-        cashNeeded: Math.max(
-          0,
-          -(snapshot.netAmount + purchaseCashFlow + taxInputWithCashGeneration.generatedCashTotal)
-        ),
-        assets: normalizedAssets,
+      let saleResult: SaleIterationResult = {
         assetValues,
         assetCostBases,
         flowTotals,
-        baseTaxInput: taxInputWithCashGeneration.taxInput,
-      });
-      const baseCashBalance = snapshot.netAmount + purchaseCashFlow + taxInputWithCashGeneration.generatedCashTotal;
-      let totalTaxableGains = saleResult.taxableGains;
-      let totalCashRaised = saleResult.preTaxCashBalance;
+        taxInput: cloneHouseholdTaxInput(snapshot.householdTaxInput),
+        preTaxCashBalance: 0,
+        taxableGains: 0,
+      };
+      let cashBalance = purchaseCashFlow;
+      let generatedExpenseTotal = 0;
+      let generatedCashTotal = 0;
+      let totalTaxableGains = 0;
+
+      for (let halfIndex = 0; halfIndex < 2; halfIndex += 1) {
+        const openingInvestmentValues = new Map(
+          reinvestableAssetNames.map((assetName) => [assetName, saleResult.assetValues.get(assetName) ?? 0])
+        );
+        const openingHomeMarketValues = new Map(
+          normalizedAssets
+            .filter((asset): asset is NormalizedSimulationHomeAsset => asset.kind === "home")
+            .map((asset) => [asset.name, homeState.marketValues.get(asset.name) ?? 0])
+        );
+
+        applyPeriodAssetReturns({
+          assets: normalizedAssets,
+          assetValues: saleResult.assetValues,
+          homeState,
+          periodReturns: halfYearPriceReturns,
+          assetReturnAmounts,
+        });
+
+        const taxInputWithCashGeneration = applyGeneratedCashStreams({
+          baseTaxInput: saleResult.taxInput,
+          assets: normalizedAssets,
+          assetValues: saleResult.assetValues,
+          homeState,
+          year: snapshotYear,
+          filingStatus: householdTaxProfile?.filingStatus ?? "single",
+          annualNormals: annualCorrelatedNormals,
+          flowTotals: saleResult.flowTotals,
+          periodFraction: 0.5,
+          periodMonths: 6,
+          monthsElapsedAtStart: halfIndex * 6,
+          openingInvestmentValues,
+          openingHomeMarketValues,
+        });
+        for (const [assetName, amount] of taxInputWithCashGeneration.reinvestmentSources) {
+          contributionAmounts.set(assetName, (contributionAmounts.get(assetName) ?? 0) + amount);
+        }
+
+        generatedExpenseTotal += taxInputWithCashGeneration.expenseTotal;
+        generatedCashTotal += taxInputWithCashGeneration.generatedCashTotal;
+        cashBalance += snapshot.netAmount / 2 + taxInputWithCashGeneration.generatedCashTotal;
+
+        saleResult = resolveSalesForCashNeed({
+          cashNeeded: Math.max(0, -cashBalance),
+          assets: normalizedAssets,
+          assetValues: saleResult.assetValues,
+          assetCostBases: saleResult.assetCostBases,
+          flowTotals: saleResult.flowTotals,
+          baseTaxInput: taxInputWithCashGeneration.taxInput,
+        });
+        totalTaxableGains += saleResult.taxableGains;
+        cashBalance += saleResult.preTaxCashBalance;
+      }
+
+      const baseCashBalance = purchaseCashFlow + snapshot.netAmount + generatedCashTotal;
 
       let taxBreakdown =
         householdTaxProfile === null
@@ -644,7 +696,7 @@ function runSimulationAttempts({
           : computeHouseholdTaxes(saleResult.taxInput, householdTaxProfile, taxes);
 
       for (let iteration = 0; iteration < 5; iteration += 1) {
-        const postTaxCashBalance = baseCashBalance + totalCashRaised - taxBreakdown.totalTax;
+        const postTaxCashBalance = cashBalance - taxBreakdown.totalTax;
         if (postTaxCashBalance >= -0.000001) {
           break;
         }
@@ -657,8 +709,8 @@ function runSimulationAttempts({
           flowTotals: saleResult.flowTotals,
           baseTaxInput: saleResult.taxInput,
         });
-        totalCashRaised += saleResult.preTaxCashBalance;
         totalTaxableGains += saleResult.taxableGains;
+        cashBalance += saleResult.preTaxCashBalance;
         if (saleResult.preTaxCashBalance <= 0.000001) {
           break;
         }
@@ -673,8 +725,8 @@ function runSimulationAttempts({
         flowTotalsWithTaxes.set("Taxes paid", -taxBreakdown.totalTax);
       }
 
-      const totalExpenses = snapshot.totalExpenses + taxInputWithCashGeneration.expenseTotal + taxBreakdown.totalTax;
-      const postTaxCashBalance = baseCashBalance + totalCashRaised - taxBreakdown.totalTax;
+      const totalExpenses = snapshot.totalExpenses + generatedExpenseTotal + taxBreakdown.totalTax;
+      const postTaxCashBalance = cashBalance - taxBreakdown.totalTax;
       const postTaxShortfall = Math.max(0, -postTaxCashBalance);
       const postTaxSurplus = Math.max(0, postTaxCashBalance);
       if (postTaxSurplus > 0 && reinvestableAssetNames.length > 0) {
@@ -691,23 +743,13 @@ function runSimulationAttempts({
 
       const assetReturns = new Map(
         normalizedAssets.map((asset) => {
-          const currentValue = saleResult.assetValues.get(asset.name) ?? 0;
           const annualReturn = annualPriceReturns.get(asset.name) ?? 0;
-          let nextValue = currentValue;
-          if (asset.kind === "investment") {
-            nextValue = Math.max(0, currentValue * (1 + annualReturn));
-          } else {
-            const currentMarketValue = homeState.marketValues.get(asset.name) ?? 0;
-            const nextMarketValue = currentMarketValue <= 0 ? 0 : Math.max(0, currentMarketValue * (1 + annualReturn));
-            homeState.marketValues.set(asset.name, nextMarketValue);
-            nextValue = nextMarketValue - (homeState.mortgageBalances.get(asset.name) ?? 0);
-          }
-          saleResult.assetValues.set(asset.name, nextValue);
+          const amount = assetReturnAmounts.get(asset.name) ?? 0;
           return [
             asset.name,
             {
-              amount: nextValue - currentValue,
-              percentage: annualReturn * 100,
+              amount,
+              percentage: Math.abs(amount) > 0.000001 ? annualReturn * 100 : 0,
             },
           ];
         })
@@ -929,21 +971,66 @@ function applyHomePurchasesForYear(
   return generatedCashTotal;
 }
 
-function applyGeneratedCashStreams(
-  baseTaxInput: HouseholdTaxInput,
-  assets: readonly NormalizedSimulationAsset[],
-  assetValues: Map<string, number>,
-  homeState: HomeSimulationState,
-  year: number,
-  filingStatus: FilingStatus,
-  annualNormals: ReadonlyMap<string, number>,
-  flowTotals: Map<string, number>
-): {
-  taxInput: HouseholdTaxInput;
-  generatedCashTotal: number;
-  reinvestmentSources: Map<string, number>;
-  expenseTotal: number;
-} {
+function applyPeriodAssetReturns({
+  assets,
+  assetValues,
+  homeState,
+  periodReturns,
+  assetReturnAmounts,
+}: {
+  assets: readonly NormalizedSimulationAsset[];
+  assetValues: Map<string, number>;
+  homeState: HomeSimulationState;
+  periodReturns: ReadonlyMap<string, number>;
+  assetReturnAmounts: Map<string, number>;
+}): void {
+  for (const asset of assets) {
+    const periodReturn = periodReturns.get(asset.name) ?? 0;
+    if (asset.kind === "investment") {
+      const currentValue = assetValues.get(asset.name) ?? 0;
+      const nextValue = currentValue <= 0 ? 0 : Math.max(0, currentValue * (1 + periodReturn));
+      assetValues.set(asset.name, nextValue);
+      assetReturnAmounts.set(asset.name, (assetReturnAmounts.get(asset.name) ?? 0) + (nextValue - currentValue));
+      continue;
+    }
+
+    const currentMarketValue = homeState.marketValues.get(asset.name) ?? 0;
+    const nextMarketValue = currentMarketValue <= 0 ? 0 : Math.max(0, currentMarketValue * (1 + periodReturn));
+    homeState.marketValues.set(asset.name, nextMarketValue);
+    assetValues.set(asset.name, nextMarketValue - (homeState.mortgageBalances.get(asset.name) ?? 0));
+    assetReturnAmounts.set(asset.name, (assetReturnAmounts.get(asset.name) ?? 0) + (nextMarketValue - currentMarketValue));
+  }
+}
+
+function applyGeneratedCashStreams({
+  baseTaxInput,
+  assets,
+  assetValues,
+  homeState,
+  year,
+  filingStatus,
+  annualNormals,
+  flowTotals,
+  periodFraction,
+  periodMonths,
+  monthsElapsedAtStart,
+  openingInvestmentValues,
+  openingHomeMarketValues,
+}: {
+  baseTaxInput: HouseholdTaxInput;
+  assets: readonly NormalizedSimulationAsset[];
+  assetValues: Map<string, number>;
+  homeState: HomeSimulationState;
+  year: number;
+  filingStatus: FilingStatus;
+  annualNormals: ReadonlyMap<string, number>;
+  flowTotals: Map<string, number>;
+  periodFraction: number;
+  periodMonths: number;
+  monthsElapsedAtStart: number;
+  openingInvestmentValues: ReadonlyMap<string, number>;
+  openingHomeMarketValues: ReadonlyMap<string, number>;
+}): GeneratedCashStreamsResult {
   const taxInput = cloneHouseholdTaxInput(baseTaxInput);
   const reinvestmentSources = new Map<string, number>();
   let generatedCashTotal = 0;
@@ -951,12 +1038,13 @@ function applyGeneratedCashStreams(
 
   for (const asset of assets) {
     if (asset.kind === "investment") {
-      const currentValue = assetValues.get(asset.name) ?? 0;
+      const currentValue = openingInvestmentValues.get(asset.name) ?? assetValues.get(asset.name) ?? 0;
       for (const cashGeneration of asset.cashGenerations) {
         const generatedCash = calculateAssetCashGenerationAmount(
           currentValue,
           annualNormals.get(asset.name) ?? 0,
-          cashGeneration
+          cashGeneration,
+          periodFraction
         );
         if (generatedCash <= 0.000001) {
           continue;
@@ -964,49 +1052,65 @@ function applyGeneratedCashStreams(
 
         generatedCashTotal += generatedCash;
         reinvestmentSources.set(asset.name, (reinvestmentSources.get(asset.name) ?? 0) + generatedCash);
-        flowTotals.set(`${asset.name} ${cashGeneration.name}`, generatedCash);
+        flowTotals.set(
+          `${asset.name} ${cashGeneration.name}`,
+          (flowTotals.get(`${asset.name} ${cashGeneration.name}`) ?? 0) + generatedCash
+        );
         applyTaxTreatmentAmount(taxInput, cashGeneration.taxTreatment ?? "ordinary-income", generatedCash);
       }
       continue;
     }
 
-    const currentMarketValue = homeState.marketValues.get(asset.name) ?? 0;
+    const currentMarketValue = openingHomeMarketValues.get(asset.name) ?? homeState.marketValues.get(asset.name) ?? 0;
     if (currentMarketValue <= 0.000001 || year < asset.purchaseYear) {
       continue;
     }
 
-    const propertyTax = currentMarketValue * (asset.propertyTaxRate / 100);
+    const propertyTax = currentMarketValue * (asset.propertyTaxRate / 100) * periodFraction;
     if (propertyTax > 0.000001) {
       generatedCashTotal -= propertyTax;
       expenseTotal += propertyTax;
       taxInput.saltTaxesPaid = (taxInput.saltTaxesPaid ?? 0) + propertyTax;
-      flowTotals.set(`${asset.name} property tax`, -propertyTax);
+      flowTotals.set(`${asset.name} property tax`, (flowTotals.get(`${asset.name} property tax`) ?? 0) - propertyTax);
     }
 
-    const annualNonTaxCosts = asset.monthlyNonTaxCosts * 12;
-    if (annualNonTaxCosts > 0.000001) {
-      generatedCashTotal -= annualNonTaxCosts;
-      expenseTotal += annualNonTaxCosts;
-      flowTotals.set(`${asset.name} home monthlies`, -annualNonTaxCosts);
+    const nonTaxCosts = asset.monthlyNonTaxCosts * periodMonths;
+    if (nonTaxCosts > 0.000001) {
+      generatedCashTotal -= nonTaxCosts;
+      expenseTotal += nonTaxCosts;
+      flowTotals.set(`${asset.name} home monthlies`, (flowTotals.get(`${asset.name} home monthlies`) ?? 0) - nonTaxCosts);
     }
 
-    const mortgageBreakdown = processMortgageYear(asset, year, homeState.mortgageBalances.get(asset.name) ?? 0);
+    const mortgageBreakdown = processMortgageMonths(
+      asset,
+      year,
+      homeState.mortgageBalances.get(asset.name) ?? 0,
+      monthsElapsedAtStart,
+      periodMonths
+    );
     if (mortgageBreakdown.totalPayment > 0.000001) {
       generatedCashTotal -= mortgageBreakdown.totalPayment;
       expenseTotal += mortgageBreakdown.totalInterest;
       taxInput.homeMortgageInterestPaid =
         (taxInput.homeMortgageInterestPaid ?? 0) + mortgageBreakdown.totalInterest;
       taxInput.homeMortgageAverageBalance =
-        (taxInput.homeMortgageAverageBalance ?? 0) + mortgageBreakdown.averageBalance;
+        (taxInput.homeMortgageAverageBalance ?? 0) +
+        mortgageBreakdown.averageBalance * (mortgageBreakdown.processedMonths / 12);
       taxInput.homeMortgageInterestDebtLimit = Math.max(
         taxInput.homeMortgageInterestDebtLimit ?? 0,
         getMortgageInterestDebtLimit(asset.purchaseYear, filingStatus)
       );
       homeState.mortgageBalances.set(asset.name, mortgageBreakdown.endingBalance);
-      assetValues.set(asset.name, currentMarketValue - mortgageBreakdown.endingBalance);
-      flowTotals.set(`${asset.name} mortgage interest`, -mortgageBreakdown.totalInterest);
+      assetValues.set(asset.name, (homeState.marketValues.get(asset.name) ?? 0) - mortgageBreakdown.endingBalance);
+      flowTotals.set(
+        `${asset.name} mortgage interest`,
+        (flowTotals.get(`${asset.name} mortgage interest`) ?? 0) - mortgageBreakdown.totalInterest
+      );
       if (mortgageBreakdown.totalPrincipal > 0.000001) {
-        flowTotals.set(`${asset.name} mortgage principal`, -mortgageBreakdown.totalPrincipal);
+        flowTotals.set(
+          `${asset.name} mortgage principal`,
+          (flowTotals.get(`${asset.name} mortgage principal`) ?? 0) - mortgageBreakdown.totalPrincipal
+        );
       }
     }
   }
@@ -1181,19 +1285,22 @@ function calculateRemainingMortgageBalance(asset: NormalizedSimulationHomeAsset,
   return balance;
 }
 
-function processMortgageYear(
+function processMortgageMonths(
   asset: NormalizedSimulationHomeAsset,
   year: number,
-  startingBalance: number
+  startingBalance: number,
+  monthsElapsedAtStart: number,
+  monthsToProcess: number
 ): {
   totalPayment: number;
   totalInterest: number;
   totalPrincipal: number;
   averageBalance: number;
   endingBalance: number;
+  processedMonths: number;
 } {
   const totalMonths = asset.mortgageTermYears * 12;
-  const elapsedMonths = Math.max(0, (year - asset.purchaseYear) * 12);
+  const elapsedMonths = Math.max(0, (year - asset.purchaseYear) * 12 + monthsElapsedAtStart);
   let remainingMonths = Math.max(0, totalMonths - elapsedMonths);
   if (startingBalance <= 0.000001 || remainingMonths <= 0) {
     return {
@@ -1202,6 +1309,7 @@ function processMortgageYear(
       totalPrincipal: 0,
       averageBalance: 0,
       endingBalance: 0,
+      processedMonths: 0,
     };
   }
 
@@ -1212,10 +1320,10 @@ function processMortgageYear(
   let balanceSum = 0;
   let processedMonths = 0;
   const monthlyRate = asset.mortgageRate / 1200;
-  const monthsToProcess = Math.min(12, remainingMonths);
+  const boundedMonthsToProcess = Math.min(monthsToProcess, remainingMonths);
 
   if (asset.mortgageType === "interest-only") {
-    for (let monthIndex = 0; monthIndex < monthsToProcess && balance > 0.000001; monthIndex += 1) {
+    for (let monthIndex = 0; monthIndex < boundedMonthsToProcess && balance > 0.000001; monthIndex += 1) {
       const interest = balance * monthlyRate;
       balanceSum += balance;
       totalPayment += interest;
@@ -1229,10 +1337,11 @@ function processMortgageYear(
       totalPrincipal: 0,
       averageBalance: processedMonths === 0 ? 0 : balanceSum / processedMonths,
       endingBalance: balance,
+      processedMonths,
     };
   }
 
-  for (let monthIndex = 0; monthIndex < monthsToProcess && balance > 0.000001; monthIndex += 1) {
+  for (let monthIndex = 0; monthIndex < boundedMonthsToProcess && balance > 0.000001; monthIndex += 1) {
     const payment = calculateMortgagePayment(balance, monthlyRate, remainingMonths);
     const interest = balance * monthlyRate;
     const principal = Math.min(balance, Math.max(0, payment - interest));
@@ -1251,6 +1360,7 @@ function processMortgageYear(
     totalPrincipal,
     averageBalance: processedMonths === 0 ? 0 : balanceSum / processedMonths,
     endingBalance: balance,
+    processedMonths,
   };
 }
 
@@ -1277,7 +1387,8 @@ function getMortgageInterestDebtLimit(purchaseYear: number, filingStatus: Filing
 function calculateAssetCashGenerationAmount(
   assetValue: number,
   annualNormal: number,
-  cashGeneration: AssetCashGenerationDefinition | undefined
+  cashGeneration: AssetCashGenerationDefinition | undefined,
+  periodFraction = 1
 ): number {
   if (!cashGeneration) {
     return 0;
@@ -1285,9 +1396,13 @@ function calculateAssetCashGenerationAmount(
 
   const annualCashGenerationRate = Math.max(
     0,
-    cashGeneration.rate / 100 + (cashGeneration.volatility / 100) * annualNormal
+    (cashGeneration.rate / 100) * periodFraction + ((cashGeneration.volatility / 100) * periodFraction) * annualNormal
   );
   return assetValue * annualCashGenerationRate;
+}
+
+function calculatePeriodReturn(annualReturn: number, periodFraction: number): number {
+  return Math.pow(1 + annualReturn, periodFraction) - 1;
 }
 
 function cloneHouseholdTaxInput(input: HouseholdTaxInput): HouseholdTaxInput {

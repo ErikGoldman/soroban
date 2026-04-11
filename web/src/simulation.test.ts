@@ -519,10 +519,60 @@ describe("buildSimulationScenarios", () => {
     const row = scenarios[0]?.rows[0];
     expect(row?.flowTotals.get("Municipal bonds sale proceeds")).toBeCloseTo(100, 6);
     expect(row?.flowTotals.get("Stocks sale proceeds")).toBeCloseTo(50, 6);
-    expect(row?.assetReturns.get("Stocks")?.amount).toBeCloseTo(15, 6);
-    expect(row?.taxableGains).toBeCloseTo(0, 6);
-    expect(row?.endingAssets).toBeCloseTo(165, 6);
-    expect(row?.totalGains).toBeCloseTo(15, 6);
+    expect(row?.flowTotals.get("Stocks realized gain")).toBeCloseTo(4.545454545454554, 6);
+    expect(row?.assetReturns.get("Stocks")?.amount).toBeCloseTo(20, 6);
+    expect(row?.taxableGains).toBeCloseTo(4.545454545454554, 6);
+    expect(row?.endingAssets).toBeCloseTo(170, 6);
+    expect(row?.totalGains).toBeCloseTo(20, 6);
+  });
+
+  it("does not report a stock price return percentage after dividends fund a full liquidation", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          label: "2026",
+          netAmount: -3036000,
+          totalExpenses: 3036000,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Stocks",
+          startingValue: 3000000,
+          expectedReturn: 10.78,
+          volatility: 0,
+          sellProportion: 1,
+          cashGenerations: [
+            {
+              name: "Qualified dividends",
+              rate: 1.1,
+              volatility: 0,
+              taxTreatment: "qualified-dividends",
+            },
+            {
+              name: "Non-qualified dividends",
+              rate: 0.1,
+              volatility: 0,
+              taxTreatment: "ordinary-income",
+            },
+          ],
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Stocks sale proceeds")).toBeCloseTo(3008054.62589443, 6);
+    expect(row?.flowTotals.get("Stocks Qualified dividends")).toBeCloseTo(25616.59293010578, 6);
+    expect(row?.flowTotals.get("Stocks Non-qualified dividends")).toBeCloseTo(2328.781175464162, 6);
+    expect(row?.assetValues.get("Stocks")).toBeCloseTo(236564.19864140893, 6);
+    expect(row?.assetReturns.get("Stocks")?.amount).toBeCloseTo(244618.82453583903, 6);
+    expect(row?.assetReturns.get("Stocks")?.percentage).toBeCloseTo(10.78, 6);
   });
 
   it("does not backfill unfunded withdrawals into total gains when the portfolio is depleted", () => {
