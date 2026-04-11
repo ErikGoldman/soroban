@@ -227,19 +227,43 @@ label {
   padding: 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.62);
+  box-shadow: 0 10px 24px rgba(31, 27, 20, 0.08);
+  backdrop-filter: blur(10px);
 }
 
 .planner-main {
   gap: 20px;
 }
 
-.planner-board-switcher {
-  display: flex;
-  justify-content: flex-start;
-}
-
 .board-panel {
   overflow: visible;
+}
+
+.planner-board-shell {
+  display: grid;
+  gap: 24px;
+  padding: 28px;
+}
+
+.planner-board-shell-header {
+  display: grid;
+  gap: 16px;
+}
+
+.planner-board-shell-header .panel-heading {
+  margin-bottom: 0;
+}
+
+.planner-board-tabs-sticky {
+  position: sticky;
+  top: 12px;
+  z-index: 10;
+  width: fit-content;
+}
+
+.planner-board-shell-body {
+  display: grid;
+  gap: 20px;
 }
 
 .setup-layout {
@@ -492,7 +516,7 @@ label {
 }
 
 .panel-heading {
-  margin-bottom: 18px;
+  margin-bottom: 8px;
 }
 
 .pill-row {
@@ -592,13 +616,196 @@ label {
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  align-items: end;
+  align-items: start;
 }
 
-.simulation-tax-preset-field {
+.simulation-toolbar-field {
   display: grid;
-  gap: 8px;
-  width: min(100%, 240px);
+  grid-template-rows: auto minmax(54px, auto);
+  gap: 0.35rem;
+  align-content: start;
+}
+
+.simulation-toolbar-label {
+  line-height: 1.2;
+}
+
+.simulation-toolbar-control {
+  display: grid;
+  align-content: end;
+  min-height: 54px;
+}
+
+.simulation-toolbar-field-range {
+  gap: 0.2rem;
+}
+
+.simulation-toolbar-range-control {
+  gap: 0.18rem;
+  padding-top: 0.1rem;
+}
+
+.simulation-toolbar-range-control input[type="range"] {
+  width: 100%;
+  min-height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.simulation-toolbar-meta {
+  line-height: 1.1;
+}
+
+.simulation-section {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 24px;
+  border: 1px solid rgba(45, 31, 22, 0.08);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.simulation-config-card {
+  gap: 18px;
+}
+
+.simulation-config-subsection {
+  display: grid;
+  gap: 12px;
+}
+
+.simulation-config-subsection + .simulation-config-subsection {
+  padding-top: 18px;
+  border-top: 1px solid rgba(45, 31, 22, 0.08);
+}
+
+.simulation-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.simulation-section-heading {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+  min-width: 0;
+}
+
+.simulation-section-leading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  min-width: 0;
+}
+
+.simulation-section-summary-inline {
+  margin-top: 0;
+}
+
+.simulation-section-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.simulation-section-leading .summary-meta {
+  margin-top: 0;
+  line-height: 1.2;
+}
+
+.simulation-section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.simulation-section-body {
+  display: grid;
+  gap: 12px;
+}
+
+.simulation-header-inline-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  min-width: 0;
+}
+
+.simulation-header-inline-field select,
+.simulation-header-select {
+  width: auto;
+  min-width: 200px;
+}
+
+.switch-field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.switch-field input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.switch-track {
+  position: relative;
+  display: inline-flex;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(20, 24, 27, 0.16);
+  transition: background 160ms ease;
+}
+
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fffdf9;
+  box-shadow: 0 2px 8px rgba(31, 27, 20, 0.16);
+  transition: transform 160ms ease;
+}
+
+.switch-field input:checked + .switch-track {
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+}
+
+.switch-field input:checked + .switch-track::after {
+  transform: translateX(20px);
+}
+
+.switch-field input:disabled + .switch-track {
+  opacity: 0.45;
+}
+
+.disclosure-button {
+  color: var(--muted);
+}
+
+.disclosure-icon {
+  width: 16px;
+  height: 16px;
+  transition: transform 160ms ease;
+}
+
+.disclosure-icon.is-expanded {
+  transform: rotate(90deg);
 }
 
 .checkbox-field {
@@ -1141,6 +1348,11 @@ label {
   .panel {
     padding: 18px;
     border-radius: 22px;
+  }
+
+  .planner-board-shell {
+    padding: 20px;
+    gap: 20px;
   }
 
   .hero h1 {

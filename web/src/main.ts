@@ -258,7 +258,7 @@ interface SimulationDraft {
   startYear: string;
   attempts: number;
   horizonYears: number;
-  inflationMode: SimulationInflationMode;
+  inflationPreset: SimulationInflationPreset;
   fixedInflationRate: string;
   regimeSwitchingInflation: {
     lowRate: string;
@@ -323,11 +323,19 @@ interface FormulaEditorBinding {
 type SummaryTab = "variables" | "assets" | "taxes";
 type PlannerBoardTab = "setup" | "simulation";
 type SimulationChartMetric = "totalAssets" | "liquidAssets";
-type TaxPreset = "nyc";
+type SimulationInflationPreset = "fixed" | "fixed-custom" | "regime" | "regime-custom";
+type TaxPreset = "nyc" | "custom";
 const VARIABLE_SWEEP_STORAGE_KEY_PREFIX = "soroban:simulation-variable-sweep:";
 // When true, each active worker is assigned a distinct sweep value before any sweep is split into chunks.
 const ENABLE_VARIABLE_SWEEP_WORKER_FANOUT = true;
 const VARIABLE_SWEEP_DETAIL_SAMPLE_LIMIT = 128;
+const DEFAULT_SIMULATION_FIXED_INFLATION_RATE = "2.5";
+const DEFAULT_SIMULATION_REGIME_INFLATION = {
+  lowRate: "2.5",
+  highRate: "6",
+  stayLowProbability: "90",
+  stayHighProbability: "60",
+} as const;
 
 const auth = new StubAuthService();
 const storage = createPlanningStorage();
@@ -387,6 +395,8 @@ let flowEditorOpen = false;
 let assetComposerOpen = false;
 let assetEditorOpen = false;
 let taxComposerOpen = false;
+let simulationInflationSectionExpanded = false;
+let simulationTaxesSectionExpanded = false;
 let activeFlowEventEdit: ActiveFlowEventEdit | null = null;
 let activeSummaryTab: SummaryTab = "variables";
 let activePlannerBoardTab: PlannerBoardTab = "setup";
@@ -468,13 +478,10 @@ function createSimulationDraft(): SimulationDraft {
     startYear: String(new Date().getFullYear()),
     attempts: 10000,
     horizonYears: 10,
-    inflationMode: "fixed",
-    fixedInflationRate: String(DEFAULT_EXPENSE_INFLATION_RATE * 100),
+    inflationPreset: "regime",
+    fixedInflationRate: DEFAULT_SIMULATION_FIXED_INFLATION_RATE,
     regimeSwitchingInflation: {
-      lowRate: "2.5",
-      highRate: "6",
-      stayLowProbability: "90",
-      stayHighProbability: "60",
+      ...DEFAULT_SIMULATION_REGIME_INFLATION,
     },
     taxPreset: "nyc",
     assetRows: [],
@@ -485,6 +492,47 @@ function createSimulationDraft(): SimulationDraft {
       maxValue: "0",
     },
   };
+}
+
+function getSimulationInflationModeForPreset(preset: SimulationInflationPreset): SimulationInflationMode {
+  return preset === "fixed" || preset === "fixed-custom" ? "fixed" : "regime-switching";
+}
+
+function isSimulationInflationCustomPreset(preset: SimulationInflationPreset): boolean {
+  return preset === "fixed-custom" || preset === "regime-custom";
+}
+
+function normalizeSimulationInflationPreset(
+  savedInflation:
+    | {
+        preset?: string;
+        enabled?: boolean;
+        mode?: "fixed" | "regime-switching";
+      }
+    | undefined,
+): SimulationInflationPreset {
+  if (
+    savedInflation?.preset === "fixed" ||
+    savedInflation?.preset === "fixed-custom" ||
+    savedInflation?.preset === "regime" ||
+    savedInflation?.preset === "regime-custom"
+  ) {
+    return savedInflation.preset;
+  }
+
+  if (savedInflation?.enabled === false) {
+    return "fixed-custom";
+  }
+
+  if (savedInflation?.mode === "fixed") {
+    return "fixed-custom";
+  }
+
+  if (savedInflation?.mode === "regime-switching") {
+    return "regime-custom";
+  }
+
+  return "regime";
 }
 
 function createTaxRateDraft(): TaxRateDraft {
@@ -1265,7 +1313,17 @@ function buildYearlyPlansFromPlannerData({
 }
 
 function buildSimulationInflationConfig(): SimulationInflationConfig {
-  if (simulationDraft.inflationMode === "regime-switching") {
+  if (simulationDraft.inflationPreset === "regime") {
+    return {
+      mode: "regime-switching",
+      lowRate: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.lowRate) / 100,
+      highRate: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.highRate) / 100,
+      stayLowProbability: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.stayLowProbability) / 100,
+      stayHighProbability: parseEditableNumber(DEFAULT_SIMULATION_REGIME_INFLATION.stayHighProbability) / 100,
+    };
+  }
+
+  if (simulationDraft.inflationPreset === "regime-custom") {
     return {
       mode: "regime-switching",
       lowRate: parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate) / 100,
@@ -1277,7 +1335,12 @@ function buildSimulationInflationConfig(): SimulationInflationConfig {
 
   return {
     mode: "fixed",
-    fixedRate: parseEditableNumber(simulationDraft.fixedInflationRate) / 100,
+    fixedRate:
+      parseEditableNumber(
+        simulationDraft.inflationPreset === "fixed-custom"
+          ? simulationDraft.fixedInflationRate
+          : DEFAULT_SIMULATION_FIXED_INFLATION_RATE
+      ) / 100,
   };
 }
 
@@ -1872,21 +1935,6 @@ function renderVariablesCard(): string {
   `;
 }
 
-function renderTaxProfileCard(): string {
-  return `
-    <section class="panel workspace-section">
-      <div class="workspace-section-header workspace-section-header-compact">
-        <div class="panel-heading">
-          <p class="kicker">Taxes</p>
-          <h2>Household tax profile</h2>
-        </div>
-        <p class="helper-copy">Choose the filing assumption used by the tax preset and simulation calculations.</p>
-      </div>
-      ${renderTaxProfileEditor()}
-    </section>
-  `;
-}
-
 function renderSetupBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAmount: number }>): string {
   return `
     <div class="setup-layout">
@@ -1916,7 +1964,6 @@ function renderSetupBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAmoun
 
       <div class="workspace-sidecard setup-side">
         ${renderVariablesCard()}
-        ${renderTaxProfileCard()}
       </div>
     </div>
   `;
@@ -1955,6 +2002,13 @@ function getSimulationTaxPresetDefinition(
         householdTaxProfile: preset.profile,
       };
     }
+    case "custom": {
+      const nextCustomProfile = buildTaxProfileDefinition(taxProfileDraft);
+      return {
+        taxes: [...plannerState.taxes],
+        householdTaxProfile: nextCustomProfile ? { ...nextCustomProfile } : { ...plannerState.taxProfile },
+      };
+    }
   }
 }
 
@@ -1962,6 +2016,7 @@ function renderPlanner(user: UserIdentity): void {
   syncSimulationDraftAssetRows();
   syncSimulationVariableSweepDraft();
   const expenseRows = buildExpenseRows(simulationDraft.startYear);
+  const activeBoardLabel = activePlannerBoardTab === "setup" ? "Setup" : "Simulation";
 
   mountedAppRoot.innerHTML = `
     <div class="app-shell">
@@ -1970,13 +2025,13 @@ function renderPlanner(user: UserIdentity): void {
           <p class="eyebrow">Soroban</p>
           <h1>Formula planner</h1>
           <p class="hero-copy">
-            Configure assets, expenses, and variables in setup, then run portfolio simulations against a fixed tax preset.
+            Configure assets, expenses, and variables in setup, then run portfolio simulations with presets or a custom tax profile.
           </p>
         </div>
         <div class="planner-header-meta">
           <div class="pill-row">
             <span class="pill">${escapeHtml(user.email)}</span>
-            <span class="pill">Preset tax mode</span>
+            <span class="pill">Simulation tax presets + custom</span>
           </div>
           <div class="planner-header-actions">
             <button type="button" class="secondary-button" id="save-scenario-button">Save scenario</button>
@@ -1987,25 +2042,23 @@ function renderPlanner(user: UserIdentity): void {
       </header>
 
       <main class="planner-main">
-        <div class="planner-board-switcher">
-          ${renderPlannerBoardTabs()}
-        </div>
-        <section class="board-panel">
+        <section class="panel board-panel planner-board-shell">
+          <div class="planner-board-shell-header">
+            <div class="panel-heading">
+              <p class="kicker">Workspace</p>
+              <h2>${activeBoardLabel}</h2>
+            </div>
+          </div>
+          <div class="planner-board-tabs-sticky">
+            ${renderPlannerBoardTabs()}
+          </div>
+          <div class="planner-board-shell-body">
           ${
             activePlannerBoardTab === "setup"
               ? renderSetupBoard(expenseRows)
-              : `
-        <section class="panel workspace-section">
-          <div class="board-header">
-            <div class="panel-heading">
-              <p class="kicker">Simulation</p>
-              <h2>Portfolio outcomes</h2>
-            </div>
-          </div>
-          ${renderSimulationBoard()}
-        </section>
-          `
+              : renderSimulationBoard()
           }
+          </div>
         </section>
       </main>
 
@@ -2086,7 +2139,7 @@ function renderExpensesBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAm
   `;
 }
 
-function renderTaxProfileEditor(): string {
+function renderTaxProfileFields(): string {
   const taxOptions = plannerState.taxes
     .map(
       (tax) => `
@@ -2096,11 +2149,6 @@ function renderTaxProfileEditor(): string {
     .join("");
 
   return `
-    <form id="tax-profile-form" class="stack-form composer-subsection">
-      <div class="event-entry-header">
-        <strong>Household tax profile</strong>
-        <button type="button" class="secondary-button" id="load-nyc-tax-preset">Load NYC 2025 preset</button>
-      </div>
       <div class="split-fields">
         <label>
           Filing status
@@ -2211,6 +2259,17 @@ function renderTaxProfileEditor(): string {
         NIIT schedule
         <select name="niitTaxName">${renderTaxProfileOptions(taxOptions, taxProfileDraft.niitTaxName)}</select>
       </label>
+  `;
+}
+
+function renderTaxProfileEditor(): string {
+  return `
+    <form id="tax-profile-form" class="stack-form composer-subsection" data-tax-profile-editor="setup">
+      <div class="event-entry-header">
+        <strong>Household tax profile</strong>
+        <button type="button" class="secondary-button" id="load-nyc-tax-preset">Load NYC 2025</button>
+      </div>
+      ${renderTaxProfileFields()}
     </form>
   `;
 }
@@ -2294,7 +2353,7 @@ function getSimulationSubmitState(): { disabled: boolean; reason: string } {
     }
   }
 
-  if (simulationDraft.inflationMode === "fixed") {
+  if (simulationDraft.inflationPreset === "fixed-custom") {
     const inflationRate = parseEditableNumber(simulationDraft.fixedInflationRate);
     if (!Number.isFinite(inflationRate)) {
       return {
@@ -2302,7 +2361,7 @@ function getSimulationSubmitState(): { disabled: boolean; reason: string } {
         reason: "Simulation inflation rate must be a finite number.",
       };
     }
-  } else {
+  } else if (simulationDraft.inflationPreset === "regime-custom") {
     const lowRate = parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate);
     const highRate = parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate);
     const stayLowProbability = parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability);
@@ -2656,18 +2715,20 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
     simulationTaxPreset: simulationDraft.taxPreset,
     simulationHorizonYears: simulationDraft.horizonYears,
     simulationInflationRate:
-      simulationDraft.inflationMode === "fixed" && Number.isFinite(parseEditableNumber(simulationDraft.fixedInflationRate))
+      getSimulationInflationModeForPreset(simulationDraft.inflationPreset) === "fixed" &&
+      Number.isFinite(parseEditableNumber(simulationDraft.fixedInflationRate))
         ? parseEditableNumber(simulationDraft.fixedInflationRate)
         : undefined,
     simulationInflation: {
-      mode: simulationDraft.inflationMode,
-      ...(simulationDraft.inflationMode === "fixed" &&
+      preset: simulationDraft.inflationPreset,
+      mode: getSimulationInflationModeForPreset(simulationDraft.inflationPreset),
+      ...(getSimulationInflationModeForPreset(simulationDraft.inflationPreset) === "fixed" &&
       Number.isFinite(parseEditableNumber(simulationDraft.fixedInflationRate))
         ? {
             fixedRate: parseEditableNumber(simulationDraft.fixedInflationRate),
           }
         : {}),
-      ...(simulationDraft.inflationMode === "regime-switching"
+      ...(getSimulationInflationModeForPreset(simulationDraft.inflationPreset) === "regime-switching"
         ? {
             regimeSwitching: {
               ...(Number.isFinite(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate))
@@ -3078,6 +3139,34 @@ function renderSimulationSweepResults(): string {
   `;
 }
 
+function getSimulationInflationSummary(): string {
+  if (simulationDraft.inflationPreset === "fixed") {
+    return "Fixed 2.5%";
+  }
+
+  if (simulationDraft.inflationPreset === "fixed-custom") {
+    return `Fixed ${formatEditableNumber(parseEditableNumber(simulationDraft.fixedInflationRate))}%`;
+  }
+
+  if (simulationDraft.inflationPreset === "regime") {
+    return "Default";
+  }
+
+  return `Regime ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.lowRate))}-${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.highRate))}%, ${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayLowProbability))}%/${formatEditableNumber(parseEditableNumber(simulationDraft.regimeSwitchingInflation.stayHighProbability))}%`;
+}
+
+function getSimulationTaxPresetLabel(): string {
+  return simulationDraft.taxPreset === "custom" ? "Custom" : "NYC 2025";
+}
+
+function renderDisclosureIcon(expanded: boolean): string {
+  return `
+    <svg viewBox="0 0 16 16" aria-hidden="true" class="disclosure-icon${expanded ? " is-expanded" : ""}">
+      <path d="M5 3.5 10 8l-5 4.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" />
+    </svg>
+  `;
+}
+
 function renderSimulationBoard(): string {
   const displayedSimulationResults = getDisplayedSimulationResults();
   const displayedSimulationDetails = getDisplayedSimulationDetailResults();
@@ -3121,184 +3210,320 @@ function renderSimulationBoard(): string {
           valueKey: "totalAssets" as const,
           valueLabel: "Total assets",
         };
-
   return `
     <div class="simulation-panel">
       <form id="simulation-form" class="stack-form">
-        <div class="simulation-toolbar">
-          <label>
-            Start year
-            <input name="simulationStartYear" type="number" min="1900" max="9999" value="${escapeHtml(simulationDraft.startYear)}" />
-          </label>
-          <label>
-            Time horizon (years)
-            <input name="simulationHorizonYears" type="number" min="1" max="50" value="${simulationDraft.horizonYears}" />
-          </label>
-          <label>
-            Inflation mode
-            <select name="simulationInflationMode">
-              <option value="fixed" ${simulationDraft.inflationMode === "fixed" ? "selected" : ""}>Fixed</option>
-              <option value="regime-switching" ${simulationDraft.inflationMode === "regime-switching" ? "selected" : ""}>
-                Regime switching
-              </option>
-            </select>
-          </label>
-          <label>
-            Attempts
-            <input name="simulationAttempts" type="range" min="5000" max="100000" step="5000" value="${simulationDraft.attempts}" />
-            <span class="summary-meta">${simulationDraft.attempts.toLocaleString("en-US")} attempts</span>
-          </label>
-        </div>
-
-        <section class="simulation-sweep-config">
-          ${
-            simulationDraft.inflationMode === "fixed"
-              ? `
-          <label>
-            Inflation rate (%)
-            <input
-              name="simulationFixedInflationRate"
-              ${renderEditableNumberInputAttributes()}
-              value="${escapeHtml(formatEditableNumberInput(simulationDraft.fixedInflationRate))}"
-            />
-          </label>
-              `
-              : `
-          <p class="helper-copy">Expenses switch between low and high annual inflation regimes once per simulated year.</p>
-          <div class="simulation-sweep-fields">
-            <label>
-              Low rate (%)
-              <input
-                name="simulationInflationLowRate"
-                ${renderEditableNumberInputAttributes()}
-                value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.lowRate))}"
-              />
-            </label>
-            <label>
-              High rate (%)
-              <input
-                name="simulationInflationHighRate"
-                ${renderEditableNumberInputAttributes()}
-                value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.highRate))}"
-              />
-            </label>
-            <label>
-              Stay low (%)
-              <input
-                name="simulationInflationStayLowProbability"
-                ${renderEditableNumberInputAttributes()}
-                value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.stayLowProbability))}"
-              />
-            </label>
-            <label>
-              Stay high (%)
-              <input
-                name="simulationInflationStayHighProbability"
-                ${renderEditableNumberInputAttributes()}
-                value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.stayHighProbability))}"
-              />
-            </label>
+        <section class="simulation-section simulation-config-card">
+          <div class="simulation-config-subsection">
+            <div class="simulation-toolbar">
+              <label class="simulation-toolbar-field">
+                <span class="simulation-toolbar-label">Start year</span>
+                <span class="simulation-toolbar-control">
+                  <input
+                    name="simulationStartYear"
+                    type="number"
+                    min="1900"
+                    max="9999"
+                    value="${escapeHtml(simulationDraft.startYear)}"
+                  />
+                </span>
+              </label>
+              <label class="simulation-toolbar-field">
+                <span class="simulation-toolbar-label">Time horizon (years)</span>
+                <span class="simulation-toolbar-control">
+                  <input
+                    name="simulationHorizonYears"
+                    type="number"
+                    min="1"
+                    max="50"
+                    value="${simulationDraft.horizonYears}"
+                  />
+                </span>
+              </label>
+              <label class="simulation-toolbar-field simulation-toolbar-field-range">
+                <span class="simulation-toolbar-label">Attempts</span>
+                <span class="simulation-toolbar-control simulation-toolbar-range-control">
+                  <input
+                    name="simulationAttempts"
+                    type="range"
+                    min="1000"
+                    max="50000"
+                    step="1000"
+                    value="${simulationDraft.attempts}"
+                  />
+                  <span class="summary-meta simulation-toolbar-meta" data-simulation-attempts-label>
+                    ${simulationDraft.attempts.toLocaleString("en-US")} attempts
+                  </span>
+                </span>
+              </label>
+            </div>
           </div>
-              `
-          }
-        </section>
 
-        <section class="simulation-sweep-config">
-          <label class="checkbox-field">
-            <input
-              name="simulationVariableSweepEnabled"
-              type="checkbox"
-              ${simulationDraft.variableSweep.enabled ? "checked" : ""}
-              ${plannerState.variables.length === 0 ? "disabled" : ""}
-            />
-            <span>Enable variable sweep</span>
-          </label>
-          ${
-            plannerState.variables.length === 0
-              ? `<p class="helper-copy">Create a variable in Setup before using a sweep.</p>`
-              : simulationDraft.variableSweep.enabled
+          <div class="simulation-config-subsection">
+            <div class="simulation-section-header">
+              <div class="simulation-section-leading simulation-header-inline-field">
+                <div class="simulation-section-heading">
+                  <h3>Inflation</h3>
+                </div>
+                <select name="simulationInflationPreset" class="simulation-header-select">
+                  <option value="fixed" ${simulationDraft.inflationPreset === "fixed" ? "selected" : ""}>Fixed 2.5%</option>
+                  <option value="fixed-custom" ${simulationDraft.inflationPreset === "fixed-custom" ? "selected" : ""}>Fixed custom</option>
+                  <option value="regime" ${simulationDraft.inflationPreset === "regime" ? "selected" : ""}>Default</option>
+                  <option value="regime-custom" ${simulationDraft.inflationPreset === "regime-custom" ? "selected" : ""}>Regime custom</option>
+                </select>
+              </div>
+              ${
+                isSimulationInflationCustomPreset(simulationDraft.inflationPreset)
+                  ? `
+              <div class="simulation-section-actions">
+                <button
+                  type="button"
+                  class="ghost-button icon-button disclosure-button"
+                  data-simulation-action="toggle-inflation-section"
+                  aria-label="${simulationInflationSectionExpanded ? "Collapse inflation settings" : "Expand inflation settings"}"
+                  aria-expanded="${simulationInflationSectionExpanded ? "true" : "false"}"
+                >
+                  ${renderDisclosureIcon(simulationInflationSectionExpanded)}
+                </button>
+              </div>
+                  `
+                  : ""
+              }
+            </div>
+            ${
+              isSimulationInflationCustomPreset(simulationDraft.inflationPreset) && simulationInflationSectionExpanded
                 ? `
-          <p class="helper-copy">Run ${VARIABLE_SWEEP_STEP_COUNT} simulations with one variable interpolated from min to max.</p>
-          <div class="simulation-sweep-fields">
-            <label>
-              Variable
-              <select name="simulationVariableSweepVariableName">
-                ${sweepVariableOptions}
-              </select>
-            </label>
-            <label>
-              Min value
-              <input
-                name="simulationVariableSweepMinValue"
-                ${renderEditableNumberInputAttributes()}
-                value="${escapeHtml(formatEditableNumberInput(simulationDraft.variableSweep.minValue))}"
-              />
-            </label>
-            <label>
-              Max value
-              <input
-                name="simulationVariableSweepMaxValue"
-                ${renderEditableNumberInputAttributes()}
-                value="${escapeHtml(formatEditableNumberInput(simulationDraft.variableSweep.maxValue))}"
-              />
-            </label>
-          </div>
+            <div class="simulation-section-body">
+              <div class="simulation-sweep-config">
+                ${
+                  simulationDraft.inflationPreset === "fixed-custom"
+                    ? `
+                <label>
+                  Inflation rate (%)
+                  <input
+                    name="simulationFixedInflationRate"
+                    ${renderEditableNumberInputAttributes()}
+                    value="${escapeHtml(formatEditableNumberInput(simulationDraft.fixedInflationRate))}"
+                  />
+                </label>
+                    `
+                    : `
+                <p class="helper-copy">Expenses switch between low and high annual inflation regimes once per simulated year.</p>
+                <div class="simulation-sweep-fields">
+                  <label>
+                    Low rate (%)
+                    <input
+                      name="simulationInflationLowRate"
+                      ${renderEditableNumberInputAttributes()}
+                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.lowRate))}"
+                    />
+                  </label>
+                  <label>
+                    High rate (%)
+                    <input
+                      name="simulationInflationHighRate"
+                      ${renderEditableNumberInputAttributes()}
+                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.highRate))}"
+                    />
+                  </label>
+                  <label>
+                    Stay low (%)
+                    <input
+                      name="simulationInflationStayLowProbability"
+                      ${renderEditableNumberInputAttributes()}
+                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.stayLowProbability))}"
+                    />
+                  </label>
+                  <label>
+                    Stay high (%)
+                    <input
+                      name="simulationInflationStayHighProbability"
+                      ${renderEditableNumberInputAttributes()}
+                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.stayHighProbability))}"
+                    />
+                  </label>
+                </div>
+                    `
+                }
+              </div>
+            </div>
                 `
                 : ""
-          }
+            }
+          </div>
+
+          <div class="simulation-config-subsection">
+            <div class="simulation-section-header">
+              <div class="simulation-section-leading simulation-header-inline-field">
+                <div class="simulation-section-heading">
+                  <h3>Taxes</h3>
+                </div>
+                <select name="simulationTaxPreset" class="simulation-header-select">
+                  <option value="nyc" ${simulationDraft.taxPreset === "nyc" ? "selected" : ""}>NYC 2025</option>
+                  <option value="custom" ${simulationDraft.taxPreset === "custom" ? "selected" : ""}>Custom</option>
+                </select>
+              </div>
+              ${
+                simulationDraft.taxPreset === "custom"
+                  ? `
+              <div class="simulation-section-actions">
+                <button
+                  type="button"
+                  class="ghost-button icon-button disclosure-button"
+                  data-simulation-action="toggle-taxes-section"
+                  aria-label="${simulationTaxesSectionExpanded ? "Collapse tax settings" : "Expand tax settings"}"
+                  aria-expanded="${simulationTaxesSectionExpanded ? "true" : "false"}"
+                >
+                  ${renderDisclosureIcon(simulationTaxesSectionExpanded)}
+                </button>
+              </div>
+                  `
+                  : ""
+              }
+            </div>
+            ${
+              simulationDraft.taxPreset === "custom" && simulationTaxesSectionExpanded
+                ? `
+            <div class="simulation-section-body">
+              <div class="simulation-sweep-config">
+                <div id="simulation-tax-profile-form" class="stack-form" data-tax-profile-editor="simulation">
+                  ${renderTaxProfileFields()}
+                </div>
+              </div>
+            </div>
+                `
+                : ""
+            }
+          </div>
+
+          <div class="simulation-config-subsection">
+            <div class="simulation-section-header">
+              <div class="simulation-section-leading">
+                <label class="switch-field">
+                  <input
+                    name="simulationVariableSweepEnabled"
+                    type="checkbox"
+                    ${simulationDraft.variableSweep.enabled ? "checked" : ""}
+                    ${plannerState.variables.length === 0 ? "disabled" : ""}
+                  />
+                  <span class="switch-track" aria-hidden="true"></span>
+                </label>
+                <div class="simulation-section-heading">
+                  <h3>Variable Sweep</h3>
+                </div>
+              </div>
+              <div class="simulation-section-actions">
+              </div>
+            </div>
+            ${
+              plannerState.variables.length === 0
+                ? `
+            <div class="simulation-sweep-config">
+              <p class="helper-copy">Create a variable in Setup before using a sweep.</p>
+            </div>
+                `
+                : simulationDraft.variableSweep.enabled
+                  ? `
+            <div class="simulation-sweep-config">
+              <p class="helper-copy">Run ${VARIABLE_SWEEP_STEP_COUNT} simulations with one variable interpolated from min to max.</p>
+              <div class="simulation-sweep-fields">
+                <label>
+                  Variable
+                  <select name="simulationVariableSweepVariableName">
+                    ${sweepVariableOptions}
+                  </select>
+                </label>
+                <label>
+                  Min value
+                  <input
+                    name="simulationVariableSweepMinValue"
+                    ${renderEditableNumberInputAttributes()}
+                    value="${escapeHtml(formatEditableNumberInput(simulationDraft.variableSweep.minValue))}"
+                  />
+                </label>
+                <label>
+                  Max value
+                  <input
+                    name="simulationVariableSweepMaxValue"
+                    ${renderEditableNumberInputAttributes()}
+                    value="${escapeHtml(formatEditableNumberInput(simulationDraft.variableSweep.maxValue))}"
+                  />
+                </label>
+              </div>
+            </div>
+                  `
+                  : ""
+            }
+          </div>
         </section>
 
         ${
           simulationDraft.assetRows.length === 0
-            ? `<p class="helper-copy">Create at least one asset to run a simulation.</p>`
+            ? `
+        <section class="simulation-section">
+          <div class="simulation-section-header">
+            <div>
+              <h3>Assets</h3>
+            </div>
+          </div>
+          <p class="helper-copy">Create at least one asset to run a simulation.</p>
+        </section>
+              `
             : `
-        <p class="helper-copy">Assets are sold in proportion to their current portfolio weight. Use multipliers to tilt that weight. A multiplier of <code>1</code> keeps the current balance.</p>
-        <div class="board-scroll">
-          <table class="flow-table simulation-input-table">
-            <thead>
-              <tr>
-                <th>Sell multiplier</th>
-                <th>Asset</th>
-                <th>Starting value</th>
-                <th>Expected return (%)</th>
-                <th>Volatility (%)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${simulationDraft.assetRows
-                .map(
-                  (asset) => `
-                    <tr>
-                      <td>${
-                        asset.kind === "home"
-                          ? "Not sellable"
-                          : `<input type="number" min="0" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" />`
-                      }</td>
-                      <th>
-                        <button type="button" class="link-button" data-edit-asset="${escapeHtml(asset.name)}">
-                          ${escapeHtml(asset.name)}
-                        </button>
-                      </th>
-                      <td>${formatCurrency(Number(asset.kind === "home" ? asset.initialCost : asset.startingValue))}</td>
-                      <td>${formatPercentage(Number(asset.expectedReturn))}</td>
-                      <td>${formatPercentage(Number(asset.volatility))}</td>
-                    </tr>
-                  `
-                )
-                .join("")}
-            </tbody>
-          </table>
-        </div>
-        <label class="simulation-tax-preset-field">
-          Tax preset
-          <select name="simulationTaxPreset">
-            <option value="nyc" ${simulationDraft.taxPreset === "nyc" ? "selected" : ""}>NYC</option>
-          </select>
-        </label>
+        <section class="simulation-section">
+          <div class="simulation-section-header">
+            <div>
+              <h3>Assets</h3>
+            </div>
+          </div>
+          <p class="helper-copy">Assets are sold in proportion to their current portfolio weight. Use multipliers to tilt that weight. A multiplier of <code>1</code> keeps the current balance.</p>
+          <div class="board-scroll">
+            <table class="flow-table simulation-input-table">
+              <thead>
+                <tr>
+                  <th>Sell multiplier</th>
+                  <th>Asset</th>
+                  <th>Starting value</th>
+                  <th>Expected return (%)</th>
+                  <th>Volatility (%)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${simulationDraft.assetRows
+                  .map(
+                    (asset) => `
+                      <tr>
+                        <td>${
+                          asset.kind === "home"
+                            ? "Not sellable"
+                            : `<input type="number" min="0" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" />`
+                        }</td>
+                        <th>
+                          <button type="button" class="link-button" data-edit-asset="${escapeHtml(asset.name)}">
+                            ${escapeHtml(asset.name)}
+                          </button>
+                        </th>
+                        <td>${formatCurrency(Number(asset.kind === "home" ? asset.initialCost : asset.startingValue))}</td>
+                        <td>${formatPercentage(Number(asset.expectedReturn))}</td>
+                        <td>${formatPercentage(Number(asset.volatility))}</td>
+                      </tr>
+                    `
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </div>
+        </section>
             `
         }
 
-        <div class="simulation-actions">
+        <section class="simulation-section">
+          <div class="simulation-section-header">
+            <div>
+              <h3>Run Simulation</h3>
+            </div>
+          </div>
+          <div class="simulation-actions">
           ${
             simulationRunState
               ? `
@@ -3325,7 +3550,8 @@ function renderSimulationBoard(): string {
               ${isSimulationRunning ? "Simulating..." : "Simulate"}
             </button>
           </span>
-        </div>
+          </div>
+        </section>
       </form>
 
       ${
@@ -3436,6 +3662,15 @@ function renderSimulationBoard(): string {
       }
     </div>
   `;
+}
+
+function syncSimulationAttemptsLabel(root: ParentNode = document): void {
+  const label = root.querySelector<HTMLElement>("[data-simulation-attempts-label]");
+  if (!label) {
+    return;
+  }
+
+  label.textContent = `${simulationDraft.attempts.toLocaleString("en-US")} attempts`;
 }
 
 function syncSimulationSubmitState(): void {
@@ -4499,6 +4734,43 @@ function bindHandlers(user: UserIdentity): void {
   }
 
   const simulationForm = document.querySelector<HTMLFormElement>("#simulation-form");
+  simulationForm?.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    const actionButton = target.closest<HTMLButtonElement>("[data-simulation-action]");
+    if (!actionButton) {
+      return;
+    }
+
+    event.preventDefault();
+    const action = actionButton.dataset.simulationAction;
+    if (action === "toggle-inflation-section") {
+      if (!isSimulationInflationCustomPreset(simulationDraft.inflationPreset)) {
+        return;
+      }
+      simulationInflationSectionExpanded = !simulationInflationSectionExpanded;
+      renderPlanner(user);
+      return;
+    } else if (action === "toggle-taxes-section") {
+      if (simulationDraft.taxPreset !== "custom") {
+        return;
+      }
+      simulationTaxesSectionExpanded = !simulationTaxesSectionExpanded;
+      renderPlanner(user);
+      return;
+    } else {
+      return;
+    }
+
+    invalidateSimulationState();
+    syncSimulationSubmitState();
+    renderPlanner(user);
+    void persistPlannerState(user);
+  });
+
   simulationForm?.addEventListener("input", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
@@ -4531,8 +4803,9 @@ function bindHandlers(user: UserIdentity): void {
       plannerState.startYear = normalizedYear;
     } else if (target.name === "simulationHorizonYears") {
       simulationDraft.horizonYears = Math.max(1, Math.min(50, Number(target.value) || 1));
-    } else if (target.name === "simulationInflationMode" && target instanceof HTMLSelectElement) {
-      simulationDraft.inflationMode = target.value as SimulationInflationMode;
+    } else if (target.name === "simulationInflationPreset" && target instanceof HTMLSelectElement) {
+      simulationDraft.inflationPreset = target.value as SimulationInflationPreset;
+      simulationInflationSectionExpanded = isSimulationInflationCustomPreset(simulationDraft.inflationPreset);
       invalidateSimulationState();
       renderPlanner(user);
       void persistPlannerState(user);
@@ -4548,12 +4821,22 @@ function bindHandlers(user: UserIdentity): void {
     } else if (target.name === "simulationInflationStayHighProbability") {
       simulationDraft.regimeSwitchingInflation.stayHighProbability = target.value;
     } else if (target.name === "simulationAttempts") {
-      simulationDraft.attempts = Math.max(5000, Math.min(100000, Number(target.value) || 5000));
+      simulationDraft.attempts = Math.max(1000, Math.min(50000, Number(target.value) || 10000));
       invalidateSimulationState();
-      renderPlanner(user);
+      syncSimulationAttemptsLabel(simulationForm);
       return;
     } else if (target.name === "simulationTaxPreset") {
       simulationDraft.taxPreset = target.value as TaxPreset;
+      if (simulationDraft.taxPreset === "custom") {
+        simulationTaxesSectionExpanded = true;
+      } else {
+        simulationTaxesSectionExpanded = false;
+      }
+      invalidateSimulationState();
+      syncSimulationSubmitState();
+      renderPlanner(user);
+      void persistPlannerState(user);
+      return;
     } else if (target.name === "simulationVariableSweepEnabled" && target instanceof HTMLInputElement) {
       simulationDraft.variableSweep.enabled = target.checked;
       if (target.checked) {
@@ -4573,6 +4856,19 @@ function bindHandlers(user: UserIdentity): void {
 
     invalidateSimulationState();
     syncSimulationSubmitState();
+    void persistPlannerState(user);
+  });
+
+  simulationForm?.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) {
+      return;
+    }
+
+    if (target.name !== "simulationAttempts") {
+      return;
+    }
+
     void persistPlannerState(user);
   });
 
@@ -6056,8 +6352,8 @@ function bindTaxComposer(user: UserIdentity): void {
 }
 
 function bindTaxProfileForm(user: UserIdentity): void {
-  const form = document.querySelector<HTMLFormElement>("#tax-profile-form");
-  if (!form) {
+  const forms = document.querySelectorAll<HTMLElement>("[data-tax-profile-editor]");
+  if (forms.length === 0) {
     return;
   }
 
@@ -6095,79 +6391,95 @@ function bindTaxProfileForm(user: UserIdentity): void {
     await persistTaxProfile(shouldRender);
   };
 
-  form.addEventListener("input", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
-      return;
+  for (const form of forms) {
+    const formMode = form.dataset.taxProfileEditor;
+
+    form.addEventListener("input", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
+        return;
+      }
+
+      if (target.name === "filingStatus") {
+        taxProfileDraft.filingStatus = target.value as FilingStatus;
+      } else if (target.name === "deductionMode") {
+        taxProfileDraft.deductionMode = target.value as DeductionMode;
+      } else if (target.name === "federalStandardDeduction") {
+        taxProfileDraft.federalStandardDeduction = target.value;
+      } else if (target.name === "otherSaltTaxesPaid") {
+        taxProfileDraft.otherSaltTaxesPaid = target.value;
+      } else if (target.name === "saltDeductionBaseCap") {
+        taxProfileDraft.saltDeductionBaseCap = target.value;
+      } else if (target.name === "saltDeductionFloorCap") {
+        taxProfileDraft.saltDeductionFloorCap = target.value;
+      } else if (target.name === "saltDeductionPhaseoutThreshold") {
+        taxProfileDraft.saltDeductionPhaseoutThreshold = target.value;
+      } else if (target.name === "saltDeductionPhaseoutRate") {
+        taxProfileDraft.saltDeductionPhaseoutRate = target.value;
+      } else if (target.name === "otherItemizedDeductions") {
+        taxProfileDraft.otherItemizedDeductions = target.value;
+      } else if (target.name === "stateTaxableIncomeAdjustment") {
+        taxProfileDraft.stateTaxableIncomeAdjustment = target.value;
+      } else if (target.name === "localTaxableIncomeAdjustment") {
+        taxProfileDraft.localTaxableIncomeAdjustment = target.value;
+      } else if (target.name === "niitThreshold") {
+        taxProfileDraft.niitThreshold = target.value;
+      } else if (target.name === "federalOrdinaryTaxName") {
+        taxProfileDraft.federalOrdinaryTaxName = target.value;
+      } else if (target.name === "federalQualifiedTaxName") {
+        taxProfileDraft.federalQualifiedTaxName = target.value;
+      } else if (target.name === "stateTaxName") {
+        taxProfileDraft.stateTaxName = target.value;
+      } else if (target.name === "localTaxName") {
+        taxProfileDraft.localTaxName = target.value;
+      } else if (target.name === "niitTaxName") {
+        taxProfileDraft.niitTaxName = target.value;
+      }
+
+      if (formMode === "simulation") {
+        simulationDraft.taxPreset = "custom";
+        const presetSelect = document.querySelector<HTMLSelectElement>('select[name="simulationTaxPreset"]');
+        if (presetSelect) {
+          presetSelect.value = "custom";
+        }
+      }
+
+      scheduleTaxProfilePersistence();
+    });
+
+    form.addEventListener("change", async () => {
+      await flushTaxProfilePersistence(true);
+    });
+
+    if (formMode !== "setup") {
+      continue;
     }
 
-    if (target.name === "filingStatus") {
-      taxProfileDraft.filingStatus = target.value as FilingStatus;
-    } else if (target.name === "deductionMode") {
-      taxProfileDraft.deductionMode = target.value as DeductionMode;
-    } else if (target.name === "federalStandardDeduction") {
-      taxProfileDraft.federalStandardDeduction = target.value;
-    } else if (target.name === "otherSaltTaxesPaid") {
-      taxProfileDraft.otherSaltTaxesPaid = target.value;
-    } else if (target.name === "saltDeductionBaseCap") {
-      taxProfileDraft.saltDeductionBaseCap = target.value;
-    } else if (target.name === "saltDeductionFloorCap") {
-      taxProfileDraft.saltDeductionFloorCap = target.value;
-    } else if (target.name === "saltDeductionPhaseoutThreshold") {
-      taxProfileDraft.saltDeductionPhaseoutThreshold = target.value;
-    } else if (target.name === "saltDeductionPhaseoutRate") {
-      taxProfileDraft.saltDeductionPhaseoutRate = target.value;
-    } else if (target.name === "otherItemizedDeductions") {
-      taxProfileDraft.otherItemizedDeductions = target.value;
-    } else if (target.name === "stateTaxableIncomeAdjustment") {
-      taxProfileDraft.stateTaxableIncomeAdjustment = target.value;
-    } else if (target.name === "localTaxableIncomeAdjustment") {
-      taxProfileDraft.localTaxableIncomeAdjustment = target.value;
-    } else if (target.name === "niitThreshold") {
-      taxProfileDraft.niitThreshold = target.value;
-    } else if (target.name === "federalOrdinaryTaxName") {
-      taxProfileDraft.federalOrdinaryTaxName = target.value;
-    } else if (target.name === "federalQualifiedTaxName") {
-      taxProfileDraft.federalQualifiedTaxName = target.value;
-    } else if (target.name === "stateTaxName") {
-      taxProfileDraft.stateTaxName = target.value;
-    } else if (target.name === "localTaxName") {
-      taxProfileDraft.localTaxName = target.value;
-    } else if (target.name === "niitTaxName") {
-      taxProfileDraft.niitTaxName = target.value;
-    }
+    form.addEventListener("click", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
 
-    scheduleTaxProfilePersistence();
-  });
+      const button = target.closest<HTMLButtonElement>("#load-nyc-tax-preset");
+      if (!button) {
+        return;
+      }
 
-  form.addEventListener("change", async () => {
-    await flushTaxProfilePersistence(true);
-  });
-
-  form.addEventListener("click", async (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-
-    const button = target.closest<HTMLButtonElement>("#load-nyc-tax-preset");
-    if (!button) {
-      return;
-    }
-
-    event.preventDefault();
-    const preset = createDefaultNYCHouseholdTaxes(taxProfileDraft.filingStatus);
-    plannerState.taxes = preset.taxes.map((tax) => buildNormalizedTaxDefinition(tax));
-    plannerState.taxProfile = preset.profile;
-    syncTaxProfileDraft();
-    invalidateSimulationState();
-    if (taxProfilePersistTimeout !== null) {
-      window.clearTimeout(taxProfilePersistTimeout);
-      taxProfilePersistTimeout = null;
-    }
-    await persistPlannerState(user);
-    renderPlanner(user);
-  });
+      event.preventDefault();
+      const preset = createDefaultNYCHouseholdTaxes(taxProfileDraft.filingStatus);
+      plannerState.taxes = preset.taxes.map((tax) => buildNormalizedTaxDefinition(tax));
+      plannerState.taxProfile = preset.profile;
+      syncTaxProfileDraft();
+      invalidateSimulationState();
+      if (taxProfilePersistTimeout !== null) {
+        window.clearTimeout(taxProfilePersistTimeout);
+        taxProfilePersistTimeout = null;
+      }
+      await persistPlannerState(user);
+      renderPlanner(user);
+    });
+  }
 }
 
 function clearDeletedTaxReference(taxName: string): void {
@@ -7357,20 +7669,17 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
   simulationDraft.startYear = plannerState.startYear;
   simulationDraft.attempts =
     typeof partialState.simulationAttempts === "number" && Number.isFinite(partialState.simulationAttempts)
-      ? Math.max(5000, Math.min(100000, partialState.simulationAttempts))
+      ? Math.max(1000, Math.min(50000, partialState.simulationAttempts))
       : fallbackSimulationDraft.attempts;
   simulationDraft.taxPreset =
-    partialState.simulationTaxPreset === "nyc"
+    partialState.simulationTaxPreset === "nyc" || partialState.simulationTaxPreset === "custom"
       ? partialState.simulationTaxPreset
       : fallbackSimulationDraft.taxPreset;
   simulationDraft.horizonYears =
     typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
       ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
       : fallbackSimulationDraft.horizonYears;
-  simulationDraft.inflationMode =
-    partialState.simulationInflation?.mode === "regime-switching" || partialState.simulationInflation?.mode === "fixed"
-      ? partialState.simulationInflation.mode
-      : "fixed";
+  simulationDraft.inflationPreset = normalizeSimulationInflationPreset(partialState.simulationInflation);
   simulationDraft.fixedInflationRate =
     typeof partialState.simulationInflation?.fixedRate === "number" && Number.isFinite(partialState.simulationInflation.fixedRate)
       ? formatEditableNumberInput(String(partialState.simulationInflation.fixedRate))

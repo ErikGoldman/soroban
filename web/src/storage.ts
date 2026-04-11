@@ -160,10 +160,11 @@ export interface SavedPlannerState {
   startYear: string;
   yearsToShow: number;
   simulationAttempts?: number;
-  simulationTaxPreset?: "nyc";
+  simulationTaxPreset?: "nyc" | "custom";
   simulationHorizonYears?: number;
   simulationInflationRate?: number;
   simulationInflation?: {
+    preset?: "fixed" | "fixed-custom" | "regime" | "regime-custom";
     mode?: "fixed" | "regime-switching";
     fixedRate?: number;
     regimeSwitching?: {
