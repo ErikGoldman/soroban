@@ -48,6 +48,7 @@ export interface SimulationYearRow {
   label: string;
   depletionProbability: number;
   totalAssets: number;
+  liquidAssets?: number;
 }
 
 export interface SimulationScenario {
@@ -161,6 +162,7 @@ interface GeneratedCashStreamsResult {
 interface SimulationExecutionResult {
   scenarios: SimulationDetailScenario[];
   yearlyTotals: number[][];
+  yearlyLiquidTotals: number[][];
   depletionCountsByYear: number[];
 }
 
@@ -180,6 +182,7 @@ export interface BuildSimulationExecutionResult {
   scenarios: Map<SimulationPercentile, SimulationScenario>;
   details: SimulationDetailScenario[];
   yearlyTotals?: number[][];
+  yearlyLiquidTotals?: number[][];
   depletionCountsByYear?: number[];
 }
 
@@ -354,7 +357,7 @@ export function buildSimulationExecution(
   }: BuildSimulationScenariosInput,
   { onProgress, progressInterval, detailSampleLimit = null, includeAggregates = true }: BuildSimulationExecutionOptions = {}
 ): BuildSimulationExecutionResult {
-  const { scenarios, yearlyTotals, depletionCountsByYear } = runSimulationAttempts(
+  const { scenarios, yearlyTotals, yearlyLiquidTotals, depletionCountsByYear } = runSimulationAttempts(
     {
       attempts,
       horizonYears,
@@ -377,12 +380,14 @@ export function buildSimulationExecution(
       horizonYears,
       yearlySnapshots,
       yearlyTotals,
+      yearlyLiquidTotals,
       depletionCountsByYear,
     }),
     details: scenarios,
     ...(includeAggregates
       ? {
           yearlyTotals,
+          yearlyLiquidTotals,
           depletionCountsByYear,
         }
       : {}),
@@ -401,6 +406,7 @@ export function buildSimulationScenariosFromDetails({
   details: readonly SimulationDetailScenario[];
 }): Map<SimulationPercentile, SimulationScenario> {
   const yearlyTotals = Array.from({ length: horizonYears }, () => [] as number[]);
+  const yearlyLiquidTotals = Array.from({ length: horizonYears }, () => [] as number[]);
   const depletionCountsByYear = Array.from({ length: horizonYears }, () => 0);
 
   for (const scenario of details) {
@@ -411,6 +417,7 @@ export function buildSimulationScenariosFromDetails({
       }
 
       yearlyTotals[rowIndex]?.push(row.totalAssets);
+      yearlyLiquidTotals[rowIndex]?.push(row.liquidAssets ?? 0);
       if (row.depleted) {
         depletionCountsByYear[rowIndex] += 1;
       }
@@ -422,6 +429,7 @@ export function buildSimulationScenariosFromDetails({
     horizonYears,
     yearlySnapshots,
     yearlyTotals,
+    yearlyLiquidTotals,
     depletionCountsByYear,
   });
 }
@@ -431,12 +439,14 @@ export function buildSimulationScenariosFromAggregates({
   horizonYears,
   yearlySnapshots,
   yearlyTotals,
+  yearlyLiquidTotals,
   depletionCountsByYear,
 }: {
   attempts: number;
   horizonYears: number;
   yearlySnapshots: readonly SimulationYearlySnapshot[];
   yearlyTotals: readonly (readonly number[])[];
+  yearlyLiquidTotals: readonly (readonly number[])[];
   depletionCountsByYear: readonly number[];
 }): Map<SimulationPercentile, SimulationScenario> {
   return buildSimulationScenarioSummaries({
@@ -444,6 +454,7 @@ export function buildSimulationScenariosFromAggregates({
     horizonYears,
     yearlySnapshots,
     yearlyTotals,
+    yearlyLiquidTotals,
     depletionCountsByYear,
   });
 }
@@ -453,12 +464,14 @@ function buildSimulationScenarioSummaries({
   horizonYears,
   yearlySnapshots,
   yearlyTotals,
+  yearlyLiquidTotals,
   depletionCountsByYear,
 }: {
   attempts: number;
   horizonYears: number;
   yearlySnapshots: readonly SimulationYearlySnapshot[];
   yearlyTotals: readonly (readonly number[])[];
+  yearlyLiquidTotals: readonly (readonly number[])[];
   depletionCountsByYear: readonly number[];
 }): Map<SimulationPercentile, SimulationScenario> {
   const rowCount = Math.min(horizonYears, yearlySnapshots.length);
@@ -469,6 +482,7 @@ function buildSimulationScenarioSummaries({
     for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
       const snapshot = yearlySnapshots[rowIndex];
       const yearlyPercentileTotalAssets = selectPercentileValue(yearlyTotals[rowIndex] ?? [], percentile);
+      const yearlyPercentileLiquidAssets = selectPercentileValue(yearlyLiquidTotals[rowIndex] ?? [], percentile);
       if (!snapshot || yearlyPercentileTotalAssets === null) {
         continue;
       }
@@ -477,6 +491,7 @@ function buildSimulationScenarioSummaries({
         label: snapshot.label,
         depletionProbability: ((depletionCountsByYear[rowIndex] ?? 0) / attempts) * 100,
         totalAssets: yearlyPercentileTotalAssets,
+        liquidAssets: yearlyPercentileLiquidAssets ?? 0,
       });
     }
     results.set(percentile, {
@@ -584,6 +599,7 @@ function runSimulationAttempts({
 }: BuildSimulationExecutionOptions = {}): SimulationExecutionResult {
   const scenarios: SimulationDetailScenario[] = [];
   const yearlyTotals = Array.from({ length: horizonYears }, () => [] as number[]);
+  const yearlyLiquidTotals = Array.from({ length: horizonYears }, () => [] as number[]);
   const depletionCountsByYear = Array.from({ length: horizonYears }, () => 0);
   const normalizedAssets = assets.map(normalizeSimulationAsset);
   assertUniqueSimulationAssetNames(normalizedAssets);
@@ -806,6 +822,7 @@ function runSimulationAttempts({
       assetCostBases = saleResult.assetCostBases;
       capitalLossCarryforward = endingCapitalLossCarryforward;
       yearlyTotals[yearIndex]?.push(finalTotalAssets);
+      yearlyLiquidTotals[yearIndex]?.push(endingInvestmentAssets);
       if (hasDepleted) {
         depletionCountsByYear[yearIndex] += 1;
       }
@@ -852,6 +869,7 @@ function runSimulationAttempts({
   return {
     scenarios,
     yearlyTotals,
+    yearlyLiquidTotals,
     depletionCountsByYear,
   };
 }

@@ -1454,6 +1454,52 @@ describe("buildSimulationScenarios", () => {
     expect(medianRows[1]?.totalAssets).toBeCloseTo(expectedMedianTotals[1] ?? 0, 6);
   });
 
+  it("tracks liquid-asset percentiles separately from total assets", () => {
+    const input = {
+      attempts: 3,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Stocks",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: ANNUAL_VOLATILITY_10_PERCENT,
+          sellProportion: 0,
+        },
+        {
+          kind: "home",
+          name: "Home",
+          initialCost: 100,
+          expectedReturn: 0,
+          volatility: ANNUAL_VOLATILITY_10_PERCENT,
+          cashPurchasePercent: 1,
+          mortgageType: "amortizing",
+          mortgageRate: 0,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 2026,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0, 1, -1, -1, 1]),
+    } satisfies Parameters<typeof buildSimulationScenarios>[0];
+    const scenarios = buildSimulationScenarios(input);
+    const medianRow = scenarios.get(50)?.rows[0];
+    expect(medianRow?.totalAssets).toBeCloseTo(200, 6);
+    expect(medianRow?.liquidAssets).toBeCloseTo(100, 6);
+  });
+
   it("rejects invalid correlation matrices instead of coercing them", () => {
     expect(() =>
       buildSimulationScenarios({

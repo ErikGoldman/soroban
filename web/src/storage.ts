@@ -162,6 +162,7 @@ export interface SavedPlannerState {
   simulationAttempts?: number;
   simulationTaxPreset?: "nyc";
   simulationHorizonYears?: number;
+  simulationInflationRate?: number;
   simulationVariableSweep?: {
     enabled?: boolean;
     variableName?: string;

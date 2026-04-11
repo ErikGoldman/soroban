@@ -255,6 +255,7 @@ interface SimulationDraft {
   startYear: string;
   attempts: number;
   horizonYears: number;
+  inflationRate: string;
   taxPreset: TaxPreset;
   assetRows: SimulationAssetDraft[];
   variableSweep: VariableSweepDraft;
@@ -311,6 +312,7 @@ interface FormulaEditorBinding {
 
 type SummaryTab = "variables" | "assets" | "taxes";
 type PlannerBoardTab = "setup" | "simulation";
+type SimulationChartMetric = "totalAssets" | "liquidAssets";
 type TaxPreset = "nyc";
 const VARIABLE_SWEEP_STORAGE_KEY_PREFIX = "soroban:simulation-variable-sweep:";
 // When true, each active worker is assigned a distinct sweep value before any sweep is split into chunks.
@@ -380,6 +382,7 @@ let activeSummaryTab: SummaryTab = "variables";
 let activePlannerBoardTab: PlannerBoardTab = "setup";
 let activeInlineAssetValueEditName: string | null = null;
 let selectedSimulationPercentile: SimulationPercentile = 50;
+let selectedSimulationChartMetric: SimulationChartMetric = "totalAssets";
 let simulationResults: Map<SimulationPercentile, SimulationScenario> | null = null;
 let simulationDetailResults: SimulationDetailScenario[] | null = null;
 let simulationSweepResults: SimulationSweepResult | null = null;
@@ -455,6 +458,7 @@ function createSimulationDraft(): SimulationDraft {
     startYear: String(new Date().getFullYear()),
     attempts: 10000,
     horizonYears: 10,
+    inflationRate: String(DEFAULT_EXPENSE_INFLATION_RATE * 100),
     taxPreset: "nyc",
     assetRows: [],
     variableSweep: {
@@ -880,12 +884,6 @@ function formatPercentage(value: number): string {
   }).format(value) + "%";
 }
 
-function formatMultiplier(value: number): string {
-  return new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: 2,
-  }).format(value) + "x";
-}
-
 function formatEditableNumber(value: number): string {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 2,
@@ -1151,12 +1149,14 @@ function addAmountToHouseholdTaxInput(
 function buildSnapshotsFromPlannerData({
   startYearInput,
   yearsToShow,
+  inflationRate = DEFAULT_EXPENSE_INFLATION_RATE,
   variables: variableDefinitions,
   flows: flowDefinitions,
   events,
 }: {
   startYearInput: string;
   yearsToShow: number;
+  inflationRate?: number;
   variables: readonly VariableDefinition[];
   flows: readonly FlowDefinition[];
   events: readonly Event[];
@@ -1177,7 +1177,7 @@ function buildSnapshotsFromPlannerData({
     const flowAmounts = new Map(
       flows.map((flow) => [
         flow.name,
-        applyFlowExpenseInflation(flow, flow.evaluateSignedYearlyAmount(context), offset, DEFAULT_EXPENSE_INFLATION_RATE),
+        applyFlowExpenseInflation(flow, flow.evaluateSignedYearlyAmount(context), offset, inflationRate),
       ])
     );
     const householdTaxInput = createEmptyHouseholdTaxInput();
@@ -1209,6 +1209,7 @@ function buildSnapshots(startYearInput: string, yearsToShow: number): YearlySnap
   return buildSnapshotsFromPlannerData({
     startYearInput,
     yearsToShow,
+    inflationRate: DEFAULT_EXPENSE_INFLATION_RATE,
     variables: plannerState.variables,
     flows: plannerState.flows,
     events: plannerState.events,
@@ -1276,6 +1277,7 @@ function clearSimulationOutputs(): void {
   simulationSweepResults = null;
   selectedSimulationSweepStepIndex = 0;
   selectedSimulationPercentile = 50;
+  selectedSimulationChartMetric = "totalAssets";
   expandedSimulationExampleKeys = new Set();
 }
 
@@ -1314,6 +1316,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
   const yearlySnapshots = buildSnapshotsFromPlannerData({
     startYearInput: simulationDraft.startYear,
     yearsToShow: simulationDraft.horizonYears,
+    inflationRate: parseEditableNumber(simulationDraft.inflationRate) / 100,
     variables: buildSimulationVariableDefinitions(variableOverride),
     flows: plannerState.flows,
     events: plannerState.events,
@@ -1657,14 +1660,16 @@ function renderSetupAssetArea(): string {
                 </div>
                 ${
                   activeInlineAssetValueEditName === asset.name
-                    && isInvestmentAsset(asset)
                     ? `
                   <form class="inline-asset-value-form" data-inline-asset-value-form="${escapeAttribute(asset.name)}">
                     <input
                       class="inline-asset-value-input"
-                      name="startingValue"
+                      name="${isHomeAsset(asset) ? "initialCost" : "startingValue"}"
+                      data-inline-asset-value-input="true"
                       ${renderEditableNumberInputAttributes()}
-                      value="${escapeAttribute(formatEditableNumberInput(String(asset.startingValue)))}"
+                      value="${escapeAttribute(
+                        formatEditableNumberInput(String(isHomeAsset(asset) ? asset.initialCost : asset.startingValue))
+                      )}"
                     />
                     <button type="submit" class="secondary-button">Save</button>
                     <button
@@ -1692,7 +1697,6 @@ function renderSetupAssetArea(): string {
                 <span><strong>Type</strong>${isHomeAsset(asset) ? "Home" : "Investment"}</span>
                 <span><strong>Expected return</strong>${formatPercentage(asset.expectedReturn)}</span>
                 <span><strong>Volatility</strong>${formatPercentage(asset.volatility)}</span>
-                <span><strong>${isHomeAsset(asset) ? "Sale behavior" : "Sell multiplier"}</strong>${isHomeAsset(asset) ? "Not sellable" : formatMultiplier(isInvestmentAsset(asset) ? asset.sellProportion : 0)}</span>
               </div>
             </article>
           `
@@ -2221,6 +2225,14 @@ function getSimulationSubmitState(): { disabled: boolean; reason: string } {
     }
   }
 
+  const inflationRate = parseEditableNumber(simulationDraft.inflationRate);
+  if (!Number.isFinite(inflationRate)) {
+    return {
+      disabled: true,
+      reason: "Simulation inflation rate must be a finite number.",
+    };
+  }
+
   return {
     disabled: false,
     reason: "",
@@ -2553,6 +2565,10 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
     simulationAttempts: simulationDraft.attempts,
     simulationTaxPreset: simulationDraft.taxPreset,
     simulationHorizonYears: simulationDraft.horizonYears,
+    simulationInflationRate:
+      Number.isFinite(parseEditableNumber(simulationDraft.inflationRate))
+        ? parseEditableNumber(simulationDraft.inflationRate)
+        : undefined,
     simulationVariableSweep: {
       enabled: simulationDraft.variableSweep.enabled,
       variableName: simulationDraft.variableSweep.variableName,
@@ -2735,7 +2751,22 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
   `;
 }
 
-function renderSimulationChart(results: Map<SimulationPercentile, SimulationScenario>): string {
+function renderSimulationChart(
+  results: Map<SimulationPercentile, SimulationScenario>,
+  {
+    title,
+    description,
+    ariaLabel,
+    valueKey,
+    valueLabel,
+  }: {
+    title: string;
+    description: string;
+    ariaLabel: string;
+    valueKey: "totalAssets" | "liquidAssets";
+    valueLabel: string;
+  }
+): string {
   const scenarios = simulationPercentiles
     .map((percentile) => results.get(percentile))
     .filter((scenario): scenario is SimulationScenario => Boolean(scenario));
@@ -2752,7 +2783,7 @@ function renderSimulationChart(results: Map<SimulationPercentile, SimulationScen
   const chartWidth = width - marginLeft - marginRight;
   const chartHeight = height - marginTop - marginBottom;
   const yearCount = Math.max(...scenarios.map((scenario) => scenario.rows.length));
-  const values = scenarios.flatMap((scenario) => scenario.rows.map((row) => row.totalAssets));
+  const values = scenarios.flatMap((scenario) => scenario.rows.map((row) => row[valueKey] ?? 0));
   const maxValue = Math.max(...values, 0);
   const yStep = 10_000_000;
   const yMin = 0;
@@ -2771,8 +2802,8 @@ function renderSimulationChart(results: Map<SimulationPercentile, SimulationScen
     <section class="simulation-chart-panel">
       <div class="simulation-chart-header">
         <div>
-          <strong>Total assets by year</strong>
-          <p class="helper-copy">X-axis: simulation year. Y-axis: portfolio value at each year-by-year percentile across all simulation attempts.</p>
+          <strong>${escapeHtml(title)}</strong>
+          <p class="helper-copy">${escapeHtml(description)}</p>
         </div>
         <div class="simulation-chart-legend">
           ${simulationPercentiles
@@ -2788,7 +2819,7 @@ function renderSimulationChart(results: Map<SimulationPercentile, SimulationScen
         </div>
       </div>
       <div class="board-scroll">
-        <svg class="simulation-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Simulation total assets by year and percentile">
+        <svg class="simulation-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttribute(ariaLabel)}">
           ${yTicks.map((tickValue) => {
             const y = yForValue(tickValue);
             return `
@@ -2813,34 +2844,39 @@ function renderSimulationChart(results: Map<SimulationPercentile, SimulationScen
             .map((scenario) => {
               const color = getSimulationPercentileColor(scenario.percentile);
               const path = scenario.rows
-                .map((row, index) => `${index === 0 ? "M" : "L"} ${xForYear(row.yearNumber)} ${yForValue(row.totalAssets)}`)
+                .map((row, index) => {
+                  const value = row[valueKey] ?? 0;
+                  return `${index === 0 ? "M" : "L"} ${xForYear(row.yearNumber)} ${yForValue(value)}`;
+                })
                 .join(" ");
               return `
                 <path class="simulation-chart-line ${selectedSimulationPercentile === scenario.percentile ? "is-active" : ""}" d="${path}" stroke="${color}"></path>
                 ${scenario.rows
-                  .map(
-                    (row) => `
+                  .map((row) => {
+                    const value = row[valueKey] ?? 0;
+                    return `
                       <circle
                         class="simulation-chart-point ${selectedSimulationPercentile === scenario.percentile ? "is-active" : ""}"
                         cx="${xForYear(row.yearNumber)}"
-                        cy="${yForValue(row.totalAssets)}"
+                        cy="${yForValue(value)}"
                         r="${selectedSimulationPercentile === scenario.percentile ? 6 : 5}"
                         fill="${color}"
                         data-simulation-chart-point="true"
                         data-simulation-chart-year="${row.yearNumber}"
                         data-simulation-chart-label="${escapeAttribute(row.label)}"
-                        data-simulation-chart-total-assets="${escapeAttribute(formatCompactCurrency(row.totalAssets))}"
+                        data-simulation-chart-value="${escapeAttribute(formatCompactCurrency(value))}"
+                        data-simulation-chart-metric="${escapeAttribute(valueLabel)}"
                         data-simulation-chart-percentile="${scenario.percentile}"
                       ></circle>
                     `
-                  )
+                  })
                   .join("")}
               `;
             })
             .join("")}
         </svg>
       </div>
-      <div class="simulation-chart-tooltip" id="simulation-chart-tooltip" hidden></div>
+      <div class="simulation-chart-tooltip" hidden></div>
     </section>
   `;
 }
@@ -2938,6 +2974,24 @@ function renderSimulationBoard(): string {
       `
     )
     .join("");
+  const selectedSimulationChart =
+    selectedSimulationChartMetric === "liquidAssets"
+      ? {
+          title: "Liquid assets by year",
+          description:
+            "Uses the same percentile bucketing as the main chart, but only for liquid assets. Home equity is excluded.",
+          ariaLabel: "Simulation liquid assets by year and percentile",
+          valueKey: "liquidAssets" as const,
+          valueLabel: "Liquid assets",
+        }
+      : {
+          title: "Total assets by year",
+          description:
+            "X-axis: simulation year. Y-axis: portfolio value at each year-by-year percentile across all simulation attempts.",
+          ariaLabel: "Simulation total assets by year and percentile",
+          valueKey: "totalAssets" as const,
+          valueLabel: "Total assets",
+        };
 
   return `
     <div class="simulation-panel">
@@ -2950,6 +3004,14 @@ function renderSimulationBoard(): string {
           <label>
             Time horizon (years)
             <input name="simulationHorizonYears" type="number" min="1" max="50" value="${simulationDraft.horizonYears}" />
+          </label>
+          <label>
+            Inflation rate (%)
+            <input
+              name="simulationInflationRate"
+              ${renderEditableNumberInputAttributes()}
+              value="${escapeHtml(formatEditableNumberInput(simulationDraft.inflationRate))}"
+            />
           </label>
           <label>
             Attempts
@@ -3087,7 +3149,23 @@ function renderSimulationBoard(): string {
         selectedScenario
           ? `
       ${renderSimulationSweepResults()}
-      ${renderSimulationChart(displayedSimulationResults!)}
+      <div class="tab-strip" role="tablist" aria-label="Simulation chart metric">
+        <button
+          type="button"
+          class="${selectedSimulationChartMetric === "totalAssets" ? "tab-button is-active" : "tab-button"}"
+          data-simulation-chart-metric="totalAssets"
+        >
+          Total assets
+        </button>
+        <button
+          type="button"
+          class="${selectedSimulationChartMetric === "liquidAssets" ? "tab-button is-active" : "tab-button"}"
+          data-simulation-chart-metric="liquidAssets"
+        >
+          Liquid assets
+        </button>
+      </div>
+      ${renderSimulationChart(displayedSimulationResults!, selectedSimulationChart)}
       <div class="tab-strip" role="tablist" aria-label="Simulation percentiles">
         ${simulationPercentiles
           .map(
@@ -3190,34 +3268,35 @@ function syncSimulationSubmitState(): void {
 }
 
 function bindSimulationChartTooltip(): void {
-  const tooltip = document.querySelector<HTMLDivElement>("#simulation-chart-tooltip");
-  const panel = document.querySelector<HTMLElement>(".simulation-chart-panel");
-  if (!tooltip || !panel) {
-    return;
+  for (const panel of document.querySelectorAll<HTMLElement>(".simulation-chart-panel")) {
+    const tooltip = panel.querySelector<HTMLDivElement>(".simulation-chart-tooltip");
+    if (!tooltip) {
+      continue;
+    }
+
+    const hideTooltip = () => {
+      tooltip.hidden = true;
+    };
+
+    const updateTooltipPosition = (event: MouseEvent) => {
+      const panelRect = panel.getBoundingClientRect();
+      const tooltipOffset = 16;
+      tooltip.style.left = `${event.clientX - panelRect.left + tooltipOffset}px`;
+      tooltip.style.top = `${event.clientY - panelRect.top - tooltipOffset}px`;
+    };
+
+    for (const point of panel.querySelectorAll<SVGCircleElement>("[data-simulation-chart-point]")) {
+      point.addEventListener("mouseenter", (event) => {
+        tooltip.textContent = `${point.dataset.simulationChartLabel} | ${point.dataset.simulationChartMetric}: ${point.dataset.simulationChartValue} | ${point.dataset.simulationChartPercentile}th percentile`;
+        tooltip.hidden = false;
+        updateTooltipPosition(event);
+      });
+      point.addEventListener("mousemove", updateTooltipPosition);
+      point.addEventListener("mouseleave", hideTooltip);
+    }
+
+    panel.addEventListener("mouseleave", hideTooltip);
   }
-
-  const hideTooltip = () => {
-    tooltip.hidden = true;
-  };
-
-  const updateTooltipPosition = (event: MouseEvent) => {
-    const panelRect = panel.getBoundingClientRect();
-    const tooltipOffset = 16;
-    tooltip.style.left = `${event.clientX - panelRect.left + tooltipOffset}px`;
-    tooltip.style.top = `${event.clientY - panelRect.top - tooltipOffset}px`;
-  };
-
-  for (const point of document.querySelectorAll<SVGCircleElement>("[data-simulation-chart-point]")) {
-    point.addEventListener("mouseenter", (event) => {
-      tooltip.textContent = `${point.dataset.simulationChartLabel} | ${point.dataset.simulationChartTotalAssets} | ${point.dataset.simulationChartPercentile}th percentile`;
-      tooltip.hidden = false;
-      updateTooltipPosition(event);
-    });
-    point.addEventListener("mousemove", updateTooltipPosition);
-    point.addEventListener("mouseleave", hideTooltip);
-  }
-
-  panel.addEventListener("mouseleave", hideTooltip);
 }
 
 function renderAssetComposer(): string {
@@ -4269,6 +4348,8 @@ function bindHandlers(user: UserIdentity): void {
       plannerState.startYear = normalizedYear;
     } else if (target.name === "simulationHorizonYears") {
       simulationDraft.horizonYears = Math.max(1, Math.min(50, Number(target.value) || 1));
+    } else if (target.name === "simulationInflationRate") {
+      simulationDraft.inflationRate = target.value;
     } else if (target.name === "simulationAttempts") {
       simulationDraft.attempts = Math.max(5000, Math.min(100000, Number(target.value) || 5000));
       invalidateSimulationState();
@@ -4380,6 +4461,7 @@ function bindHandlers(user: UserIdentity): void {
     const scenariosByTask = new Map<number, Map<SimulationPercentile, SimulationScenario>>();
     const detailResultsByTask = new Map<number, SimulationDetailScenario[]>();
     const yearlyTotalsByTask = new Map<number, number[][]>();
+    const yearlyLiquidTotalsByTask = new Map<number, number[][]>();
     const depletionCountsByTask = new Map<number, number[]>();
     const completedTaskCountsByRun = simulationRuns.map(() => 0);
     let pendingTasks = taskDefinitions.length;
@@ -4457,6 +4539,9 @@ function bindHandlers(user: UserIdentity): void {
                 yearlySnapshots: run.input.yearlySnapshots,
                 yearlyTotals: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
                   run.taskIds.flatMap((taskId) => yearlyTotalsByTask.get(taskId)?.[rowIndex] ?? [])
+                ),
+                yearlyLiquidTotals: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
+                  run.taskIds.flatMap((taskId) => yearlyLiquidTotalsByTask.get(taskId)?.[rowIndex] ?? [])
                 ),
                 depletionCountsByYear: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
                   run.taskIds.reduce((total, taskId) => total + (depletionCountsByTask.get(taskId)?.[rowIndex] ?? 0), 0)
@@ -4546,6 +4631,9 @@ function bindHandlers(user: UserIdentity): void {
         if (message.yearlyTotals) {
           yearlyTotalsByTask.set(task.id, message.yearlyTotals);
         }
+        if (message.yearlyLiquidTotals) {
+          yearlyLiquidTotalsByTask.set(task.id, message.yearlyLiquidTotals);
+        }
         if (message.depletionCountsByYear) {
           depletionCountsByTask.set(task.id, message.depletionCountsByYear);
         }
@@ -4579,6 +4667,18 @@ function bindHandlers(user: UserIdentity): void {
       }
 
       selectedSimulationPercentile = percentile;
+      renderPlanner(user);
+    });
+  }
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-simulation-chart-metric]")) {
+    button.addEventListener("click", () => {
+      const metric = button.dataset.simulationChartMetric as SimulationChartMetric | undefined;
+      if (!metric) {
+        return;
+      }
+
+      selectedSimulationChartMetric = metric;
       renderPlanner(user);
     });
   }
@@ -4773,7 +4873,7 @@ function bindHandlers(user: UserIdentity): void {
   }
 
   for (const form of document.querySelectorAll<HTMLFormElement>("[data-inline-asset-value-form]")) {
-    const input = form.querySelector<HTMLInputElement>('input[name="startingValue"]');
+    const input = form.querySelector<HTMLInputElement>("[data-inline-asset-value-input]");
     const assetName = form.dataset.inlineAssetValueForm;
     if (!input || !assetName) {
       continue;
@@ -4826,7 +4926,7 @@ function focusInlineAssetValueInput(): void {
   }
 
   const input = document.querySelector<HTMLInputElement>(
-    `[data-inline-asset-value-form="${CSS.escape(activeInlineAssetValueEditName)}"] input[name="startingValue"]`
+    `[data-inline-asset-value-form="${CSS.escape(activeInlineAssetValueEditName)}"] [data-inline-asset-value-input]`
   );
   if (!input) {
     return;
@@ -7070,6 +7170,10 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
     typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
       ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
       : fallbackSimulationDraft.horizonYears;
+  simulationDraft.inflationRate =
+    typeof partialState.simulationInflationRate === "number" && Number.isFinite(partialState.simulationInflationRate)
+      ? formatEditableNumberInput(String(partialState.simulationInflationRate))
+      : fallbackSimulationDraft.inflationRate;
   simulationDraft.variableSweep.enabled = partialState.simulationVariableSweep?.enabled === true;
   simulationDraft.variableSweep.variableName =
     typeof partialState.simulationVariableSweep?.variableName === "string"
