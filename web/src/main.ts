@@ -1009,47 +1009,23 @@ function buildTaxProfileDefinitionFromSaved(
 }
 
 function createDefaultPlannerState(): PlannerState {
+  const taxProfile = createDefaultHouseholdTaxProfile();
+
   return {
-    variables: [
-      { name: "salary", value: 6200 },
-      { name: "rent", value: 2150 },
-      { name: "groceries", value: 650 },
-    ],
+    variables: [],
     assets: [],
     taxes: [],
-    taxProfile: createDefaultHouseholdTaxProfile(),
+    taxProfile: {
+      ...taxProfile,
+      federalOrdinaryTaxName: "",
+      federalQualifiedTaxName: "",
+      stateTaxName: "",
+      localTaxName: "",
+      niitTaxName: "",
+    },
     assetCorrelations: [],
-    flows: [
-      { name: "Salary", type: "income", formula: "salary", taxTreatment: "wages" },
-      {
-        name: "Rent",
-        type: "expense",
-        formula: "rent",
-        taxTreatment: "nondeductible-expense",
-        inflationAdjusted: true,
-      },
-      {
-        name: "Groceries",
-        type: "expense",
-        formula: "groceries",
-        taxTreatment: "nondeductible-expense",
-        inflationAdjusted: true,
-      },
-    ],
-    events: [
-      new Event({
-        name: "Spring raise",
-        flowName: "Salary",
-        schedule: [
-          {
-            year: { year: 2027 },
-            actions: [
-              { kind: "set-flow-formula", flowName: "Salary", formula: "salary * 1.04 + 150" },
-            ],
-          },
-        ],
-      }),
-    ],
+    flows: [],
+    events: [],
     startYear: String(new Date().getFullYear()),
     yearsToShow: 3,
   };
@@ -2078,7 +2054,7 @@ function renderExpenseValuePath(flowName: string, startYearInput: string, initia
 
 function renderSetupExpenseArea(expenseRows: Array<{ flow: FlowDefinition; yearlyAmount: number }>): string {
   if (expenseRows.length === 0) {
-    return `<p class="helper-copy">No expenses yet. Add one to model recurring or one-time spending.</p>`;
+    return `<p class="helper-copy">No income or expenses yet. Add one to model recurring or one-time spending.</p>`;
   }
 
   return `
@@ -2179,7 +2155,7 @@ function renderSetupBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAmoun
               <p class="kicker">Assets</p>
               <h2>Holdings and return assumptions</h2>
             </div>
-            <button type="button" class="secondary-button" id="open-asset-composer">Create asset</button>
+            <button type="button" id="open-asset-composer">Create asset</button>
           </div>
           ${renderSetupAssetArea()}
         </section>
@@ -2187,10 +2163,10 @@ function renderSetupBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAmoun
         <section class="panel workspace-section">
           <div class="workspace-section-header">
             <div class="panel-heading">
-              <p class="kicker">Expenses</p>
-              <h2>Current spending model</h2>
+              <p class="kicker">Cash flow</p>
+              <h2>Income and Expenses</h2>
             </div>
-            <button type="button" id="open-flow-composer">Create expense</button>
+            <button type="button" id="open-flow-composer">Create income or expense</button>
           </div>
           ${renderSetupExpenseArea(expenseRows)}
         </section>
@@ -2308,7 +2284,7 @@ function renderPlanner(user: UserIdentity): void {
 
 function renderExpensesBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAmount: number }>): string {
   if (expenseRows.length === 0) {
-    return `<p class="helper-copy">No expenses yet. Create one to track a recurring or one-time outflow.</p>`;
+    return `<p class="helper-copy">No income or expenses yet. Create one to track a recurring or one-time outflow.</p>`;
   }
 
   return `
@@ -4601,7 +4577,7 @@ function renderFlowComposer(): string {
       <section class="panel modal-panel">
         <div class="modal-header">
           <div class="panel-heading">
-            <p class="kicker">Create Expense</p>
+            <p class="kicker">Create Income or Expense</p>
             <h2>New expense</h2>
           </div>
           <button type="button" class="ghost-button" id="close-flow-composer">Close</button>
