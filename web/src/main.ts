@@ -53,6 +53,7 @@ import {
   deleteFlowAndPruneVariables,
   createFormulaContext,
   evaluateFormula,
+  getDefaultAssetCashGenerationInflationCorrelation,
   isFlowInflationAdjusted,
   resolveAssetValueFormula,
   type FlowTaxTreatment,
@@ -195,9 +196,11 @@ interface AssetDraft {
 
 interface AssetCashGenerationDraft {
   id: string;
+  expanded: boolean;
   name: string;
   rate: string;
   volatility: string;
+  inflationCorrelation: string;
   taxTreatment: AssetCashTaxTreatment;
 }
 
@@ -264,7 +267,7 @@ interface AssetTypePreset {
   label: string;
   expectedReturn: string;
   volatility: string;
-  cashGenerations: readonly Omit<AssetCashGenerationDraft, "id">[];
+  cashGenerations: readonly Omit<AssetCashGenerationDraft, "id" | "expanded">[];
 }
 
 const ASSET_TYPE_PRESETS: Record<InvestmentAssetType, AssetTypePreset> = {
@@ -277,12 +280,14 @@ const ASSET_TYPE_PRESETS: Record<InvestmentAssetType, AssetTypePreset> = {
         name: "Qualified dividends",
         rate: "1.1",
         volatility: "0",
+        inflationCorrelation: "0",
         taxTreatment: "qualified-dividends",
       },
       {
         name: "Ordinary income",
         rate: "0.1",
         volatility: "0",
+        inflationCorrelation: "0",
         taxTreatment: "ordinary-income",
       },
     ],
@@ -296,6 +301,7 @@ const ASSET_TYPE_PRESETS: Record<InvestmentAssetType, AssetTypePreset> = {
         name: "State+local exempt income",
         rate: "3.7",
         volatility: "0.43",
+        inflationCorrelation: "0.75",
         taxTreatment: "state-local-exempt",
       },
     ],
@@ -309,6 +315,7 @@ const ASSET_TYPE_PRESETS: Record<InvestmentAssetType, AssetTypePreset> = {
         name: "Triple exempt income",
         rate: "3.2",
         volatility: "0.19",
+        inflationCorrelation: "0.75",
         taxTreatment: "triple-exempt",
       },
     ],
@@ -532,19 +539,27 @@ function createAssetDraft(): AssetDraft {
     propertyTaxRate: "1",
     purchaseYear: String(new Date().getFullYear()),
     cashGenerationEnabled: false,
-    cashGenerations: [createAssetCashGenerationDraft()],
+    cashGenerations: [createAssetCashGenerationDraft("investment", { expanded: true })],
     saleTaxEnabled: false,
     saleTaxCostBasis: "0",
     saleTaxTreatment: "long-term-capital-gains",
   };
 }
 
-function createAssetCashGenerationDraft(): AssetCashGenerationDraft {
+function createAssetCashGenerationDraft(
+  kind: AssetDraftKind = "investment",
+  options: {
+    expanded?: boolean;
+  } = {}
+): AssetCashGenerationDraft {
+  const assetType = getInvestmentAssetTypeFromDraftKind(kind);
   return {
     id: createId(),
+    expanded: options.expanded ?? false,
     name: "",
     rate: "0",
     volatility: "0",
+    inflationCorrelation: String(getDefaultAssetCashGenerationInflationCorrelation(assetType)),
     taxTreatment: "ordinary-income",
   };
 }
@@ -582,10 +597,11 @@ function getAssetTypePreset(kind: AssetDraftKind): AssetTypePreset | null {
 }
 
 function createAssetCashGenerationDraftFromPreset(
-  cashGeneration: Omit<AssetCashGenerationDraft, "id">
+  cashGeneration: Omit<AssetCashGenerationDraft, "id" | "expanded">
 ): AssetCashGenerationDraft {
   return {
     id: createId(),
+    expanded: false,
     ...cashGeneration,
   };
 }
@@ -981,12 +997,19 @@ function buildAssetDraftFromDefinition(
       cashGenerations.length > 0
         ? cashGenerations.map((cashGeneration, index) => ({
             id: createId(),
-            name: cashGeneration.name ?? `Cash generation ${index + 1}`,
+            expanded: false,
+            name: cashGeneration.name ?? "",
             rate: String(cashGeneration.rate),
             volatility: String(cashGeneration.volatility),
+            inflationCorrelation: String(
+              cashGeneration.inflationCorrelation ??
+                getDefaultAssetCashGenerationInflationCorrelation(
+                  isInvestmentAsset(asset) ? asset.assetType ?? null : null
+                )
+            ),
             taxTreatment: cashGeneration.taxTreatment ?? "ordinary-income",
           }))
-        : [createAssetCashGenerationDraft()],
+        : [createAssetCashGenerationDraft(asset.kind === "home" ? "home" : asset.assetType ?? "investment", { expanded: true })],
     saleTaxEnabled: isInvestmentAsset(resolvedAsset) && Boolean(resolvedAsset.saleTax),
     saleTaxCostBasis: String(isInvestmentAsset(resolvedAsset) ? resolvedAsset.saleTax?.costBasis ?? 0 : 0),
     saleTaxTreatment:
@@ -1045,9 +1068,12 @@ function migratePersistedAsset(
       ...(persistedCashGenerations.length > 0
         ? {
             cashGenerations: persistedCashGenerations.map((cashGeneration, index) => ({
-              name: cashGeneration.name ?? `Cash generation ${index + 1}`,
+              name: cashGeneration.name ?? "",
               rate: cashGeneration.rate,
               volatility: cashGeneration.volatility,
+              inflationCorrelation:
+                cashGeneration.inflationCorrelation ??
+                getDefaultAssetCashGenerationInflationCorrelation(asset.assetType ?? null),
               taxTreatment: cashGeneration.taxTreatment ?? "ordinary-income",
             })),
           }
@@ -1398,6 +1424,33 @@ function assetCashTaxTreatmentLabel(taxTreatment: AssetCashTaxTreatment): string
   }
 }
 
+function getAssetCashGenerationDisplayName(cashGeneration: Pick<AssetCashGenerationDraft, "name">): string {
+  const streamName = cashGeneration.name.trim();
+  return streamName || "Unnamed cash stream";
+}
+
+function formatAssetCashGenerationDraftValue(
+  value: string,
+  formatter: (numericValue: number) => string
+): string {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return "-";
+  }
+
+  const numericValue = Number(trimmedValue);
+  return Number.isFinite(numericValue) ? formatter(numericValue) : trimmedValue;
+}
+
+function renderAssetCashGenerationDraftPreview(cashGeneration: AssetCashGenerationDraft): string {
+  return [
+    `Yield ${formatAssetCashGenerationDraftValue(cashGeneration.rate, formatPercentage)}`,
+    `Vol ${formatAssetCashGenerationDraftValue(cashGeneration.volatility, formatPercentage)}`,
+    `Infl ${formatAssetCashGenerationDraftValue(cashGeneration.inflationCorrelation, (value) => `${formatEditableNumber(value)}x`)}`,
+    assetCashTaxTreatmentLabel(cashGeneration.taxTreatment),
+  ].join(" | ");
+}
+
 function renderAssetCashGenerationSummary(asset: AssetDefinition): string {
   const cashGenerations = getAssetCashGenerations(asset);
 
@@ -1411,9 +1464,18 @@ function renderAssetCashGenerationSummary(asset: AssetDefinition): string {
   return cashGenerations
     .map((cashGeneration) => {
       const rate = formatPercentage(cashGeneration.rate);
+      const inflationCorrelation =
+        cashGeneration.inflationCorrelation ??
+        getDefaultAssetCashGenerationInflationCorrelation(
+          isInvestmentAsset(asset) ? asset.assetType ?? null : null
+        );
       const taxTreatment = assetCashTaxTreatmentLabel(cashGeneration.taxTreatment ?? "ordinary-income");
       const streamName = cashGeneration.name?.trim();
-      return streamName ? `${streamName}: ${rate} ${taxTreatment}` : `${rate} ${taxTreatment}`;
+      const inflationCorrelationSummary =
+        Math.abs(inflationCorrelation) > 0.000001 ? ` + ${inflationCorrelation.toFixed(2)}x inflation` : "";
+      return streamName
+        ? `${streamName}: ${rate}${inflationCorrelationSummary} ${taxTreatment}`
+        : `${rate}${inflationCorrelationSummary} ${taxTreatment}`;
     })
     .join(" | ");
 }
@@ -1855,6 +1917,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
                     name: cashGeneration.name?.trim(),
                     rate: Number(cashGeneration.rate),
                     volatility: Number(cashGeneration.volatility),
+                    inflationCorrelation: Number(cashGeneration.inflationCorrelation ?? 0),
                     taxTreatment: cashGeneration.taxTreatment,
                   })),
                 }
@@ -3160,6 +3223,7 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
                     name: cashGeneration.name,
                     rate: cashGeneration.rate,
                     volatility: cashGeneration.volatility,
+                    inflationCorrelation: cashGeneration.inflationCorrelation ?? 0,
                     taxTreatment: cashGeneration.taxTreatment,
                   })),
                 }
@@ -4095,7 +4159,7 @@ function renderSimulationBoard(): string {
                 <tr>
                   <th>Sell multiplier</th>
                   <th>Asset</th>
-                  <th>Starting value</th>
+                  <th>Value</th>
                   <th>Expected return (%)</th>
                   <th>Volatility (%)</th>
                 </tr>
@@ -4660,36 +4724,68 @@ function renderAssetTaxModelFields(draft: AssetDraft): string {
         <div class="stack-list">
           ${draft.cashGenerations
             .map(
-              (cashGeneration, index) => `
-                <section class="composer-subsection">
-                  <div class="event-entry-header">
-                    <strong>Cash stream ${index + 1}</strong>
+              (cashGeneration) => `
+                <section class="composer-subsection cash-generation-entry" data-cash-generation-entry="${cashGeneration.id}">
+                  <div class="event-entry-header cash-generation-entry-header">
+                    <button
+                      type="button"
+                      class="cash-generation-toggle"
+                      data-toggle-cash-generation="${cashGeneration.id}"
+                      aria-expanded="${cashGeneration.expanded ? "true" : "false"}"
+                      aria-controls="cash-generation-body-${cashGeneration.id}"
+                    >
+                      <span class="cash-generation-toggle-icon ${cashGeneration.expanded ? "is-expanded" : ""}" aria-hidden="true">
+                        <svg viewBox="0 0 20 20">
+                          <path d="M6 4l8 6-8 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" />
+                        </svg>
+                      </span>
+                      <span class="cash-generation-toggle-copy">
+                        <strong data-cash-generation-title="${cashGeneration.id}">${escapeHtml(getAssetCashGenerationDisplayName(cashGeneration))}</strong>
+                        <span
+                          class="summary-meta cash-generation-preview"
+                          data-cash-generation-preview="${cashGeneration.id}"
+                          ${cashGeneration.expanded ? "hidden" : ""}
+                        >
+                          ${escapeHtml(renderAssetCashGenerationDraftPreview(cashGeneration))}
+                        </span>
+                      </span>
+                    </button>
                     ${
                       draft.cashGenerations.length > 1
                         ? `<button type="button" class="secondary-button" data-remove-cash-generation="${cashGeneration.id}">Remove</button>`
                         : ""
                     }
                   </div>
-                  <label>
-                    Stream name
-                    <input name="cashGenerationName" data-cash-generation-field="${cashGeneration.id}:name" type="text" value="${escapeHtml(cashGeneration.name)}" placeholder="Qualified dividends" />
-                  </label>
-                  <div class="split-fields">
+                  <div
+                    id="cash-generation-body-${cashGeneration.id}"
+                    class="cash-generation-body"
+                    ${cashGeneration.expanded ? "" : "hidden"}
+                  >
                     <label>
-                      Cash generation rate (%)
-                      <input name="cashGenerationRate" data-cash-generation-field="${cashGeneration.id}:rate" type="number" step="0.01" value="${escapeHtml(cashGeneration.rate)}" />
+                      Stream name
+                      <input name="cashGenerationName" data-cash-generation-field="${cashGeneration.id}:name" type="text" value="${escapeHtml(cashGeneration.name)}" placeholder="Qualified dividends" />
                     </label>
+                    <div class="split-fields">
+                      <label>
+                        Cash generation rate (%)
+                        <input name="cashGenerationRate" data-cash-generation-field="${cashGeneration.id}:rate" type="number" step="0.01" value="${escapeHtml(cashGeneration.rate)}" />
+                      </label>
+                      <label>
+                        Cash generation volatility (%)
+                        <input name="cashGenerationVolatility" data-cash-generation-field="${cashGeneration.id}:volatility" type="number" step="0.01" value="${escapeHtml(cashGeneration.volatility)}" />
+                      </label>
+                      <label>
+                        Inflation correlation
+                        <input name="cashGenerationInflationCorrelation" data-cash-generation-field="${cashGeneration.id}:inflationCorrelation" type="number" step="0.01" value="${escapeHtml(cashGeneration.inflationCorrelation)}" />
+                      </label>
+                    </div>
                     <label>
-                      Cash generation volatility (%)
-                      <input name="cashGenerationVolatility" data-cash-generation-field="${cashGeneration.id}:volatility" type="number" step="0.01" value="${escapeHtml(cashGeneration.volatility)}" />
+                      Cash generation tax treatment
+                      <select name="cashGenerationTaxTreatment" data-cash-generation-field="${cashGeneration.id}:taxTreatment">
+                        ${renderAssetCashTaxTreatmentOptions(cashGeneration.taxTreatment)}
+                      </select>
                     </label>
                   </div>
-                  <label>
-                    Cash generation tax treatment
-                    <select name="cashGenerationTaxTreatment" data-cash-generation-field="${cashGeneration.id}:taxTreatment">
-                      ${renderAssetCashTaxTreatmentOptions(cashGeneration.taxTreatment)}
-                    </select>
-                  </label>
                 </section>
               `
             )
@@ -6414,7 +6510,7 @@ function isPlainNumericFormula(formula: string): boolean {
 
 function resolveAssetValueInput(
   input: string,
-  fieldLabel: "Starting value" | "Initial cost"
+  fieldLabel: "Value" | "Initial cost"
 ): {
   value: number;
   formula?: string;
@@ -6734,9 +6830,12 @@ function bindAssetComposer(user: UserIdentity): void {
         cashGeneration.rate = target.value;
       } else if (field === "volatility") {
         cashGeneration.volatility = target.value;
+      } else if (field === "inflationCorrelation") {
+        cashGeneration.inflationCorrelation = target.value;
       } else if (field === "taxTreatment") {
         cashGeneration.taxTreatment = target.value as AssetCashTaxTreatment;
       }
+      syncAssetCashGenerationDraftPresentation(assetForm, assetDraft, cashGenerationId);
       return;
     }
 
@@ -6779,7 +6878,7 @@ function bindAssetComposer(user: UserIdentity): void {
     } else if (target.name === "cashGenerationEnabled") {
       assetDraft.cashGenerationEnabled = target instanceof HTMLInputElement ? target.checked : target.value === "true";
       if (assetDraft.cashGenerationEnabled && assetDraft.cashGenerations.length === 0) {
-        assetDraft.cashGenerations = [createAssetCashGenerationDraft()];
+        assetDraft.cashGenerations = [createAssetCashGenerationDraft(assetDraft.kind, { expanded: true })];
       }
       renderPlanner(user);
       return;
@@ -6796,27 +6895,40 @@ function bindAssetComposer(user: UserIdentity): void {
 
   assetForm.addEventListener("click", (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLButtonElement)) {
+    if (!(target instanceof Element)) {
       return;
     }
 
-    if (target.id === "add-cash-generation") {
-      assetDraft.cashGenerations.push(createAssetCashGenerationDraft());
+    const button = target.closest<HTMLButtonElement>("button");
+    if (!button) {
+      return;
+    }
+
+    const toggleCashGenerationId = button.dataset.toggleCashGeneration;
+    if (toggleCashGenerationId) {
+      const cashGeneration = findAssetCashGenerationDraft(assetDraft, toggleCashGenerationId);
+      cashGeneration.expanded = !cashGeneration.expanded;
       renderPlanner(user);
       return;
     }
 
-    const removeCashGenerationId = target.dataset.removeCashGeneration;
+    if (button.id === "add-cash-generation") {
+      assetDraft.cashGenerations.push(createAssetCashGenerationDraft(assetDraft.kind, { expanded: true }));
+      renderPlanner(user);
+      return;
+    }
+
+    const removeCashGenerationId = button.dataset.removeCashGeneration;
     if (removeCashGenerationId) {
       assetDraft.cashGenerations = assetDraft.cashGenerations.filter((candidate) => candidate.id !== removeCashGenerationId);
       if (assetDraft.cashGenerations.length === 0) {
-        assetDraft.cashGenerations = [createAssetCashGenerationDraft()];
+        assetDraft.cashGenerations = [createAssetCashGenerationDraft(assetDraft.kind, { expanded: true })];
       }
       renderPlanner(user);
       return;
     }
 
-    if (target.id === "close-asset-composer" || target.id === "close-asset-composer-secondary") {
+    if (button.id === "close-asset-composer" || button.id === "close-asset-composer-secondary") {
       closeAssetComposer();
       renderPlanner(user);
     }
@@ -6868,9 +6980,12 @@ function bindAssetEditor(user: UserIdentity): void {
         cashGeneration.rate = target.value;
       } else if (field === "volatility") {
         cashGeneration.volatility = target.value;
+      } else if (field === "inflationCorrelation") {
+        cashGeneration.inflationCorrelation = target.value;
       } else if (field === "taxTreatment") {
         cashGeneration.taxTreatment = target.value as AssetCashTaxTreatment;
       }
+      syncAssetCashGenerationDraftPresentation(assetEditForm, assetEditDraft, cashGenerationId);
       return;
     }
 
@@ -6913,7 +7028,7 @@ function bindAssetEditor(user: UserIdentity): void {
     } else if (target.name === "cashGenerationEnabled") {
       assetEditDraft.cashGenerationEnabled = target instanceof HTMLInputElement ? target.checked : target.value === "true";
       if (assetEditDraft.cashGenerationEnabled && assetEditDraft.cashGenerations.length === 0) {
-        assetEditDraft.cashGenerations = [createAssetCashGenerationDraft()];
+        assetEditDraft.cashGenerations = [createAssetCashGenerationDraft(assetEditDraft.kind, { expanded: true })];
       }
       renderPlanner(user);
       return;
@@ -6941,8 +7056,16 @@ function bindAssetEditor(user: UserIdentity): void {
       return;
     }
 
+    const toggleCashGenerationId = button.dataset.toggleCashGeneration;
+    if (toggleCashGenerationId) {
+      const cashGeneration = findAssetCashGenerationDraft(assetEditDraft, toggleCashGenerationId);
+      cashGeneration.expanded = !cashGeneration.expanded;
+      renderPlanner(user);
+      return;
+    }
+
     if (button.id === "add-cash-generation") {
-      assetEditDraft.cashGenerations.push(createAssetCashGenerationDraft());
+      assetEditDraft.cashGenerations.push(createAssetCashGenerationDraft(assetEditDraft.kind, { expanded: true }));
       renderPlanner(user);
       return;
     }
@@ -6953,7 +7076,7 @@ function bindAssetEditor(user: UserIdentity): void {
         (candidate) => candidate.id !== removeCashGenerationId
       );
       if (assetEditDraft.cashGenerations.length === 0) {
-        assetEditDraft.cashGenerations = [createAssetCashGenerationDraft()];
+        assetEditDraft.cashGenerations = [createAssetCashGenerationDraft(assetEditDraft.kind, { expanded: true })];
       }
       renderPlanner(user);
       return;
@@ -7974,6 +8097,23 @@ function findAssetCashGenerationDraft(
   return cashGeneration;
 }
 
+function syncAssetCashGenerationDraftPresentation(
+  root: ParentNode,
+  draft: AssetDraft | AssetEditDraft,
+  cashGenerationId: string
+): void {
+  const cashGeneration = findAssetCashGenerationDraft(draft, cashGenerationId);
+  const title = root.querySelector<HTMLElement>(`[data-cash-generation-title="${cashGenerationId}"]`);
+  if (title) {
+    title.textContent = getAssetCashGenerationDisplayName(cashGeneration);
+  }
+
+  const preview = root.querySelector<HTMLElement>(`[data-cash-generation-preview="${cashGenerationId}"]`);
+  if (preview) {
+    preview.textContent = renderAssetCashGenerationDraftPreview(cashGeneration);
+  }
+}
+
 function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
   if (draft.kind === "home") {
     const initialCost = resolveAssetValueInput(draft.initialCost, "Initial cost");
@@ -8000,7 +8140,7 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
   }
 
   const assetType = getInvestmentAssetTypeFromDraftKind(draft.kind);
-  const startingValue = resolveAssetValueInput(draft.startingValue, "Starting value");
+  const startingValue = resolveAssetValueInput(draft.startingValue, "Value");
   return new Asset({
     name: draft.name,
     ...(assetType ? { assetType } : {}),
@@ -8016,6 +8156,7 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
               name: cashGeneration.name.trim(),
               rate: Number(cashGeneration.rate),
               volatility: Number(cashGeneration.volatility),
+              inflationCorrelation: Number(cashGeneration.inflationCorrelation),
               taxTreatment: cashGeneration.taxTreatment,
             })
           ),
@@ -8312,7 +8453,7 @@ async function saveInlineAssetValue(assetName: string, formula: string, user: Us
   try {
     ensurePlannerVariablesExist(collectMissingFormulaVariables([formula]));
     const resolvedValue = isInvestmentAsset(existingAsset)
-      ? resolveAssetValueInput(formula, "Starting value")
+      ? resolveAssetValueInput(formula, "Value")
       : resolveAssetValueInput(formula, "Initial cost");
 
     updateAsset(

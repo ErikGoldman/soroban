@@ -80,6 +80,7 @@ export interface AssetCashGenerationDefinition {
   name?: string;
   rate: number;
   volatility: number;
+  inflationCorrelation?: number;
   taxTreatment?: AssetCashTaxTreatment;
 }
 
@@ -199,6 +200,7 @@ export class Asset {
 
     const normalizedCashGenerations = normalizeAssetCashGenerations(
       normalizedName,
+      definition.assetType ?? null,
       definition.cashGenerations,
       definition.cashGeneration
     );
@@ -300,6 +302,12 @@ export function createAssetCorrelationDefinition({
     ...pair,
     correlation,
   };
+}
+
+export function getDefaultAssetCashGenerationInflationCorrelation(
+  assetType: InvestmentAssetType | null | undefined
+): number {
+  return assetType === "federal-bonds" || assetType === "local-bonds" ? 0.75 : 0;
 }
 
 export function deleteAssetAndPruneCorrelations(
@@ -719,6 +727,7 @@ function assertFiniteNumber(value: number, message: string): void {
 
 function normalizeAssetCashGenerations(
   assetName: string,
+  assetType: InvestmentAssetType | null | undefined,
   cashGenerations: readonly AssetCashGenerationDefinition[] | undefined,
   legacyCashGeneration: AssetCashGenerationDefinition | undefined
 ): readonly AssetCashGenerationDefinition[] {
@@ -739,6 +748,10 @@ function normalizeAssetCashGenerations(
       cashGeneration.volatility,
       `Cash generation volatility for asset "${assetName}" must be finite.`
     );
+    assertFiniteNumber(
+      cashGeneration.inflationCorrelation ?? getDefaultAssetCashGenerationInflationCorrelation(assetType),
+      `Cash generation inflation correlation for asset "${assetName}" must be finite.`
+    );
 
     if (cashGeneration.rate < 0) {
       throw new Error(`Cash generation rate for asset "${assetName}" cannot be negative.`);
@@ -754,6 +767,8 @@ function normalizeAssetCashGenerations(
       name: normalizedName,
       rate: cashGeneration.rate,
       volatility: cashGeneration.volatility,
+      inflationCorrelation:
+        cashGeneration.inflationCorrelation ?? getDefaultAssetCashGenerationInflationCorrelation(assetType),
       taxTreatment: normalizeAssetCashTaxTreatment(cashGeneration.taxTreatment),
     };
   });

@@ -728,6 +728,49 @@ describe("buildSimulationScenarios", () => {
     expect(row?.taxAmount).toBeCloseTo(0.8, 6);
   });
 
+  it("adjusts bond cash generation by inflation correlation", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Bond fund",
+          assetType: "federal-bonds",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 0,
+          cashGeneration: {
+            name: "Coupon",
+            rate: 5,
+            volatility: 0,
+            taxTreatment: "not-taxable",
+          },
+        },
+      ],
+      assetCorrelations: [],
+      inflation: {
+        mode: "fixed",
+        fixedRate: 0.04,
+      },
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.inflationRateApplied).toBeCloseTo(0.04, 6);
+    expect(row?.flowTotals.get("Bond fund Coupon")).toBeCloseTo(8, 6);
+    expect(row?.assetValues.get("Bond fund")).toBeCloseTo(108, 6);
+  });
+
   it("uses average basis to realize gains on asset sales", () => {
     const profile = {
       ...createDefaultHouseholdTaxProfile(),

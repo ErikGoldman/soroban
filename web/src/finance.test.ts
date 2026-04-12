@@ -260,6 +260,7 @@ describe("Asset", () => {
           name: "Qualified dividends",
           rate: 1.8,
           volatility: 0.5,
+          inflationCorrelation: 0,
           taxTreatment: "qualified-dividends",
         },
       ],
@@ -281,6 +282,7 @@ describe("Asset", () => {
           name: "Qualified dividends",
           rate: 1.8,
           volatility: 0.5,
+          inflationCorrelation: 0,
           taxTreatment: "qualified-dividends",
         },
       ],
@@ -493,12 +495,70 @@ describe("Asset", () => {
         name: "Qualified dividends",
         rate: 1.2,
         volatility: 0.1,
+        inflationCorrelation: 0,
         taxTreatment: "qualified-dividends",
       },
       {
         name: "Non-qualified dividends",
         rate: 0.4,
         volatility: 0.05,
+        inflationCorrelation: 0,
+        taxTreatment: "ordinary-income",
+      },
+    ]);
+  });
+
+  it("defaults cash generation inflation correlation by asset type", () => {
+    const bondAsset = new Asset({
+      name: "Treasury fund",
+      assetType: "federal-bonds",
+      startingValue: 10000,
+      expectedReturn: 0,
+      volatility: 4,
+      sellProportion: 0.25,
+      cashGenerations: [
+        {
+          name: "Coupon",
+          rate: 4,
+          volatility: 0.2,
+        },
+      ],
+    });
+
+    const stockAsset = new Asset({
+      name: "Stock fund",
+      assetType: "us-stocks",
+      startingValue: 10000,
+      expectedReturn: 6,
+      volatility: 12,
+      sellProportion: 0.25,
+      cashGenerations: [
+        {
+          name: "Dividend",
+          rate: 1.2,
+          volatility: 0.1,
+        },
+      ],
+    });
+
+    const bondDefinition = bondAsset.toDefinition();
+    const stockDefinition = stockAsset.toDefinition();
+
+    expect("cashGenerations" in bondDefinition ? bondDefinition.cashGenerations : undefined).toEqual([
+      {
+        name: "Coupon",
+        rate: 4,
+        volatility: 0.2,
+        inflationCorrelation: 0.75,
+        taxTreatment: "ordinary-income",
+      },
+    ]);
+    expect("cashGenerations" in stockDefinition ? stockDefinition.cashGenerations : undefined).toEqual([
+      {
+        name: "Dividend",
+        rate: 1.2,
+        volatility: 0.1,
+        inflationCorrelation: 0,
         taxTreatment: "ordinary-income",
       },
     ]);

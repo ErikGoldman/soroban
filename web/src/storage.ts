@@ -58,6 +58,7 @@ export interface PersistedAssetDefinition {
     name?: string;
     rate: number;
     volatility: number;
+    inflationCorrelation?: number;
     taxTreatment?:
       | "ordinary-income"
       | "qualified-dividends"
@@ -70,6 +71,7 @@ export interface PersistedAssetDefinition {
     name?: string;
     rate: number;
     volatility: number;
+    inflationCorrelation?: number;
     taxTreatment?:
       | "ordinary-income"
       | "qualified-dividends"

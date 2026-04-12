@@ -1,4 +1,5 @@
 import {
+  getDefaultAssetCashGenerationInflationCorrelation,
   normalizeAssetCorrelationPair,
   type AssetCashGenerationDefinition,
   type AssetCorrelationDefinition,
@@ -811,6 +812,7 @@ function runSimulationAttempts({
           assetValues: saleResult.assetValues,
           homeState,
           year: snapshotYear,
+          inflationRateApplied: yearlyPlan.inflationRateApplied,
           filingStatus: householdTaxProfile?.filingStatus ?? "individual",
           annualNormals: annualCorrelatedNormals,
           flowTotals: saleResult.flowTotals,
@@ -1224,6 +1226,9 @@ function normalizeSimulationAsset(asset: SimulationAssetInput): NormalizedSimula
       name: cashGeneration.name?.trim() || `Cash generation ${index + 1}`,
       rate: Math.max(0, cashGeneration.rate),
       volatility: Math.max(0, cashGeneration.volatility),
+      inflationCorrelation:
+        cashGeneration.inflationCorrelation ??
+        getDefaultAssetCashGenerationInflationCorrelation(asset.assetType ?? null),
       taxTreatment: cashGeneration.taxTreatment ?? "ordinary-income",
     })),
     saleTax: asset.saleTax
@@ -1446,6 +1451,7 @@ function applyGeneratedCashStreams({
   assetValues,
   homeState,
   year,
+  inflationRateApplied,
   filingStatus,
   annualNormals,
   flowTotals,
@@ -1458,6 +1464,7 @@ function applyGeneratedCashStreams({
   assetValues: Map<string, number>;
   homeState: HomeSimulationState;
   year: number;
+  inflationRateApplied: number;
   filingStatus: FilingStatus;
   annualNormals: ReadonlyMap<string, number>;
   flowTotals: Map<string, number>;
@@ -1478,6 +1485,7 @@ function applyGeneratedCashStreams({
           currentValue,
           annualNormals.get(asset.name) ?? 0,
           cashGeneration,
+          inflationRateApplied,
           periodFraction
         );
         if (generatedCash <= 0.000001) {
@@ -1960,15 +1968,19 @@ function calculateAssetCashGenerationAmount(
   assetValue: number,
   annualNormal: number,
   cashGeneration: AssetCashGenerationDefinition | undefined,
+  inflationRateApplied: number,
   periodFraction = 1
 ): number {
   if (!cashGeneration) {
     return 0;
   }
 
+  const inflationAdjustedAnnualRate =
+    cashGeneration.rate + (cashGeneration.inflationCorrelation ?? 0) * inflationRateApplied * 100;
   const annualCashGenerationRate = Math.max(
     0,
-    (cashGeneration.rate / 100) * periodFraction + ((cashGeneration.volatility / 100) * periodFraction) * annualNormal
+    (inflationAdjustedAnnualRate / 100) * periodFraction +
+      ((cashGeneration.volatility / 100) * periodFraction) * annualNormal
   );
   return assetValue * annualCashGenerationRate;
 }

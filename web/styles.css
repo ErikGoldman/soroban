@@ -1210,6 +1210,74 @@ label {
   color: var(--muted);
 }
 
+.stack-form .stack-list {
+  display: grid;
+  gap: 18px;
+}
+
+.cash-generation-entry {
+  gap: 14px;
+}
+
+.cash-generation-entry-header {
+  align-items: start;
+}
+
+.stack-form .cash-generation-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin-left: -6px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.cash-generation-toggle-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cash-generation-toggle-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+  transition: transform 140ms ease;
+}
+
+.cash-generation-toggle-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.cash-generation-toggle-icon.is-expanded {
+  transform: rotate(90deg);
+}
+
+.cash-generation-preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cash-generation-body {
+  display: grid;
+  gap: 12px;
+}
+
+.cash-generation-body[hidden] {
+  display: none;
+}
+
 .asset-toggle-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
