@@ -134,19 +134,12 @@ interface EventDraft {
   entries: EventEntryDraft[];
 }
 
-interface FlowVariableDraft {
-  id: string;
-  name: string;
-  value: string;
-}
-
 interface FlowDraft {
   name: string;
   taxTreatment: FlowTaxTreatment;
   formula: string;
   inflationAdjusted: boolean;
   oneTime: boolean;
-  variables: FlowVariableDraft[];
 }
 
 interface FlowEditDraft {
@@ -440,7 +433,6 @@ const flowDraft: FlowDraft = {
   formula: "",
   inflationAdjusted: true,
   oneTime: false,
-  variables: [],
 };
 
 const flowEditDraft: FlowEditDraft = {
@@ -491,14 +483,6 @@ function createEventEntryDraft(flowName = plannerState.flows[0]?.name ?? ""): Ev
     id: createId(),
     year: plannerState.startYear,
     actions: [createActionDraft(flowName)],
-  };
-}
-
-function createFlowVariableDraft(): FlowVariableDraft {
-  return {
-    id: createId(),
-    name: "",
-    value: "0",
   };
 }
 
@@ -1208,7 +1192,7 @@ function renderFormulaEditor({
 }: {
   value: string;
   placeholder: string;
-  variablesScope: "planner" | "flow-draft" | "event-draft";
+  variablesScope: "planner" | "event-draft";
   inputName?: string;
   inputId?: string;
   fieldToken?: string;
@@ -2101,7 +2085,7 @@ function renderUser(user: UserIdentity): string {
 
 function renderSetupAssetArea(): string {
   if (plannerState.assets.length === 0) {
-    return `<p class="helper-copy">No assets yet. Add one to model balances, returns, volatility, and sale behavior.</p>`;
+    return `<p class="helper-copy">No assets yet. Add one to represent your stocks, bonds, home, or other investments.</p>`;
   }
 
   return `
@@ -2186,7 +2170,7 @@ function renderExpenseValuePath(flowName: string, startYearInput: string, initia
 
 function renderSetupExpenseArea(expenseRows: Array<{ flow: FlowDefinition; yearlyAmount: number }>): string {
   if (expenseRows.length === 0) {
-    return `<p class="helper-copy">No income or expenses yet. Add one to model recurring or one-time spending.</p>`;
+    return `<p class="helper-copy">No income or expenses yet. Add one to model recurring or one-time cash flows.</p>`;
   }
 
   return `
@@ -2220,7 +2204,7 @@ function renderSetupExpenseArea(expenseRows: Array<{ flow: FlowDefinition; yearl
                         ${renderFormulaEditor({
                           inputName: "formula",
                           value: flow.formula,
-                          placeholder: "rent * 0.1",
+                          placeholder: "1,000",
                           variablesScope: "planner",
                         })}
                       </div>
@@ -2255,7 +2239,7 @@ function renderVariablesCard(): string {
           <p class="kicker">Variables</p>
           <h2>Formula inputs</h2>
         </div>
-        <p class="helper-copy">Edit base values here. New variables are still introduced while creating expenses.</p>
+        <p class="helper-copy">Create a variable in the expense or asset editor and it will appear here. For example, create an expense and set the amount to rent * 0.1.</p>
       </div>
       <div class="workspace-list workspace-list-tight">
         ${plannerState.variables
@@ -4722,6 +4706,20 @@ function renderTaxComposer(): string {
   `;
 }
 
+function renderExpenseToggle(name: "oneTime" | "inflationAdjusted", checked: boolean, label: string): string {
+  return `
+    <div class="expense-toggle-row">
+      <label class="switch-field expense-toggle-switch" aria-label="${escapeHtml(label)}">
+        <input type="checkbox" name="${name}" ${checked ? "checked" : ""} />
+        <span class="switch-track" aria-hidden="true"></span>
+      </label>
+      <div class="expense-toggle-copy">
+        <strong>${escapeHtml(label)}</strong>
+      </div>
+    </div>
+  `;
+}
+
 function renderFlowComposer(): string {
   if (!flowComposerOpen) {
     return "";
@@ -4753,55 +4751,15 @@ function renderFlowComposer(): string {
             ${renderFormulaEditor({
               inputName: "formula",
               value: flowDraft.formula,
-              placeholder: "rent * 0.1",
-              variablesScope: "flow-draft",
+              placeholder: "1,000",
+              variablesScope: "planner",
             })}
           </label>
-          <label class="checkbox-field">
-            <input name="oneTime" type="checkbox" ${flowDraft.oneTime ? "checked" : ""} />
-            One-time expense
-          </label>
-          <label class="checkbox-field">
-            <input name="inflationAdjusted" type="checkbox" ${flowDraft.inflationAdjusted ? "checked" : ""} />
-            Apply inflation
-          </label>
+          ${renderExpenseToggle("oneTime", flowDraft.oneTime, "One-time expense")}
+          ${renderExpenseToggle("inflationAdjusted", flowDraft.inflationAdjusted, "Apply inflation")}
           <p class="helper-copy">
             One-time expenses automatically create a next-year override that sets the formula to 0.
           </p>
-          <div class="composer-subsection">
-            <div class="event-entry-header">
-              <strong>Add variables first</strong>
-              <button type="button" class="secondary-button" id="add-flow-variable">Add variable</button>
-            </div>
-            <div class="action-list">
-              ${flowDraft.variables.length === 0
-                ? `<p class="helper-copy">Optional. Create supporting variables here before saving the flow.</p>`
-                : flowDraft.variables
-                    .map(
-                      (variable, index) => `
-                        <div class="action-card">
-                          <div class="action-header">
-                            <span>Variable ${index + 1}</span>
-                            <button type="button" class="ghost-button" data-remove-flow-variable="${variable.id}">Remove</button>
-                          </div>
-                          <label>
-                            Name
-                            <input type="text" data-flow-variable-field="${variable.id}:name" value="${escapeHtml(variable.name)}" placeholder="insuranceBase" />
-                          </label>
-                          <label>
-                            Value
-                            <input
-                              ${renderEditableNumberInputAttributes()}
-                              data-flow-variable-field="${variable.id}:value"
-                              value="${escapeHtml(formatEditableNumberInput(variable.value))}"
-                            />
-                          </label>
-                        </div>
-                      `
-                    )
-                    .join("")}
-            </div>
-          </div>
           <div class="event-buttons">
             <button type="button" class="secondary-button" id="close-flow-composer-secondary">Cancel</button>
             <button type="submit">Save expense</button>
@@ -4962,7 +4920,7 @@ function renderFlowEvents(flowName: string): string {
                           ${renderFormulaEditor({
                             inputName: "flowEventFormula",
                             value: formulaValue,
-                            placeholder: "rent * 1.05",
+                            placeholder: "1,000",
                             variablesScope: "planner",
                           })}
                         </div>`
@@ -5037,18 +4995,12 @@ function renderFlowEditor(): string {
             ${renderFormulaEditor({
               inputName: "formula",
               value: flowEditDraft.formula,
-              placeholder: "rent * 1.05",
+              placeholder: "1,000",
               variablesScope: "planner",
             })}
           </label>
-          <label class="checkbox-field">
-            <input name="oneTime" type="checkbox" ${flowEditDraft.oneTime ? "checked" : ""} />
-            One-time expense
-          </label>
-          <label class="checkbox-field">
-            <input name="inflationAdjusted" type="checkbox" ${flowEditDraft.inflationAdjusted ? "checked" : ""} />
-            Apply inflation
-          </label>
+          ${renderExpenseToggle("oneTime", flowEditDraft.oneTime, "One-time expense")}
+          ${renderExpenseToggle("inflationAdjusted", flowEditDraft.inflationAdjusted, "Apply inflation")}
           <p class="helper-copy">
             Keeps this expense active for the start year, then creates a hidden next-year formula override to 0.
           </p>
@@ -5102,7 +5054,7 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
           New formula
           ${renderFormulaEditor({
             value: action.formula,
-            placeholder: "rent * 1.05",
+            placeholder: "1,000",
             variablesScope: "event-draft",
             fieldToken: `${entryId}:${action.id}:formula`,
           })}
@@ -6052,6 +6004,7 @@ function bindFormulaEditors(): void {
     };
 
     editor.addEventListener("input", () => {
+      wrapper.dataset.interacted = "true";
       activeSuggestionIndex = 0;
       syncEditor();
     });
@@ -6200,25 +6153,12 @@ function getFormulaEditorVariableNames(wrapper: HTMLElement): string[] {
   const scope = wrapper.dataset.variablesScope;
 
   switch (scope) {
-    case "flow-draft":
-      return getFlowDraftVariableNames();
     case "event-draft":
       return getEventDraftVariableNames();
     case "planner":
     default:
       return plannerState.variables.map((variable) => variable.name);
   }
-}
-
-function getFlowDraftVariableNames(): string[] {
-  const names = new Set<string>(plannerState.variables.map((variable) => variable.name));
-  for (const variable of flowDraft.variables) {
-    const name = variable.name.trim();
-    if (name) {
-      names.add(name);
-    }
-  }
-  return [...names];
 }
 
 function getEventDraftVariableNames(): string[] {
@@ -6317,10 +6257,6 @@ function resolveAssetValueInput(
   };
 }
 
-function getFlowDraftVariableDefinitionNames(): string[] {
-  return flowDraft.variables.map((variable) => variable.name.trim()).filter(Boolean);
-}
-
 function getEventDraftVariableDefinitionNames(): string[] {
   return eventDraft.entries
     .flatMap((entry) => entry.actions)
@@ -6383,7 +6319,19 @@ function validateFormula(formula: string, availableVariables: readonly string[])
 }
 
 function updateFormulaEditorValidation(binding: FormulaEditorBinding): void {
-  const result = validateFormula(binding.hiddenInput.value, binding.getVariables());
+  const shouldDeferRequiredValidation =
+    !binding.hiddenInput.value.trim() &&
+    binding.wrapper.dataset.interacted !== "true" &&
+    binding.form.dataset.formulaValidationSubmitted !== "true";
+
+  const result = shouldDeferRequiredValidation
+    ? {
+        valid: true,
+        message: "",
+        unknownVariables: [],
+      }
+    : validateFormula(binding.hiddenInput.value, binding.getVariables());
+
   binding.wrapper.dataset.invalid = result.valid ? "false" : "true";
   binding.status.textContent = result.message;
   binding.status.dataset.invalid = result.valid ? "false" : "true";
@@ -6401,6 +6349,11 @@ function updateFormSubmissionState(form: HTMLFormElement): void {
 function hasInvalidFormulaEditors(form: HTMLFormElement): boolean {
   return [...form.querySelectorAll<HTMLElement>("[data-formula-editor]")]
     .some((wrapper) => wrapper.dataset.invalid === "true");
+}
+
+function markFormulaEditorsSubmitted(form: HTMLFormElement): void {
+  form.dataset.formulaValidationSubmitted = "true";
+  refreshFormulaEditors(form);
 }
 
 function renderFormulaEditorTokens(
@@ -7187,16 +7140,6 @@ function bindFlowComposer(user: UserIdentity): void {
       return;
     }
 
-    const flowVariableField = target.dataset.flowVariableField;
-    if (flowVariableField) {
-      const [variableId, field] = flowVariableField.split(":");
-      const variable = findFlowVariableDraft(variableId);
-      if (field === "name" || field === "value") {
-        variable[field] = target.value;
-      }
-      return;
-    }
-
     if (target.name === "name") {
       flowDraft.name = target.value;
     } else if (target.name === "taxTreatment") {
@@ -7218,19 +7161,6 @@ function bindFlowComposer(user: UserIdentity): void {
       return;
     }
 
-    const removeVariableId = target.dataset.removeFlowVariable;
-    if (removeVariableId) {
-      flowDraft.variables = flowDraft.variables.filter((variable) => variable.id !== removeVariableId);
-      renderPlanner(user);
-      return;
-    }
-
-    if (target.id === "add-flow-variable") {
-      flowDraft.variables.push(createFlowVariableDraft());
-      renderPlanner(user);
-      return;
-    }
-
     if (target.id === "close-flow-composer" || target.id === "close-flow-composer-secondary") {
       closeFlowComposer();
       renderPlanner(user);
@@ -7239,18 +7169,12 @@ function bindFlowComposer(user: UserIdentity): void {
 
   flowForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    markFormulaEditorsSubmitted(flowForm);
     if (hasInvalidFormulaEditors(flowForm)) {
       return;
     }
 
-    ensurePlannerVariablesExist(collectMissingFormulaVariables([flowDraft.formula.trim()], getFlowDraftVariableDefinitionNames()));
-
-    for (const variable of flowDraft.variables) {
-      plannerState.variables.push({
-        name: variable.name.trim(),
-        value: parseEditableNumber(variable.value),
-      });
-    }
+    ensurePlannerVariablesExist(collectMissingFormulaVariables([flowDraft.formula.trim()]));
     plannerState.flows.push({
       name: flowDraft.name.trim(),
       type: "expense",
@@ -7384,6 +7308,7 @@ function bindEventComposer(user: UserIdentity): void {
 
   eventForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    markFormulaEditorsSubmitted(eventForm);
     if (hasInvalidFormulaEditors(eventForm)) {
       return;
     }
@@ -7518,6 +7443,7 @@ function bindFlowEditor(user: UserIdentity): void {
 
   flowEditForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    markFormulaEditorsSubmitted(flowEditForm);
     if (hasInvalidFormulaEditors(flowEditForm)) {
       return;
     }
@@ -7833,15 +7759,6 @@ function appendActions(
   });
 }
 
-function findFlowVariableDraft(variableId: string): FlowVariableDraft {
-  const variable = flowDraft.variables.find((candidate) => candidate.id === variableId);
-  if (!variable) {
-    throw new Error(`Unknown flow variable draft "${variableId}".`);
-  }
-
-  return variable;
-}
-
 function findAssetCashGenerationDraft(
   draft: AssetDraft | AssetEditDraft,
   cashGenerationId: string
@@ -8100,7 +8017,6 @@ function closeFlowComposer(): void {
   flowDraft.formula = "";
   flowDraft.inflationAdjusted = true;
   flowDraft.oneTime = false;
-  flowDraft.variables = [];
 }
 
 function resetFlowEventDraft(flowName: string, formula: string): void {

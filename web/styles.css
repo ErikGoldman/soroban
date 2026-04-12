@@ -813,21 +813,6 @@ label {
   transform: rotate(90deg);
 }
 
-.checkbox-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.checkbox-field input[type="checkbox"] {
-  width: auto;
-  margin: 0;
-  padding: 0;
-  flex: none;
-}
-
 .simulation-sweep-config,
 .simulation-sweep-results {
   display: grid;
@@ -1232,15 +1217,31 @@ label {
   gap: 16px;
 }
 
-.asset-toggle-copy {
+.expense-toggle-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.asset-toggle-copy,
+.expense-toggle-copy {
   display: grid;
   gap: 4px;
   min-width: 0;
 }
 
+.expense-toggle-copy {
+  display: block;
+}
+
+.asset-toggle-switch,
+.expense-toggle-switch {
+  flex: none;
+}
+
 .asset-toggle-switch {
   justify-self: end;
-  flex: none;
 }
 
 .expense-row-meta {
