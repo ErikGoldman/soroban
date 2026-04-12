@@ -703,6 +703,46 @@ describe("Flow", () => {
     ).toBe(1000);
   });
 
+  it("can activate income for a bounded year range and compound annual raises", () => {
+    const variables = [new Variable({ name: "salary", value: 1000 })];
+    const context = createFormulaContext(variables);
+    const flow = new Flow({
+      name: "Salary",
+      type: "income",
+      formula: "salary",
+      startYear: 2027,
+      endYear: 2029,
+      annualRaisePercent: 10,
+    });
+
+    expect(flow.evaluateSignedYearlyAmount(context, { year: 2026 })).toBe(0);
+    expect(flow.evaluateSignedYearlyAmount(context, { year: 2027 })).toBe(1000);
+    expect(flow.evaluateSignedYearlyAmount(context, { year: 2028 })).toBeCloseTo(1100, 6);
+    expect(flow.evaluateSignedYearlyAmount(context, { year: 2029 })).toBeCloseTo(1210, 6);
+    expect(flow.evaluateSignedYearlyAmount(context, { year: 2030 })).toBe(0);
+  });
+
+  it("can sum flows for a specific year when income timing rules apply", () => {
+    const variables = [
+      new Variable({ name: "salary", value: 1000 }),
+      new Variable({ name: "rent", value: 400 }),
+    ];
+    const context = createFormulaContext(variables);
+    const flows = [
+      new Flow({
+        name: "Salary",
+        type: "income",
+        formula: "salary",
+        startYear: 2027,
+        annualRaisePercent: 5,
+      }),
+      new Flow({ name: "Rent", type: "expense", formula: "rent" }),
+    ];
+
+    expect(sumSignedYearlyFlows(flows, context, { year: 2026 })).toBe(-400);
+    expect(sumSignedYearlyFlows(flows, context, { year: 2028 })).toBeCloseTo(650, 6);
+  });
+
   it("can sum multiple yearly flows into a net amount", () => {
     const variables = [
       new Variable({ name: "salary", value: 5000 }),

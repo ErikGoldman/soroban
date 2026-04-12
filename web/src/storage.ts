@@ -16,6 +16,9 @@ export interface PersistedFlowDefinition {
   type: "income" | "expense";
   formula: string;
   inflationAdjusted?: boolean;
+  startYear?: number;
+  endYear?: number;
+  annualRaisePercent?: number;
   taxTreatment?:
     | "wages"
     | "ordinary-income"

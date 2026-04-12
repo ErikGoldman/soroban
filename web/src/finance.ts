@@ -328,6 +328,9 @@ export interface FlowDefinition {
   formula: string;
   taxTreatment?: FlowTaxTreatment;
   inflationAdjusted?: boolean;
+  startYear?: number;
+  endYear?: number;
+  annualRaisePercent?: number;
 }
 
 export const DEFAULT_EXPENSE_INFLATION_RATE = 0.03;
@@ -337,9 +340,12 @@ export class Flow {
   readonly type: FlowType;
   readonly taxTreatment: FlowTaxTreatment;
   readonly inflationAdjusted: boolean;
+  readonly startYear?: number;
+  readonly endYear?: number;
+  readonly annualRaisePercent: number;
   private currentFormula: string;
 
-  constructor({ name, type, formula, taxTreatment, inflationAdjusted }: FlowDefinition) {
+  constructor({ name, type, formula, taxTreatment, inflationAdjusted, startYear, endYear, annualRaisePercent }: FlowDefinition) {
     if (!name.trim()) {
       throw new Error("Flow name is required.");
     }
@@ -356,6 +362,9 @@ export class Flow {
     this.type = type;
     this.taxTreatment = normalizeFlowTaxTreatment(type, taxTreatment);
     this.inflationAdjusted = normalizeFlowInflationAdjusted(type, inflationAdjusted);
+    this.startYear = normalizeFlowStartYear(type, startYear);
+    this.endYear = normalizeFlowEndYear(type, this.startYear, endYear);
+    this.annualRaisePercent = normalizeFlowAnnualRaisePercent(type, annualRaisePercent);
     this.currentFormula = formula;
   }
 
@@ -372,13 +381,32 @@ export class Flow {
     return this.currentFormula;
   }
 
-  evaluateYearlyAmount(context: FormulaContext): number {
-    const amount = evaluateFormula(this.formula, context);
-    return Math.abs(amount);
+  toDefinition(): FlowDefinition {
+    return {
+      name: this.name,
+      type: this.type,
+      formula: this.formula,
+      taxTreatment: this.taxTreatment,
+      inflationAdjusted: this.inflationAdjusted,
+      ...(this.startYear === undefined ? {} : { startYear: this.startYear }),
+      ...(this.endYear === undefined ? {} : { endYear: this.endYear }),
+      ...(this.annualRaisePercent === 0 ? {} : { annualRaisePercent: this.annualRaisePercent }),
+    };
   }
 
-  evaluateSignedYearlyAmount(context: FormulaContext): number {
-    const amount = this.evaluateYearlyAmount(context);
+  evaluateYearlyAmount(context: FormulaContext, year?: EventYear | number): number {
+    const normalizedYear = normalizeOptionalFlowYear(year);
+    if (normalizedYear && !isFlowActiveInYear(this, normalizedYear)) {
+      return 0;
+    }
+
+    const amount = evaluateFormula(this.formula, context);
+    const absoluteAmount = Math.abs(amount);
+    return normalizedYear ? applyFlowAnnualRaise(this, absoluteAmount, normalizedYear) : absoluteAmount;
+  }
+
+  evaluateSignedYearlyAmount(context: FormulaContext, year?: EventYear | number): number {
+    const amount = this.evaluateYearlyAmount(context, year);
     return this.type === "expense" ? -amount : amount;
   }
 }
@@ -426,8 +454,8 @@ export function resolveAssetValueFormula(
   };
 }
 
-export function sumSignedYearlyFlows(flows: readonly Flow[], context: FormulaContext): number {
-  return flows.reduce((total, flow) => total + flow.evaluateSignedYearlyAmount(context), 0);
+export function sumSignedYearlyFlows(flows: readonly Flow[], context: FormulaContext, year?: EventYear | number): number {
+  return flows.reduce((total, flow) => total + flow.evaluateSignedYearlyAmount(context, year), 0);
 }
 
 export function isFlowInflationAdjusted(
@@ -810,7 +838,7 @@ function normalizeAssetSaleTax(
 
 function normalizeFlowTaxTreatment(type: FlowType, taxTreatment: FlowTaxTreatment | undefined): FlowTaxTreatment {
   if (!taxTreatment) {
-    return type === "income" ? "ordinary-income" : "nondeductible-expense";
+    return type === "income" ? "wages" : "nondeductible-expense";
   }
 
   return taxTreatment;
@@ -818,6 +846,95 @@ function normalizeFlowTaxTreatment(type: FlowType, taxTreatment: FlowTaxTreatmen
 
 function normalizeFlowInflationAdjusted(type: FlowType, inflationAdjusted: boolean | undefined): boolean {
   return type === "expense" ? inflationAdjusted !== false : false;
+}
+
+function normalizeFlowStartYear(type: FlowType, startYear: number | undefined): number | undefined {
+  if (type !== "income" || startYear === undefined) {
+    return undefined;
+  }
+
+  assertFiniteNumber(startYear, "Income start year must be finite.");
+  if (!Number.isInteger(startYear)) {
+    throw new Error(`Income start year "${startYear}" must be a whole year.`);
+  }
+
+  return startYear;
+}
+
+function normalizeFlowEndYear(
+  type: FlowType,
+  startYear: number | undefined,
+  endYear: number | undefined
+): number | undefined {
+  if (type !== "income" || endYear === undefined) {
+    return undefined;
+  }
+
+  assertFiniteNumber(endYear, "Income end year must be finite.");
+  if (!Number.isInteger(endYear)) {
+    throw new Error(`Income end year "${endYear}" must be a whole year.`);
+  }
+
+  if (startYear !== undefined && endYear < startYear) {
+    throw new Error(`Income end year "${endYear}" cannot be earlier than start year "${startYear}".`);
+  }
+
+  return endYear;
+}
+
+function normalizeFlowAnnualRaisePercent(type: FlowType, annualRaisePercent: number | undefined): number {
+  if (type !== "income" || annualRaisePercent === undefined) {
+    return 0;
+  }
+
+  assertFiniteNumber(annualRaisePercent, "Income annual raise percent must be finite.");
+  return annualRaisePercent;
+}
+
+function normalizeOptionalFlowYear(year: EventYear | number | undefined): EventYear | null {
+  if (year === undefined) {
+    return null;
+  }
+
+  return typeof year === "number" ? normalizeEventYear({ year }) : normalizeEventYear(year);
+}
+
+function isFlowActiveInYear(
+  flow: Pick<FlowDefinition, "type" | "startYear" | "endYear">,
+  year: EventYear
+): boolean {
+  if (flow.type !== "income") {
+    return true;
+  }
+
+  if (flow.startYear !== undefined && year.year < flow.startYear) {
+    return false;
+  }
+
+  if (flow.endYear !== undefined && year.year > flow.endYear) {
+    return false;
+  }
+
+  return true;
+}
+
+function applyFlowAnnualRaise(
+  flow: Pick<FlowDefinition, "type" | "startYear" | "annualRaisePercent">,
+  amount: number,
+  year: EventYear
+): number {
+  if (flow.type !== "income") {
+    return amount;
+  }
+
+  const annualRaisePercent = flow.annualRaisePercent ?? 0;
+  if (annualRaisePercent === 0) {
+    return amount;
+  }
+
+  const baseYear = flow.startYear ?? year.year;
+  const yearsSinceStart = Math.max(0, year.year - baseYear);
+  return amount * Math.pow(1 + annualRaisePercent / 100, yearsSinceStart);
 }
 
 function normalizeAssetCashTaxTreatment(
