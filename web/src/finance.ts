@@ -18,6 +18,8 @@ export interface VariableDefinition {
   value: number;
 }
 
+export type InvestmentAssetType = "us-stocks" | "federal-bonds" | "local-bonds";
+
 interface AssetDefinitionBase {
   name: string;
   expectedReturn: number;
@@ -26,6 +28,7 @@ interface AssetDefinitionBase {
 
 export interface InvestmentAssetDefinition extends AssetDefinitionBase {
   kind?: "investment";
+  assetType?: InvestmentAssetType;
   startingValue: number;
   startingValueFormula?: string;
   sellProportion: number;
@@ -134,6 +137,7 @@ export class Asset {
   readonly expectedReturn: number;
   readonly volatility: number;
   readonly kind: "investment" | "home";
+  readonly assetType: InvestmentAssetType | null;
   readonly startingValue: number;
   readonly startingValueFormula?: string;
   readonly sellProportion: number;
@@ -165,6 +169,7 @@ export class Asset {
 
       this.name = normalizedName;
       this.kind = "home";
+      this.assetType = null;
       this.expectedReturn = definition.expectedReturn;
       this.volatility = definition.volatility;
       this.startingValue = 0;
@@ -201,6 +206,7 @@ export class Asset {
 
     this.name = normalizedName;
     this.kind = "investment";
+    this.assetType = definition.assetType ?? null;
     this.startingValue = definition.startingValue;
     this.startingValueFormula = definition.startingValueFormula?.trim() || undefined;
     this.expectedReturn = definition.expectedReturn;
@@ -246,6 +252,7 @@ export class Asset {
 
     return {
       name: this.name,
+      ...(this.assetType ? { assetType: this.assetType } : {}),
       startingValue: this.startingValue,
       ...(this.startingValueFormula ? { startingValueFormula: this.startingValueFormula } : {}),
       expectedReturn: this.expectedReturn,

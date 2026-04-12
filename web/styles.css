@@ -818,6 +818,14 @@ label {
   align-items: center;
   gap: 10px;
   font-weight: 600;
+  color: var(--ink);
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  flex: none;
 }
 
 .simulation-sweep-config,
@@ -1217,6 +1225,24 @@ label {
   color: var(--muted);
 }
 
+.asset-toggle-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.asset-toggle-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.asset-toggle-switch {
+  justify-self: end;
+  flex: none;
+}
+
 .expense-row-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1369,6 +1395,7 @@ label {
   .workspace-item-header,
   .workspace-item-stats,
   .asset-metrics,
+  .asset-toggle-row,
   .simulation-chart-header,
   .simulation-sweep-results-header,
   .event-buttons,

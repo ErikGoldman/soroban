@@ -250,6 +250,7 @@ describe("Asset", () => {
   it("captures an asset definition", () => {
     const asset = new Asset({
       name: "Index fund",
+      assetType: "us-stocks",
       startingValue: 12000,
       expectedReturn: 7.5,
       volatility: 14.2,
@@ -270,6 +271,7 @@ describe("Asset", () => {
 
     expect(asset.toDefinition()).toEqual({
       name: "Index fund",
+      assetType: "us-stocks",
       startingValue: 12000,
       expectedReturn: 7.5,
       volatility: 14.2,

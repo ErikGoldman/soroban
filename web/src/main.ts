@@ -60,6 +60,7 @@ import {
   type AssetCashGenerationDefinition,
   type AssetCorrelationDefinition,
   type HomeAssetDefinition,
+  type InvestmentAssetType,
   type InvestmentAssetDefinition,
   type AssetSaleTaxTreatment,
   type AssetSaleTaxDefinition,
@@ -89,6 +90,7 @@ import type {
 } from "./simulation-worker.js";
 
 type EventActionDraftKind = EventAction["kind"] | "one-time-expense";
+type AssetDraftKind = "investment" | InvestmentAssetType | "home";
 
 interface PlannerState {
   variables: VariableDefinition[];
@@ -168,7 +170,7 @@ interface ActiveFlowEventEdit {
 }
 
 interface AssetDraft {
-  kind: "investment" | "home";
+  kind: AssetDraftKind;
   name: string;
   startingValue: string;
   expectedReturn: string;
@@ -255,6 +257,61 @@ interface YearlySnapshot {
 interface SimulationAssetDraft extends AssetDraft {
   sellProportion: string;
 }
+
+interface AssetTypePreset {
+  label: string;
+  expectedReturn: string;
+  volatility: string;
+  cashGenerations: readonly Omit<AssetCashGenerationDraft, "id">[];
+}
+
+const ASSET_TYPE_PRESETS: Record<InvestmentAssetType, AssetTypePreset> = {
+  "us-stocks": {
+    label: "US stocks",
+    expectedReturn: "4",
+    volatility: "16",
+    cashGenerations: [
+      {
+        name: "Qualified dividends",
+        rate: "1.1",
+        volatility: "0",
+        taxTreatment: "qualified-dividends",
+      },
+      {
+        name: "Ordinary income",
+        rate: "0.1",
+        volatility: "0",
+        taxTreatment: "ordinary-income",
+      },
+    ],
+  },
+  "federal-bonds": {
+    label: "Federal bonds",
+    expectedReturn: "0",
+    volatility: "0",
+    cashGenerations: [
+      {
+        name: "State+local exempt income",
+        rate: "3.7",
+        volatility: "0.43",
+        taxTreatment: "state-local-exempt",
+      },
+    ],
+  },
+  "local-bonds": {
+    label: "Local bonds",
+    expectedReturn: "0",
+    volatility: "0",
+    cashGenerations: [
+      {
+        name: "Triple exempt income",
+        rate: "3.2",
+        volatility: "0.19",
+        taxTreatment: "triple-exempt",
+      },
+    ],
+  },
+};
 
 interface VariableSweepDraft {
   enabled: boolean;
@@ -479,6 +536,61 @@ function createAssetCashGenerationDraft(): AssetCashGenerationDraft {
   };
 }
 
+function getAssetTypeLabel(kind: AssetDraftKind): string {
+  switch (kind) {
+    case "home":
+      return "Home";
+    case "us-stocks":
+      return "US stocks";
+    case "federal-bonds":
+      return "Federal bonds";
+    case "local-bonds":
+      return "Local bonds";
+    case "investment":
+    default:
+      return "Investment";
+  }
+}
+
+function getInvestmentAssetTypeFromDraftKind(kind: AssetDraftKind): InvestmentAssetType | null {
+  switch (kind) {
+    case "us-stocks":
+    case "federal-bonds":
+    case "local-bonds":
+      return kind;
+    default:
+      return null;
+  }
+}
+
+function getAssetTypePreset(kind: AssetDraftKind): AssetTypePreset | null {
+  const assetType = getInvestmentAssetTypeFromDraftKind(kind);
+  return assetType ? ASSET_TYPE_PRESETS[assetType] : null;
+}
+
+function createAssetCashGenerationDraftFromPreset(
+  cashGeneration: Omit<AssetCashGenerationDraft, "id">
+): AssetCashGenerationDraft {
+  return {
+    id: createId(),
+    ...cashGeneration,
+  };
+}
+
+function applyAssetTypePresetDefaults(draft: AssetDraft | AssetEditDraft): void {
+  const preset = getAssetTypePreset(draft.kind);
+  if (!preset) {
+    return;
+  }
+
+  draft.expectedReturn = preset.expectedReturn;
+  draft.volatility = preset.volatility;
+  draft.cashGenerationEnabled = preset.cashGenerations.length > 0;
+  draft.cashGenerations = preset.cashGenerations.map((cashGeneration) =>
+    createAssetCashGenerationDraftFromPreset(cashGeneration)
+  );
+}
+
 function createAssetEditDraft(): AssetEditDraft {
   return {
     originalName: "",
@@ -655,6 +767,14 @@ function isInvestmentAsset(asset: AssetDefinition): asset is InvestmentAssetDefi
   return asset.kind !== "home";
 }
 
+function getAssetDefinitionTypeLabel(asset: AssetDefinition): string {
+  if (isHomeAsset(asset)) {
+    return "Home";
+  }
+
+  return asset.assetType ? getAssetTypeLabel(asset.assetType) : "Investment";
+}
+
 function getAssetCashGenerations(asset: AssetDefinition): readonly AssetCashGenerationDefinition[] {
   if (!isInvestmentAsset(asset)) {
     return [];
@@ -815,7 +935,7 @@ function buildAssetDraftFromDefinition(
   const cashGenerations = getAssetCashGenerations(asset);
   const resolvedAsset = resolvePlannerAssetDefinition(asset);
   return {
-    kind: asset.kind === "home" ? "home" : "investment",
+    kind: asset.kind === "home" ? "home" : asset.assetType ?? "investment",
     name: asset.name,
     startingValue:
       options.preserveFormulaSource && isInvestmentAsset(asset)
@@ -894,33 +1014,34 @@ function migratePersistedAsset(
 
   return resolveAssetValueFormula(
     new Asset({
-    name: asset.name,
-    startingValue: asset.startingValue ?? 0,
-    ...(asset.startingValueFormula ? { startingValueFormula: asset.startingValueFormula } : {}),
-    expectedReturn: asset.expectedReturn,
-    volatility: asset.volatility,
-    sellProportion:
-      typeof asset.sellProportion === "number" && Number.isFinite(asset.sellProportion)
-        ? asset.sellProportion
-        : 1,
-    ...(persistedCashGenerations.length > 0
-      ? {
-          cashGenerations: persistedCashGenerations.map((cashGeneration, index) => ({
-            name: cashGeneration.name ?? `Cash generation ${index + 1}`,
-            rate: cashGeneration.rate,
-            volatility: cashGeneration.volatility,
-            taxTreatment: cashGeneration.taxTreatment ?? "ordinary-income",
-          })),
-        }
-      : {}),
-    ...(asset.saleTax
-      ? {
-          saleTax: {
-            costBasis: asset.saleTax.costBasis ?? 0,
-            taxTreatment: asset.saleTax.taxTreatment ?? "long-term-capital-gains",
-          },
-        }
-      : {}),
+      name: asset.name,
+      ...(asset.assetType ? { assetType: asset.assetType } : {}),
+      startingValue: asset.startingValue ?? 0,
+      ...(asset.startingValueFormula ? { startingValueFormula: asset.startingValueFormula } : {}),
+      expectedReturn: asset.expectedReturn,
+      volatility: asset.volatility,
+      sellProportion:
+        typeof asset.sellProportion === "number" && Number.isFinite(asset.sellProportion)
+          ? asset.sellProportion
+          : 1,
+      ...(persistedCashGenerations.length > 0
+        ? {
+            cashGenerations: persistedCashGenerations.map((cashGeneration, index) => ({
+              name: cashGeneration.name ?? `Cash generation ${index + 1}`,
+              rate: cashGeneration.rate,
+              volatility: cashGeneration.volatility,
+              taxTreatment: cashGeneration.taxTreatment ?? "ordinary-income",
+            })),
+          }
+        : {}),
+      ...(asset.saleTax
+        ? {
+            saleTax: {
+              costBasis: asset.saleTax.costBasis ?? 0,
+              taxTreatment: asset.saleTax.taxTreatment ?? "long-term-capital-gains",
+            },
+          }
+        : {}),
     }).toDefinition(),
     context
   );
@@ -1228,6 +1349,16 @@ function renderAssetCashTaxTreatmentOptions(selected: AssetCashTaxTreatment): st
     <option value="state-local-exempt" ${selected === "state-local-exempt" ? "selected" : ""}>State+local exempt</option>
     <option value="triple-exempt" ${selected === "triple-exempt" ? "selected" : ""}>Triple exempt</option>
     <option value="not-taxable" ${selected === "not-taxable" ? "selected" : ""}>Not taxable</option>
+  `;
+}
+
+function renderAssetTypeOptions(selected: AssetDraftKind): string {
+  return `
+    <option value="investment" ${selected === "investment" ? "selected" : ""}>Investment</option>
+    <option value="us-stocks" ${selected === "us-stocks" ? "selected" : ""}>US stocks</option>
+    <option value="federal-bonds" ${selected === "federal-bonds" ? "selected" : ""}>Federal bonds</option>
+    <option value="local-bonds" ${selected === "local-bonds" ? "selected" : ""}>Local bonds</option>
+    <option value="home" ${selected === "home" ? "selected" : ""}>Home</option>
   `;
 }
 
@@ -1682,6 +1813,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
           }
         : {
             name: resolvedAsset.name,
+            ...(resolvedAsset.assetType ? { assetType: resolvedAsset.assetType } : {}),
             startingValue: resolvedAsset.startingValue,
             expectedReturn: resolvedAsset.expectedReturn,
             volatility: resolvedAsset.volatility,
@@ -2012,7 +2144,7 @@ function renderSetupAssetArea(): string {
                 }
               </div>
               <div class="workspace-item-stats">
-                <span><strong>Type</strong>${isHomeAsset(asset) ? "Home" : "Investment"}</span>
+                <span><strong>Type</strong>${getAssetDefinitionTypeLabel(asset)}</span>
                 <span><strong>Expected return</strong>${formatPercentage(asset.expectedReturn)}</span>
                 <span><strong>Volatility</strong>${formatPercentage(asset.volatility)}</span>
               </div>
@@ -2905,6 +3037,7 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
           }
         : {
             name: resolvedAsset.name,
+            ...(resolvedAsset.assetType ? { assetType: resolvedAsset.assetType } : {}),
             startingValue: resolvedAsset.startingValue,
             ...(resolvedAsset.startingValueFormula ? { startingValueFormula: resolvedAsset.startingValueFormula } : {}),
             expectedReturn: resolvedAsset.expectedReturn,
@@ -4109,21 +4242,11 @@ function renderAssetComposer(): string {
           <label>
             Asset type
             <select name="kind">
-              <option value="investment" ${assetDraft.kind === "investment" ? "selected" : ""}>Investment</option>
-              <option value="home" ${assetDraft.kind === "home" ? "selected" : ""}>Home</option>
+              ${renderAssetTypeOptions(assetDraft.kind)}
             </select>
           </label>
           ${renderAssetCoreFields(assetDraft)}
-          <div class="split-fields">
-            <label>
-              Expected return (%)
-              <input name="expectedReturn" type="number" step="0.01" value="${escapeHtml(assetDraft.expectedReturn)}" required />
-            </label>
-            <label>
-              Volatility (%)
-              <input name="volatility" type="number" step="0.01" value="${escapeHtml(assetDraft.volatility)}" required />
-            </label>
-          </div>
+          ${renderAssetReturnFields(assetDraft)}
           ${renderAssetTaxModelFields(assetDraft)}
           <p class="helper-copy">
             Price return, cash generation, and taxable sales are modeled separately for simulation.
@@ -4180,21 +4303,11 @@ function renderAssetEditor(): string {
           <label>
             Asset type
             <select name="kind">
-              <option value="investment" ${assetEditDraft.kind === "investment" ? "selected" : ""}>Investment</option>
-              <option value="home" ${assetEditDraft.kind === "home" ? "selected" : ""}>Home</option>
+              ${renderAssetTypeOptions(assetEditDraft.kind)}
             </select>
           </label>
           ${renderAssetCoreFields(assetEditDraft)}
-          <div class="split-fields">
-            <label>
-              Expected return (%)
-              <input name="expectedReturn" type="number" step="0.01" value="${escapeHtml(assetEditDraft.expectedReturn)}" required />
-            </label>
-            <label>
-              Volatility (%)
-              <input name="volatility" type="number" step="0.01" value="${escapeHtml(assetEditDraft.volatility)}" required />
-            </label>
-          </div>
+          ${renderAssetReturnFields(assetEditDraft)}
           ${renderAssetTaxModelFields(assetEditDraft)}
           <p class="helper-copy">
             Changes here only affect the saved asset record.
@@ -4334,6 +4447,77 @@ function renderAssetCoreFields(draft: AssetDraft): string {
   `;
 }
 
+function renderAssetReturnFields(draft: AssetDraft): string {
+  const preset = getAssetTypePreset(draft.kind);
+
+  return `
+    <div class="split-fields">
+      <label>
+        Expected return (%)
+        <input
+          name="expectedReturn"
+          type="number"
+          step="0.01"
+          value="${escapeHtml(draft.expectedReturn)}"
+          ${preset ? "disabled" : ""}
+          required
+        />
+      </label>
+      <label>
+        Volatility (%)
+        <input
+          name="volatility"
+          type="number"
+          step="0.01"
+          value="${escapeHtml(draft.volatility)}"
+          ${preset ? "disabled" : ""}
+          required
+        />
+      </label>
+    </div>
+    ${preset ? `<p class="helper-copy">${escapeHtml(preset.label)} uses locked price-return settings.</p>` : ""}
+  `;
+}
+
+function renderAssetSaleTaxFields(draft: AssetDraft): string {
+  return `
+    <section class="composer-subsection">
+      <div class="asset-toggle-row">
+        <div class="asset-toggle-copy">
+          <strong>Tax on selling for cash</strong>
+          <span class="summary-meta">For realized capital gains or other taxable sale events</span>
+        </div>
+        <label class="switch-field asset-toggle-switch" aria-label="Enable tax on selling for cash">
+          <input type="checkbox" name="saleTaxEnabled" ${draft.saleTaxEnabled ? "checked" : ""} />
+          <span class="switch-track" aria-hidden="true"></span>
+        </label>
+      </div>
+      ${
+        draft.saleTaxEnabled
+          ? `
+        <label>
+          Starting cost basis
+          <input
+            name="saleTaxCostBasis"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(draft.saleTaxCostBasis))}"
+          />
+        </label>
+        <label>
+          Realized gain tax treatment
+          <select name="saleTaxTreatment">
+            <option value="short-term-capital-gains" ${draft.saleTaxTreatment === "short-term-capital-gains" ? "selected" : ""}>Short-term capital gains</option>
+            <option value="long-term-capital-gains" ${draft.saleTaxTreatment === "long-term-capital-gains" ? "selected" : ""}>Long-term capital gains</option>
+            <option value="not-taxable" ${draft.saleTaxTreatment === "not-taxable" ? "selected" : ""}>Not taxable</option>
+          </select>
+        </label>
+          `
+          : ""
+      }
+    </section>
+  `;
+}
+
 function renderAssetTaxModelFields(draft: AssetDraft): string {
   if (draft.kind === "home") {
     return `
@@ -4349,14 +4533,16 @@ function renderAssetTaxModelFields(draft: AssetDraft): string {
 
   return `
     <section class="composer-subsection">
-      <div class="event-entry-header">
-        <strong>Cash generation</strong>
-        <span class="summary-meta">For dividends, bond income, distributions, or rent-like cash yield</span>
+      <div class="asset-toggle-row">
+        <div class="asset-toggle-copy">
+          <strong>Cash generation</strong>
+          <span class="summary-meta">For dividends, bond income, distributions, or rent-like cash yield</span>
+        </div>
+        <label class="switch-field asset-toggle-switch" aria-label="Enable cash generation">
+          <input type="checkbox" name="cashGenerationEnabled" ${draft.cashGenerationEnabled ? "checked" : ""} />
+          <span class="switch-track" aria-hidden="true"></span>
+        </label>
       </div>
-      <label>
-        <input type="checkbox" name="cashGenerationEnabled" ${draft.cashGenerationEnabled ? "checked" : ""} />
-        Enable cash generation
-      </label>
       ${
         draft.cashGenerationEnabled
           ? `
@@ -4405,38 +4591,7 @@ function renderAssetTaxModelFields(draft: AssetDraft): string {
           : ""
       }
     </section>
-    <section class="composer-subsection">
-      <div class="event-entry-header">
-        <strong>Tax on selling for cash</strong>
-        <span class="summary-meta">For realized capital gains or other taxable sale events</span>
-      </div>
-      <label>
-        <input type="checkbox" name="saleTaxEnabled" ${draft.saleTaxEnabled ? "checked" : ""} />
-        Enable tax on sales
-      </label>
-      ${
-        draft.saleTaxEnabled
-          ? `
-        <label>
-          Starting cost basis
-          <input
-            name="saleTaxCostBasis"
-            ${renderEditableNumberInputAttributes()}
-            value="${escapeHtml(formatEditableNumberInput(draft.saleTaxCostBasis))}"
-          />
-        </label>
-        <label>
-          Realized gain tax treatment
-          <select name="saleTaxTreatment">
-            <option value="short-term-capital-gains" ${draft.saleTaxTreatment === "short-term-capital-gains" ? "selected" : ""}>Short-term capital gains</option>
-            <option value="long-term-capital-gains" ${draft.saleTaxTreatment === "long-term-capital-gains" ? "selected" : ""}>Long-term capital gains</option>
-            <option value="not-taxable" ${draft.saleTaxTreatment === "not-taxable" ? "selected" : ""}>Not taxable</option>
-          </select>
-        </label>
-          `
-          : ""
-      }
-    </section>
+    ${renderAssetSaleTaxFields(draft)}
   `;
 }
 
@@ -4602,11 +4757,11 @@ function renderFlowComposer(): string {
               variablesScope: "flow-draft",
             })}
           </label>
-          <label>
+          <label class="checkbox-field">
             <input name="oneTime" type="checkbox" ${flowDraft.oneTime ? "checked" : ""} />
             One-time expense
           </label>
-          <label>
+          <label class="checkbox-field">
             <input name="inflationAdjusted" type="checkbox" ${flowDraft.inflationAdjusted ? "checked" : ""} />
             Apply inflation
           </label>
@@ -4886,11 +5041,11 @@ function renderFlowEditor(): string {
               variablesScope: "planner",
             })}
           </label>
-          <label>
+          <label class="checkbox-field">
             <input name="oneTime" type="checkbox" ${flowEditDraft.oneTime ? "checked" : ""} />
             One-time expense
           </label>
-          <label>
+          <label class="checkbox-field">
             <input name="inflationAdjusted" type="checkbox" ${flowEditDraft.inflationAdjusted ? "checked" : ""} />
             Apply inflation
           </label>
@@ -6457,7 +6612,8 @@ function bindAssetComposer(user: UserIdentity): void {
     if (target.name === "name") {
       assetDraft.name = target.value;
     } else if (target.name === "kind") {
-      assetDraft.kind = target.value as AssetDraft["kind"];
+      assetDraft.kind = target.value as AssetDraftKind;
+      applyAssetTypePresetDefaults(assetDraft);
       renderPlanner(user);
       return;
     } else if (target.name === "startingValue") {
@@ -6590,7 +6746,8 @@ function bindAssetEditor(user: UserIdentity): void {
     if (target.name === "name") {
       assetEditDraft.name = target.value;
     } else if (target.name === "kind") {
-      assetEditDraft.kind = target.value as AssetDraft["kind"];
+      assetEditDraft.kind = target.value as AssetDraftKind;
+      applyAssetTypePresetDefaults(assetEditDraft);
       renderPlanner(user);
       return;
     } else if (target.name === "startingValue") {
@@ -7722,9 +7879,11 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
     }).toDefinition();
   }
 
+  const assetType = getInvestmentAssetTypeFromDraftKind(draft.kind);
   const startingValue = resolveAssetValueInput(draft.startingValue, "Starting value");
   return new Asset({
     name: draft.name,
+    ...(assetType ? { assetType } : {}),
     startingValue: startingValue.value,
     ...(startingValue.formula ? { startingValueFormula: startingValue.formula } : {}),
     expectedReturn: Number(draft.expectedReturn),
