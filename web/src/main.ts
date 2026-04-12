@@ -667,8 +667,12 @@ function getAssetCashGenerations(asset: AssetDefinition): readonly AssetCashGene
       : [];
 }
 
-function buildPlannerFormulaContext(): Record<string, number> {
-  return Object.fromEntries(plannerState.variables.map((variable) => [variable.name, variable.value]));
+function buildPlannerFormulaContext(variableOverride?: SimulationVariableOverride): Record<string, number> {
+  const context = Object.fromEntries(plannerState.variables.map((variable) => [variable.name, variable.value]));
+  if (variableOverride) {
+    context[variableOverride.variableName] = variableOverride.value;
+  }
+  return context;
 }
 
 function ensurePlannerVariablesExist(variableNames: Iterable<string>): string[] {
@@ -1665,6 +1669,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
     simulationDraft.taxPreset,
     plannerState.taxProfile.filingStatus
   );
+  const formulaContext = buildPlannerFormulaContext(variableOverride);
   const yearlyPlans = buildYearlyPlansFromPlannerData({
     startYearInput: simulationDraft.startYear,
     yearsToShow: simulationDraft.horizonYears,
@@ -1677,53 +1682,54 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
     attempts: simulationDraft.attempts,
     horizonYears: simulationDraft.horizonYears,
     yearlyPlans,
-    assets: simulationDraft.assetRows.map((asset) =>
-      asset.kind === "home"
+    assets: plannerState.assets.map((asset) => {
+      const resolvedAsset = resolveAssetValueFormula(asset, formulaContext);
+      return resolvedAsset.kind === "home"
         ? {
             kind: "home" as const,
-            name: asset.name,
-            initialCost: parseEditableNumber(asset.initialCost),
-            expectedReturn: Number(asset.expectedReturn),
-            volatility: Number(asset.volatility),
-            cashPurchasePercent: Number(asset.cashPurchasePercent) / 100,
-            mortgageType: asset.mortgageType,
-            ...(asset.mortgageType === "interest-only"
+            name: resolvedAsset.name,
+            initialCost: resolvedAsset.initialCost,
+            expectedReturn: resolvedAsset.expectedReturn,
+            volatility: resolvedAsset.volatility,
+            cashPurchasePercent: resolvedAsset.cashPurchasePercent,
+            mortgageType: resolvedAsset.mortgageType,
+            ...(resolvedAsset.mortgageType === "interest-only"
               ? {
-                  interestOnlyMaturityAction: asset.interestOnlyMaturityAction,
+                  interestOnlyMaturityAction: resolvedAsset.interestOnlyMaturityAction,
                 }
               : {}),
-            mortgageRate: Number(asset.mortgageRate),
-            mortgageTermYears: Number(asset.mortgageTermYears),
-            monthlyNonTaxCosts: Number(asset.monthlyNonTaxCosts),
-            propertyTaxRate: Number(asset.propertyTaxRate),
-            purchaseYear: Number(asset.purchaseYear),
+            mortgageRate: resolvedAsset.mortgageRate,
+            mortgageTermYears: resolvedAsset.mortgageTermYears,
+            monthlyNonTaxCosts: resolvedAsset.monthlyNonTaxCosts,
+            propertyTaxRate: resolvedAsset.propertyTaxRate,
+            purchaseYear: resolvedAsset.purchaseYear,
           }
         : {
-            name: asset.name,
-            startingValue: Number(asset.startingValue),
-            expectedReturn: Number(asset.expectedReturn),
-            volatility: Number(asset.volatility),
-            sellProportion: Number(asset.sellProportion),
-            ...(asset.cashGenerationEnabled
+            name: resolvedAsset.name,
+            startingValue: resolvedAsset.startingValue,
+            expectedReturn: resolvedAsset.expectedReturn,
+            volatility: resolvedAsset.volatility,
+            sellProportion: resolvedAsset.sellProportion,
+            ...((resolvedAsset.cashGenerations ?? []).length > 0
               ? {
-                  cashGenerations: asset.cashGenerations.map((cashGeneration) => ({
-                    name: cashGeneration.name.trim(),
+                  cashGenerations: (resolvedAsset.cashGenerations ?? []).map((cashGeneration) => ({
+                    name: cashGeneration.name?.trim(),
                     rate: Number(cashGeneration.rate),
                     volatility: Number(cashGeneration.volatility),
                     taxTreatment: cashGeneration.taxTreatment,
                   })),
                 }
               : {}),
-            ...(asset.saleTaxEnabled
+            ...(resolvedAsset.saleTax
               ? {
                   saleTax: {
-                    costBasis: Number(asset.saleTaxCostBasis),
-                    taxTreatment: asset.saleTaxTreatment,
+                    costBasis: resolvedAsset.saleTax.costBasis,
+                    taxTreatment: resolvedAsset.saleTax.taxTreatment,
                   },
                 }
               : {}),
-          }
-    ),
+          };
+    }),
     taxes: selectedTaxPreset.taxes,
     householdTaxProfile: selectedTaxPreset.householdTaxProfile,
     assetCorrelations: plannerState.assetCorrelations,
@@ -3311,7 +3317,7 @@ function renderSimulationChart(
                         data-simulation-chart-year="${row.yearNumber}"
                         data-simulation-chart-label="${escapeAttribute(row.label)}"
                         data-simulation-chart-value="${escapeAttribute(formatCompactCurrency(value))}"
-                        data-simulation-chart-metric="${escapeAttribute(valueLabel)}"
+                        data-simulation-chart-value-label="${escapeAttribute(valueLabel)}"
                         data-simulation-chart-percentile="${scenario.percentile}"
                       ></circle>
                     `
@@ -3345,6 +3351,10 @@ function getDisplayedSimulationDetailResults(): SimulationDetailScenario[] | nul
   return getSelectedSimulationSweepStep()?.details ?? simulationDetailResults;
 }
 
+function isSimulationChartMetric(value: string | undefined): value is SimulationChartMetric {
+  return value === "totalAssets" || value === "liquidAssets";
+}
+
 function renderSimulationSweepResults(): string {
   if (!simulationSweepResults) {
     return "";
@@ -3364,13 +3374,13 @@ function renderSimulationSweepResults(): string {
       <div class="simulation-sweep-results-header">
         <div>
           <strong>Variable sweep</strong>
-          <p class="helper-copy">
+          <p class="helper-copy" data-simulation-sweep-summary>
             Viewing ${escapeHtml(simulationSweepResults.variableName)} at ${escapeHtml(formatEditableNumber(selectedStep.value))}.
             Sweep range: ${escapeHtml(formatEditableNumber(minimumValue))} to ${escapeHtml(formatEditableNumber(maximumValue))}
             across ${simulationSweepResults.steps.length} runs.
           </p>
         </div>
-        <span class="pill">
+        <span class="pill" data-simulation-sweep-pill>
           ${selectedStep.index + 1} / ${simulationSweepResults.steps.length}
         </span>
       </div>
@@ -3388,10 +3398,146 @@ function renderSimulationSweepResults(): string {
       </label>
       <div class="simulation-sweep-slider-values" aria-hidden="true">
         <span>${escapeHtml(formatEditableNumber(minimumValue))}</span>
-        <strong>${escapeHtml(formatEditableNumber(selectedStep.value))}</strong>
+        <strong data-simulation-sweep-current-value>${escapeHtml(formatEditableNumber(selectedStep.value))}</strong>
         <span>${escapeHtml(formatEditableNumber(maximumValue))}</span>
       </div>
     </section>
+  `;
+}
+
+function renderSimulationResultsBody(): string {
+  const displayedSimulationResults = getDisplayedSimulationResults();
+  const displayedSimulationDetails = getDisplayedSimulationDetailResults();
+  const selectedScenario = displayedSimulationResults?.get(selectedSimulationPercentile) ?? null;
+  const selectedDetailScenario =
+    selectedScenario && displayedSimulationDetails
+      ? selectRepresentativeSimulationScenario(displayedSimulationDetails, selectedScenario.rows)
+      : null;
+  const rows = selectedScenario?.rows ?? [];
+
+  if (!selectedScenario || !displayedSimulationResults) {
+    return "";
+  }
+
+  const selectedSimulationChart =
+    selectedSimulationChartMetric === "liquidAssets"
+      ? {
+          title: "Liquid assets by year",
+          description:
+            "Uses the same percentile bucketing as the main chart, but only for liquid assets. Home equity is excluded.",
+          ariaLabel: "Simulation liquid assets by year and percentile",
+          valueKey: "liquidAssets" as const,
+          valueLabel: "Liquid assets",
+        }
+      : {
+          title: "Total assets by year",
+          description:
+            "X-axis: simulation year. Y-axis: portfolio value at each year-by-year percentile across all simulation attempts.",
+          ariaLabel: "Simulation total assets by year and percentile",
+          valueKey: "totalAssets" as const,
+          valueLabel: "Total assets",
+        };
+
+  return `
+      <div class="tab-strip" role="tablist" aria-label="Simulation chart metric">
+        <button
+          type="button"
+          class="${selectedSimulationChartMetric === "totalAssets" ? "tab-button is-active" : "tab-button"}"
+          data-simulation-chart-metric="totalAssets"
+        >
+          Total assets
+        </button>
+        <button
+          type="button"
+          class="${selectedSimulationChartMetric === "liquidAssets" ? "tab-button is-active" : "tab-button"}"
+          data-simulation-chart-metric="liquidAssets"
+        >
+          Liquid assets
+        </button>
+      </div>
+      ${renderSimulationChart(displayedSimulationResults, selectedSimulationChart)}
+      <div class="tab-strip" role="tablist" aria-label="Simulation percentiles">
+        ${simulationPercentiles
+          .map(
+            (percentile) => `
+              <button
+                type="button"
+                class="${selectedSimulationPercentile === percentile ? "tab-button is-active" : "tab-button"}"
+                data-simulation-percentile="${percentile}"
+              >
+                ${percentile}th
+              </button>
+            `
+          )
+          .join("")}
+      </div>
+      <div class="simulation-actions simulation-results-actions">
+        <button
+          type="button"
+          class="secondary-button"
+          data-export-simulation-example="${selectedSimulationPercentile}"
+          ${selectedDetailScenario ? "" : "disabled"}
+        >
+          Export example
+        </button>
+      </div>
+      <p class="helper-copy">Depletion is cumulative by year and means the plan ran out of non-home assets or cash. Home equity still remains in total assets because homes are not sold in the simulation.</p>
+      <div class="board-scroll simulation-results">
+        <table class="flow-table">
+          <thead>
+            <tr>
+              <th>Year</th>
+              <th>${selectedSimulationPercentile}th percentile assets</th>
+              <th>Depleted by year</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows
+              .map((row) => {
+                const expandedKey = `${selectedSimulationPercentile}:${row.yearNumber}`;
+                const isExpanded = expandedSimulationExampleKeys.has(expandedKey);
+                const exampleYear =
+                  isExpanded
+                    ? getExampleSimulationYear(selectedDetailScenario, row.yearNumber)
+                    : null;
+
+                return `
+                  <tr>
+                    <th>${escapeHtml(row.label)}</th>
+                    <td>${formatCurrency(row.totalAssets)}</td>
+                    <td>${formatPercentage(row.depletionProbability)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        class="link-button simulation-year-button"
+                        data-toggle-simulation-example="${expandedKey}"
+                      >
+                        ${isExpanded ? "Hide example" : "Show example"}
+                      </button>
+                    </td>
+                  </tr>
+                  ${
+                    isExpanded
+                      ? `
+                  <tr class="simulation-detail-row">
+                    <td colspan="4">
+                      ${
+                        exampleYear
+                          ? renderSimulationExampleYear(exampleYear)
+                          : `<div class="simulation-detail-panel"><p class="helper-copy">No example year was available for this percentile row.</p></div>`
+                      }
+                    </td>
+                  </tr>
+                      `
+                      : ""
+                  }
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
   `;
 }
 
@@ -3424,14 +3570,6 @@ function renderDisclosureIcon(expanded: boolean): string {
 }
 
 function renderSimulationBoard(): string {
-  const displayedSimulationResults = getDisplayedSimulationResults();
-  const displayedSimulationDetails = getDisplayedSimulationDetailResults();
-  const selectedScenario = displayedSimulationResults?.get(selectedSimulationPercentile) ?? null;
-  const selectedDetailScenario =
-    selectedScenario && displayedSimulationDetails
-      ? selectRepresentativeSimulationScenario(displayedSimulationDetails, selectedScenario.rows)
-      : null;
-  const rows = selectedScenario?.rows ?? [];
   const simulationSubmitState = getSimulationSubmitState();
   const isSimulationRunning = simulationRunState !== null && simulationRunState.errorMessage === null;
   const simulationProgressPercent = simulationRunState
@@ -3448,24 +3586,6 @@ function renderSimulationBoard(): string {
       `
     )
     .join("");
-  const selectedSimulationChart =
-    selectedSimulationChartMetric === "liquidAssets"
-      ? {
-          title: "Liquid assets by year",
-          description:
-            "Uses the same percentile bucketing as the main chart, but only for liquid assets. Home equity is excluded.",
-          ariaLabel: "Simulation liquid assets by year and percentile",
-          valueKey: "liquidAssets" as const,
-          valueLabel: "Liquid assets",
-        }
-      : {
-          title: "Total assets by year",
-          description:
-            "X-axis: simulation year. Y-axis: portfolio value at each year-by-year percentile across all simulation attempts.",
-          ariaLabel: "Simulation total assets by year and percentile",
-          valueKey: "totalAssets" as const,
-          valueLabel: "Total assets",
-        };
   return `
     <div class="simulation-panel">
       <form id="simulation-form" class="stack-form">
@@ -3827,108 +3947,10 @@ function renderSimulationBoard(): string {
       </form>
 
       ${
-        selectedScenario
+        getDisplayedSimulationResults()
           ? `
       ${renderSimulationSweepResults()}
-      <div class="tab-strip" role="tablist" aria-label="Simulation chart metric">
-        <button
-          type="button"
-          class="${selectedSimulationChartMetric === "totalAssets" ? "tab-button is-active" : "tab-button"}"
-          data-simulation-chart-metric="totalAssets"
-        >
-          Total assets
-        </button>
-        <button
-          type="button"
-          class="${selectedSimulationChartMetric === "liquidAssets" ? "tab-button is-active" : "tab-button"}"
-          data-simulation-chart-metric="liquidAssets"
-        >
-          Liquid assets
-        </button>
-      </div>
-      ${renderSimulationChart(displayedSimulationResults!, selectedSimulationChart)}
-      <div class="tab-strip" role="tablist" aria-label="Simulation percentiles">
-        ${simulationPercentiles
-          .map(
-            (percentile) => `
-              <button
-                type="button"
-                class="${selectedSimulationPercentile === percentile ? "tab-button is-active" : "tab-button"}"
-                data-simulation-percentile="${percentile}"
-              >
-                ${percentile}th
-              </button>
-            `
-          )
-          .join("")}
-      </div>
-      <div class="simulation-actions simulation-results-actions">
-        <button
-          type="button"
-          class="secondary-button"
-          data-export-simulation-example="${selectedSimulationPercentile}"
-          ${selectedDetailScenario ? "" : "disabled"}
-        >
-          Export example
-        </button>
-      </div>
-      <p class="helper-copy">Depletion is cumulative by year and means the plan ran out of non-home assets or cash. Home equity still remains in total assets because homes are not sold in the simulation.</p>
-      <div class="board-scroll simulation-results">
-        <table class="flow-table">
-          <thead>
-            <tr>
-              <th>Year</th>
-              <th>${selectedSimulationPercentile}th percentile assets</th>
-              <th>Depleted by year</th>
-              <th>Example</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows
-              .map((row) => {
-                const expandedKey = `${selectedSimulationPercentile}:${row.yearNumber}`;
-                const isExpanded = expandedSimulationExampleKeys.has(expandedKey);
-                const exampleYear =
-                  isExpanded
-                    ? getExampleSimulationYear(selectedDetailScenario, row.yearNumber)
-                    : null;
-
-                return `
-                  <tr>
-                    <th>${escapeHtml(row.label)}</th>
-                    <td>${formatCurrency(row.totalAssets)}</td>
-                    <td>${formatPercentage(row.depletionProbability)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        class="link-button simulation-year-button"
-                        data-toggle-simulation-example="${expandedKey}"
-                      >
-                        ${isExpanded ? "Hide example" : "Show example"}
-                      </button>
-                    </td>
-                  </tr>
-                  ${
-                    isExpanded
-                      ? `
-                  <tr class="simulation-detail-row">
-                    <td colspan="4">
-                      ${
-                        exampleYear
-                          ? renderSimulationExampleYear(exampleYear)
-                          : `<div class="simulation-detail-panel"><p class="helper-copy">No example year was available for this percentile row.</p></div>`
-                      }
-                    </td>
-                  </tr>
-                      `
-                      : ""
-                  }
-                `;
-              })
-              .join("")}
-          </tbody>
-        </table>
-      </div>
+      <div id="simulation-results-panel">${renderSimulationResultsBody()}</div>
           `
           : ``
       }
@@ -3943,6 +3965,105 @@ function syncSimulationAttemptsLabel(root: ParentNode = document): void {
   }
 
   label.textContent = `${simulationDraft.attempts.toLocaleString("en-US")} attempts`;
+}
+
+function syncSimulationSweepSelectionDisplay(): void {
+  const selectedStep = getSelectedSimulationSweepStep();
+  if (!simulationSweepResults || !selectedStep) {
+    return;
+  }
+
+  const minimumValue = simulationSweepResults.steps[0]?.value ?? selectedStep.value;
+  const maximumValue =
+    simulationSweepResults.steps[simulationSweepResults.steps.length - 1]?.value ?? selectedStep.value;
+  const summary = document.querySelector<HTMLElement>("[data-simulation-sweep-summary]");
+  const pill = document.querySelector<HTMLElement>("[data-simulation-sweep-pill]");
+  const currentValue = document.querySelector<HTMLElement>("[data-simulation-sweep-current-value]");
+
+  if (summary) {
+    summary.textContent = `Viewing ${simulationSweepResults.variableName} at ${formatEditableNumber(selectedStep.value)}. Sweep range: ${formatEditableNumber(minimumValue)} to ${formatEditableNumber(maximumValue)} across ${simulationSweepResults.steps.length} runs.`;
+  }
+
+  if (pill) {
+    pill.textContent = `${selectedStep.index + 1} / ${simulationSweepResults.steps.length}`;
+  }
+
+  if (currentValue) {
+    currentValue.textContent = formatEditableNumber(selectedStep.value);
+  }
+}
+
+function bindSimulationResultsControls(user: UserIdentity): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-simulation-percentile]")) {
+    button.addEventListener("click", () => {
+      const percentile = Number(button.dataset.simulationPercentile) as SimulationPercentile;
+      if (!getDisplayedSimulationResults()?.has(percentile)) {
+        return;
+      }
+
+      selectedSimulationPercentile = percentile;
+      renderPlanner(user);
+    });
+  }
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-simulation-chart-metric]")) {
+    button.addEventListener("click", () => {
+      const metric = button.dataset.simulationChartMetric;
+      if (!isSimulationChartMetric(metric)) {
+        return;
+      }
+
+      selectedSimulationChartMetric = metric;
+      renderPlanner(user);
+    });
+  }
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-toggle-simulation-example]")) {
+    button.addEventListener("click", () => {
+      const key = button.dataset.toggleSimulationExample;
+      if (!key) {
+        return;
+      }
+
+      if (expandedSimulationExampleKeys.has(key)) {
+        expandedSimulationExampleKeys.delete(key);
+      } else {
+        expandedSimulationExampleKeys.add(key);
+      }
+
+      renderPlanner(user);
+    });
+  }
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-export-simulation-example]")) {
+    button.addEventListener("click", () => {
+      const percentile = Number(button.dataset.exportSimulationExample) as SimulationPercentile;
+      const displayedSimulationResults = getDisplayedSimulationResults();
+      const displayedSimulationDetails = getDisplayedSimulationDetailResults();
+      const scenario = displayedSimulationResults?.get(percentile) ?? null;
+      const detailScenario =
+        scenario && displayedSimulationDetails
+          ? selectRepresentativeSimulationScenario(displayedSimulationDetails, scenario.rows)
+          : null;
+
+      if (!scenario || !detailScenario) {
+        return;
+      }
+
+      downloadSimulationExampleExport(percentile, scenario, detailScenario);
+    });
+  }
+}
+
+function refreshSimulationResultsPanel(user: UserIdentity): void {
+  const resultsPanel = document.querySelector<HTMLElement>("#simulation-results-panel");
+  if (!resultsPanel) {
+    return;
+  }
+
+  resultsPanel.innerHTML = renderSimulationResultsBody();
+  bindSimulationResultsControls(user);
+  bindSimulationChartTooltip();
 }
 
 function syncSimulationSubmitState(): void {
@@ -3977,7 +4098,7 @@ function bindSimulationChartTooltip(): void {
 
     for (const point of panel.querySelectorAll<SVGCircleElement>("[data-simulation-chart-point]")) {
       point.addEventListener("mouseenter", (event) => {
-        tooltip.textContent = `${point.dataset.simulationChartLabel} | ${point.dataset.simulationChartMetric}: ${point.dataset.simulationChartValue} | ${point.dataset.simulationChartPercentile}th percentile`;
+        tooltip.textContent = `${point.dataset.simulationChartLabel} | ${point.dataset.simulationChartValueLabel}: ${point.dataset.simulationChartValue} | ${point.dataset.simulationChartPercentile}th percentile`;
         tooltip.hidden = false;
         updateTooltipPosition(event);
       });
@@ -5452,20 +5573,6 @@ function bindHandlers(user: UserIdentity): void {
       renderPlanner(user);
     });
   }
-
-  const simulationSweepSlider = document.querySelector<HTMLInputElement>("#simulation-sweep-step");
-  simulationSweepSlider?.addEventListener("input", () => {
-    if (!simulationSweepResults) {
-      return;
-    }
-
-    selectedSimulationSweepStepIndex = Math.max(
-      0,
-      Math.min(simulationSweepResults.steps.length - 1, Number(simulationSweepSlider.value) || 0)
-    );
-    expandedSimulationExampleKeys = new Set();
-    renderPlanner(user);
-  });
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-toggle-simulation-example]")) {
     button.addEventListener("click", () => {
@@ -8392,6 +8499,24 @@ async function bootstrap(): Promise<void> {
   applyVariableSweepDraftFromLocalStorage(user.id);
   syncSimulationVariableSweepDraft();
   renderPlanner(user);
+  mountedAppRoot.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.name !== "simulationSweepStep") {
+      return;
+    }
+
+    if (!simulationSweepResults) {
+      return;
+    }
+
+    selectedSimulationSweepStepIndex = Math.max(
+      0,
+      Math.min(simulationSweepResults.steps.length - 1, Number(target.value) || 0)
+    );
+    expandedSimulationExampleKeys = new Set();
+    syncSimulationSweepSelectionDisplay();
+    refreshSimulationResultsPanel(user);
+  });
 }
 
 bootstrap().catch((error: unknown) => {
