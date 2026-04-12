@@ -478,6 +478,7 @@ let simulationRunState: SimulationRunState | null = null;
 let activeSimulationWorkers: Worker[] = [];
 let activeSimulationRequestId = 0;
 let taxProfilePersistTimeout: number | null = null;
+let modalEscapeHandlerBound = false;
 const simulationPercentiles: readonly SimulationPercentile[] = [5, 10, 25, 50, 75, 90];
 const INCOME_FLOW_TAX_TREATMENTS = [
   { value: "wages", label: "Wages" },
@@ -4194,11 +4195,6 @@ function renderSimulationBoard(): string {
         }
 
         <section class="simulation-section">
-          <div class="simulation-section-header">
-            <div>
-              <h3>Run Simulation</h3>
-            </div>
-          </div>
           <div class="simulation-actions">
           ${
             simulationRunState
@@ -4223,7 +4219,7 @@ function renderSimulationBoard(): string {
           }
           <span id="simulation-submit-wrapper" title="${escapeAttribute(simulationSubmitState.reason)}">
             <button id="simulation-submit-button" type="submit" ${simulationSubmitState.disabled || isSimulationRunning ? "disabled" : ""}>
-              ${isSimulationRunning ? "Simulating..." : "Simulate"}
+              ${isSimulationRunning ? "Simulating..." : "Run Simulation"}
             </button>
           </span>
           </div>
@@ -4405,9 +4401,8 @@ function renderAssetComposer(): string {
         <div class="modal-header">
           <div class="panel-heading">
             <p class="kicker">Create Asset</p>
-            <h2>New standalone asset</h2>
+            <h2>New asset</h2>
           </div>
-          <button type="button" class="ghost-button" id="close-asset-composer">Close</button>
         </div>
         <form id="asset-form" class="stack-form">
           <label>
@@ -4975,7 +4970,6 @@ function renderFlowComposer(): string {
             <p class="kicker">Create Income or Expense</p>
             <h2>New ${flowDraft.type}</h2>
           </div>
-          <button type="button" class="ghost-button" id="close-flow-composer">Close</button>
         </div>
         <form id="flow-form" class="stack-form">
           <label>
@@ -5044,7 +5038,6 @@ function renderEventComposer(): string {
             <p class="kicker">${eventDraft.originalName ? "Edit Event" : "Create Event"}</p>
             <h2>${eventDraft.originalName ? escapeHtml(eventDraft.originalName) : "Scheduled change set"}</h2>
           </div>
-          <button type="button" class="ghost-button" id="close-event-composer">Close</button>
         </div>
         <form id="event-form" class="stack-form">
           <label>
@@ -8403,6 +8396,40 @@ function closeEventComposer(): void {
   eventDraft.entries = [createEventEntryDraft(eventDraft.flowName)];
 }
 
+function closeTopmostModal(): boolean {
+  if (flowEditorOpen) {
+    closeFlowEditor();
+    return true;
+  }
+
+  if (eventComposerOpen) {
+    closeEventComposer();
+    return true;
+  }
+
+  if (taxComposerOpen) {
+    closeTaxComposer();
+    return true;
+  }
+
+  if (assetEditorOpen) {
+    closeAssetEditor();
+    return true;
+  }
+
+  if (flowComposerOpen) {
+    closeFlowComposer();
+    return true;
+  }
+
+  if (assetComposerOpen) {
+    closeAssetComposer();
+    return true;
+  }
+
+  return false;
+}
+
 function closeTransientPlannerUi(): void {
   closeAssetComposer();
   closeAssetEditor();
@@ -8873,6 +8900,45 @@ function serializeEvents(events: readonly EventDefinition[]): SavedPlannerState[
   }));
 }
 
+function bindModalDismissHandlers(user: UserIdentity): void {
+  if (modalEscapeHandlerBound) {
+    return;
+  }
+
+  modalEscapeHandlerBound = true;
+  document.addEventListener("keydown", (event) => {
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey
+    ) {
+      return;
+    }
+
+    if (!closeTopmostModal()) {
+      return;
+    }
+
+    event.preventDefault();
+    renderPlanner(user);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("modal-shell")) {
+      return;
+    }
+
+    if (!closeTopmostModal()) {
+      return;
+    }
+
+    renderPlanner(user);
+  });
+}
+
 async function bootstrap(): Promise<void> {
   const user = await auth.getCurrentUser();
   const savedState = await storage.getPlannerState(user.id);
@@ -8883,6 +8949,7 @@ async function bootstrap(): Promise<void> {
   }
   applyVariableSweepDraftFromLocalStorage(user.id);
   syncSimulationVariableSweepDraft();
+  bindModalDismissHandlers(user);
   renderPlanner(user);
   mountedAppRoot.addEventListener("input", (event) => {
     const target = event.target;

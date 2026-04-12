@@ -589,6 +589,28 @@ label {
   height: 18px;
 }
 
+#delete-asset-from-editor,
+#delete-flow-from-editor,
+#delete-tax-from-editor {
+  color: #b5392f;
+  border-color: rgba(181, 57, 47, 0.28);
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+#delete-asset-from-editor:hover,
+#delete-asset-from-editor:focus-visible,
+#delete-flow-from-editor:hover,
+#delete-flow-from-editor:focus-visible,
+#delete-tax-from-editor:hover,
+#delete-tax-from-editor:focus-visible {
+  background: #b5392f;
+  border-color: #b5392f;
+  color: #fffdf9;
+}
+
 .board-header {
   display: flex;
   align-items: start;
