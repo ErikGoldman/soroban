@@ -42,6 +42,16 @@ button {
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
   color: #fffdf9;
   cursor: pointer;
+  transition:
+    filter 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease;
+}
+
+button:not(:disabled):not(.secondary-button):not(.ghost-button):not(.link-button):not(.tab-button):not(.cash-generation-toggle):hover,
+button:not(:disabled):not(.secondary-button):not(.ghost-button):not(.link-button):not(.tab-button):not(.cash-generation-toggle):focus-visible {
+  filter: brightness(1.08) saturate(1.06);
 }
 
 button:disabled {
@@ -321,6 +331,25 @@ label {
   border: 1px solid rgba(58, 37, 16, 0.08);
 }
 
+.workspace-item-card {
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    box-shadow 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.workspace-item-card:hover,
+.workspace-item-card:focus-visible {
+  transform: translateY(-1px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.42)),
+    rgba(255, 252, 247, 0.68);
+  border-color: rgba(58, 37, 16, 0.12);
+  box-shadow: 0 16px 30px rgba(31, 27, 20, 0.08);
+}
+
 .workspace-item-header {
   display: flex;
   align-items: start;
@@ -341,6 +370,8 @@ label {
 
 .workspace-item-title {
   font-size: 1.12rem;
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .workspace-item-value {
@@ -570,10 +601,22 @@ label {
   color: var(--ink);
 }
 
+.secondary-button:hover,
+.secondary-button:focus-visible {
+  background: rgba(20, 24, 27, 0.14);
+}
+
 .ghost-button {
   background: transparent;
   color: var(--muted);
   border: 1px solid rgba(20, 24, 27, 0.08);
+}
+
+.ghost-button:hover,
+.ghost-button:focus-visible {
+  background: rgba(20, 24, 27, 0.06);
+  color: var(--ink);
+  border-color: rgba(20, 24, 27, 0.14);
 }
 
 .icon-button {
@@ -793,7 +836,11 @@ label {
   height: 28px;
   border-radius: 999px;
   background: rgba(20, 24, 27, 0.16);
-  transition: background 160ms ease;
+  transition:
+    background 160ms ease,
+    filter 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .switch-track::after {
@@ -806,7 +853,19 @@ label {
   border-radius: 50%;
   background: #fffdf9;
   box-shadow: 0 2px 8px rgba(31, 27, 20, 0.16);
-  transition: transform 160ms ease;
+  transition:
+    box-shadow 160ms ease;
+}
+
+.switch-field:hover .switch-track,
+.switch-field:focus-within .switch-track {
+  filter: brightness(1.15) saturate(1.04);
+  box-shadow: 0 8px 18px rgba(31, 27, 20, 0.08);
+}
+
+.switch-field:hover .switch-track::after,
+.switch-field:focus-within .switch-track::after {
+  box-shadow: 0 4px 12px rgba(31, 27, 20, 0.18);
 }
 
 .switch-field input:checked + .switch-track {
@@ -1239,6 +1298,19 @@ label {
 
 .cash-generation-entry {
   gap: 14px;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.cash-generation-entry:hover,
+.cash-generation-entry:focus-within {
+  background: rgba(255, 255, 255, 0.54);
+  border-color: rgba(45, 31, 22, 0.12);
+  box-shadow: 0 12px 24px rgba(31, 27, 20, 0.08);
+  transform: translateY(-1px);
 }
 
 .cash-generation-entry-header {
@@ -1260,6 +1332,13 @@ label {
   color: inherit;
   font: inherit;
   text-align: left;
+}
+
+.stack-form .cash-generation-toggle:hover,
+.stack-form .cash-generation-toggle:focus-visible {
+  background: transparent;
+  transform: none;
+  box-shadow: none;
 }
 
 .cash-generation-toggle-copy {

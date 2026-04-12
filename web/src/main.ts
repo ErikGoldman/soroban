@@ -2204,12 +2204,18 @@ function renderSetupAssetArea(): string {
       ${plannerState.assets
         .map(
           (asset) => `
-            <article class="workspace-item">
+            <article
+              class="workspace-item workspace-item-card"
+              data-edit-asset-card="${escapeAttribute(asset.name)}"
+              role="button"
+              tabindex="0"
+              aria-label="Edit asset ${escapeAttribute(asset.name)}"
+            >
               <div class="workspace-item-header">
                 <div class="workspace-item-lead">
-                  <button type="button" class="link-button workspace-item-title" data-edit-asset="${escapeHtml(asset.name)}">
+                  <div class="workspace-item-title">
                     ${escapeHtml(asset.name)}
-                  </button>
+                  </div>
                   ${renderAssetCashGenerationSummary(asset) ? `<p class="workspace-item-copy">${escapeHtml(renderAssetCashGenerationSummary(asset))}</p>` : ""}
                 </div>
                 ${
@@ -2328,13 +2334,19 @@ function renderSetupFlowArea(flowRows: Array<{ flow: FlowDefinition; yearlyAmoun
             const flowSummary = renderFlowSummary(flow, yearlyAmount);
 
             return `
-              <article class="workspace-item">
+              <article
+                class="workspace-item workspace-item-card"
+                data-edit-flow-card="${escapeAttribute(flow.name)}"
+                role="button"
+                tabindex="0"
+                aria-label="Edit ${escapeAttribute(flow.type)} ${escapeAttribute(flow.name)}"
+              >
                 <div class="workspace-item-header">
                   <div class="workspace-item-lead">
                     <div class="workspace-item-title-row">
-                      <button type="button" class="link-button workspace-item-title" data-edit-flow="${escapeHtml(flow.name)}">
+                      <div class="workspace-item-title">
                         ${escapeHtml(flow.name)}
-                      </button>
+                      </div>
                       <span class="pill">${flow.type === "income" ? "Income" : "Expense"}</span>
                     </div>
                     ${flowSummary ? `<p class="workspace-item-copy">${escapeHtml(flowSummary)}</p>` : ""}
@@ -6013,6 +6025,78 @@ function bindHandlers(user: UserIdentity): void {
     });
   }
 
+  const shouldIgnoreWorkspaceCardClick = (target: EventTarget | null): boolean =>
+    target instanceof HTMLElement &&
+    Boolean(
+      target.closest(
+        [
+          "[data-edit-asset-value]",
+          "[data-edit-expense-value]",
+          "[data-inline-asset-value-form]",
+          "[data-inline-expense-value-form]",
+          "button",
+          "input",
+          "select",
+          "textarea",
+          "a",
+        ].join(", ")
+      )
+    );
+
+  for (const card of document.querySelectorAll<HTMLElement>("[data-edit-asset-card]")) {
+    const assetName = card.dataset.editAssetCard;
+    if (!assetName) {
+      continue;
+    }
+
+    card.addEventListener("click", (event) => {
+      if (shouldIgnoreWorkspaceCardClick(event.target)) {
+        return;
+      }
+
+      openAssetEditor(assetName);
+      activeSummaryTab = "assets";
+      renderPlanner(user);
+    });
+
+    card.addEventListener("keydown", (event) => {
+      if (event.target !== card || (event.key !== "Enter" && event.key !== " ")) {
+        return;
+      }
+
+      event.preventDefault();
+      openAssetEditor(assetName);
+      activeSummaryTab = "assets";
+      renderPlanner(user);
+    });
+  }
+
+  for (const card of document.querySelectorAll<HTMLElement>("[data-edit-flow-card]")) {
+    const flowName = card.dataset.editFlowCard;
+    if (!flowName) {
+      continue;
+    }
+
+    card.addEventListener("click", (event) => {
+      if (shouldIgnoreWorkspaceCardClick(event.target)) {
+        return;
+      }
+
+      openFlowEditor(flowName);
+      renderPlanner(user);
+    });
+
+    card.addEventListener("keydown", (event) => {
+      if (event.target !== card || (event.key !== "Enter" && event.key !== " ")) {
+        return;
+      }
+
+      event.preventDefault();
+      openFlowEditor(flowName);
+      renderPlanner(user);
+    });
+  }
+
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-delete-flow]")) {
     button.addEventListener("click", async () => {
       const deleteFlowName = button.dataset.deleteFlow;
@@ -6082,7 +6166,8 @@ function bindHandlers(user: UserIdentity): void {
   }
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-edit-asset-value]")) {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
       const assetName = button.dataset.editAssetValue;
       if (!assetName) {
         return;
@@ -6095,7 +6180,8 @@ function bindHandlers(user: UserIdentity): void {
   }
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-edit-expense-value]")) {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
       const flowName = button.dataset.editExpenseValue;
       if (!flowName) {
         return;
