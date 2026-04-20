@@ -39,6 +39,7 @@ function createRow(overrides: Partial<SimulationDetailYearRow> = {}): Simulation
       homeMortgageInterestDebtLimit: 0,
     },
     flowTotals: new Map([["Home property tax", -1.2]]),
+    flowPercentages: new Map(),
     assetValues: new Map([["Home", 32.666666666666664]]),
     assetMarketValues: new Map([["Home", 110]]),
     assetReturns: new Map([["Home", { amount: 10, percentage: 10 }]]),
@@ -77,6 +78,29 @@ describe("simulation detail helpers", () => {
         label: "Home return",
         amount: 10,
         detail: " (10.00%)",
+      },
+    ]);
+  });
+
+  it("shows realized asset cash-yield percentages in cash flow entries", () => {
+    const row = createRow({
+      flowTotals: new Map([
+        ["Bond Fund dividends", 4],
+        ["Home property tax", -1.2],
+      ]),
+      flowPercentages: new Map([["Bond Fund dividends", 4]]),
+    });
+
+    expect(getSimulationCashFlowEntries(row)).toEqual([
+      {
+        label: "Bond Fund dividends",
+        amount: 4,
+        detail: " (4.00%)",
+      },
+      {
+        label: "Home property tax",
+        amount: -1.2,
+        detail: "",
       },
     ]);
   });

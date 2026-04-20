@@ -41,7 +41,9 @@ export interface HomeAssetDefinition extends AssetDefinitionBase {
   kind: "home";
   initialCost: number;
   initialCostFormula?: string;
+  alreadyOwned?: boolean;
   cashPurchasePercent: number;
+  closingCostPercent?: number;
   mortgageType: "amortizing" | "interest-only";
   interestOnlyMaturityAction?: "payoff" | "refinance" | "sell";
   mortgageRate: number;
@@ -85,7 +87,7 @@ export interface AssetCashGenerationDefinition {
 }
 
 export interface AssetSaleTaxDefinition {
-  costBasis: number;
+  costBasis?: number;
   taxTreatment?: AssetSaleTaxTreatment;
 }
 
@@ -146,7 +148,9 @@ export class Asset {
   readonly saleTax: AssetSaleTaxDefinition | null;
   readonly initialCost: number;
   readonly initialCostFormula?: string;
+  readonly alreadyOwned: boolean;
   readonly cashPurchasePercent: number;
+  readonly closingCostPercent: number;
   readonly mortgageType: "amortizing" | "interest-only";
   readonly interestOnlyMaturityAction: "payoff" | "refinance" | "sell";
   readonly mortgageRate: number;
@@ -180,7 +184,9 @@ export class Asset {
       this.saleTax = null;
       this.initialCost = normalizedHome.initialCost;
       this.initialCostFormula = definition.initialCostFormula?.trim() || undefined;
+      this.alreadyOwned = normalizedHome.alreadyOwned;
       this.cashPurchasePercent = normalizedHome.cashPurchasePercent;
+      this.closingCostPercent = normalizedHome.closingCostPercent;
       this.mortgageType = normalizedHome.mortgageType;
       this.interestOnlyMaturityAction = normalizedHome.interestOnlyMaturityAction;
       this.mortgageRate = normalizedHome.mortgageRate;
@@ -218,7 +224,9 @@ export class Asset {
     this.saleTax = normalizedSaleTax;
     this.initialCost = 0;
     this.initialCostFormula = undefined;
+    this.alreadyOwned = false;
     this.cashPurchasePercent = 0;
+    this.closingCostPercent = 0;
     this.mortgageType = "amortizing";
     this.interestOnlyMaturityAction = "payoff";
     this.mortgageRate = 0;
@@ -235,7 +243,9 @@ export class Asset {
         name: this.name,
         initialCost: this.initialCost,
         ...(this.initialCostFormula ? { initialCostFormula: this.initialCostFormula } : {}),
+        ...(this.alreadyOwned ? { alreadyOwned: true } : {}),
         cashPurchasePercent: this.cashPurchasePercent,
+        closingCostPercent: this.closingCostPercent,
         mortgageType: this.mortgageType,
         ...(this.mortgageType === "interest-only"
           ? {
@@ -307,7 +317,7 @@ export function createAssetCorrelationDefinition({
 export function getDefaultAssetCashGenerationInflationCorrelation(
   assetType: InvestmentAssetType | null | undefined
 ): number {
-  return assetType === "federal-bonds" || assetType === "local-bonds" ? 0.75 : 0;
+  return assetType === "federal-bonds" || assetType === "local-bonds" ? 0.35 : 0;
 }
 
 export function deleteAssetAndPruneCorrelations(
@@ -355,11 +365,11 @@ export class Flow {
 
   constructor({ name, type, formula, taxTreatment, inflationAdjusted, startYear, endYear, annualRaisePercent }: FlowDefinition) {
     if (!name.trim()) {
-      throw new Error("Flow name is required.");
+      throw new Error("Name is required.");
     }
 
     if (type !== "income" && type !== "expense") {
-      throw new Error(`Unsupported flow type: ${type}`);
+      throw new Error(`Unsupported type: ${type}`);
     }
 
     if (!formula.trim()) {
@@ -600,7 +610,7 @@ export function createOneTimeExpenseSchedule({
   formula,
 }: OneTimeExpenseDefinition): ScheduledEventAction[] {
   if (!flowName.trim()) {
-    throw new Error("One-time expense flow name is required.");
+    throw new Error("One-time expense name is required.");
   }
 
   if (!formula.trim()) {
@@ -777,13 +787,19 @@ function normalizeAssetCashGenerations(
 function normalizeHomeAssetDefinition(
   assetName: string,
   definition: HomeAssetDefinition
-): Omit<HomeAssetDefinition, "name" | "expectedReturn" | "volatility" | "kind"> & {
+): Omit<HomeAssetDefinition, "name" | "expectedReturn" | "volatility" | "kind" | "closingCostPercent"> & {
+  closingCostPercent: number;
+  alreadyOwned: boolean;
   interestOnlyMaturityAction: "payoff" | "refinance" | "sell";
 } {
-  assertFiniteNumber(definition.initialCost, `Initial cost for asset "${assetName}" must be finite.`);
+  assertFiniteNumber(definition.initialCost, `Home price for asset "${assetName}" must be finite.`);
   assertFiniteNumber(
     definition.cashPurchasePercent,
     `Cash purchase percent for asset "${assetName}" must be finite.`
+  );
+  assertFiniteNumber(
+    definition.closingCostPercent ?? 0,
+    `Closing cost percent for asset "${assetName}" must be finite.`
   );
   assertFiniteNumber(definition.mortgageRate, `Mortgage rate for asset "${assetName}" must be finite.`);
   assertFiniteNumber(
@@ -797,11 +813,14 @@ function normalizeHomeAssetDefinition(
   assertFiniteNumber(definition.propertyTaxRate, `Property tax rate for asset "${assetName}" must be finite.`);
   assertFiniteNumber(definition.purchaseYear, `Purchase year for asset "${assetName}" must be finite.`);
 
-  if (definition.initialCost < 0) {
-    throw new Error(`Initial cost for asset "${assetName}" cannot be negative.`);
+  if (definition.initialCost <= 0) {
+    throw new Error(`Home price for asset "${assetName}" must be greater than zero.`);
   }
   if (definition.cashPurchasePercent < 0 || definition.cashPurchasePercent > 1) {
     throw new Error(`Cash purchase percent for asset "${assetName}" must be between 0 and 1.`);
+  }
+  if ((definition.closingCostPercent ?? 0) < 0 || (definition.closingCostPercent ?? 0) > 1) {
+    throw new Error(`Closing cost percent for asset "${assetName}" must be between 0 and 1.`);
   }
   if (definition.mortgageRate < 0) {
     throw new Error(`Mortgage rate for asset "${assetName}" cannot be negative.`);
@@ -821,7 +840,9 @@ function normalizeHomeAssetDefinition(
 
   return {
     initialCost: definition.initialCost,
+    alreadyOwned: definition.alreadyOwned ?? false,
     cashPurchasePercent: definition.cashPurchasePercent,
+    closingCostPercent: definition.closingCostPercent ?? 0,
     mortgageType: definition.mortgageType ?? "amortizing",
     interestOnlyMaturityAction: definition.interestOnlyMaturityAction ?? "payoff",
     mortgageRate: definition.mortgageRate,
@@ -840,13 +861,15 @@ function normalizeAssetSaleTax(
     return null;
   }
 
-  assertFiniteNumber(saleTax.costBasis, `Cost basis for asset "${assetName}" must be finite.`);
-  if (saleTax.costBasis < 0) {
-    throw new Error(`Cost basis for asset "${assetName}" cannot be negative.`);
+  if (saleTax.costBasis !== undefined) {
+    assertFiniteNumber(saleTax.costBasis, `Cost basis for asset "${assetName}" must be finite.`);
+    if (saleTax.costBasis < 0) {
+      throw new Error(`Cost basis for asset "${assetName}" cannot be negative.`);
+    }
   }
 
   return {
-    costBasis: saleTax.costBasis,
+    ...(saleTax.costBasis !== undefined ? { costBasis: saleTax.costBasis } : {}),
     taxTreatment: normalizeAssetSaleTaxTreatment(saleTax.taxTreatment),
   };
 }

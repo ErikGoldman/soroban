@@ -125,6 +125,7 @@ export interface SimulationDetailYearRow {
   depletionProbability: number;
   householdTaxInput: HouseholdTaxInput;
   flowTotals: Map<string, number>;
+  flowPercentages?: Map<string, number>;
   assetValues: Map<string, number>;
   assetMarketValues?: Map<string, number>;
   assetReturns: Map<string, SimulationAssetReturn>;
@@ -170,6 +171,7 @@ interface NormalizedSimulationHomeAsset {
   expectedReturn: number;
   volatility: number;
   cashPurchasePercent: number;
+  closingCostPercent: number;
   mortgageType: "amortizing" | "interest-only";
   interestOnlyMaturityAction: "payoff" | "refinance" | "sell";
   mortgageRate: number;
@@ -224,6 +226,7 @@ interface RealizedYearlyPlan {
   totalExpenses: number;
   householdTaxInput: HouseholdTaxInput;
   inflationRateApplied: number;
+  inflationRateDeltaApplied: number;
   inflationRegime: "fixed" | "low" | "high";
 }
 
@@ -771,7 +774,7 @@ function runSimulationAttempts({
       const assetReturnAmounts = new Map(normalizedAssets.map((asset) => [asset.name, 0]));
 
       const snapshotYear = getPlanYear(yearlyPlan, yearIndex);
-      const purchaseCashFlow = applyHomePurchasesForYear(
+      const homePurchaseResult = applyHomePurchasesForYear(
         snapshotYear,
         normalizedAssets,
         assetValues,
@@ -781,6 +784,7 @@ function runSimulationAttempts({
       const contributionAmounts = new Map(
         reinvestableAssetNames.map((assetName) => [assetName, Math.max(0, yearlyPlan.flowAmounts.get(assetName) ?? 0)])
       );
+      const flowPercentages = new Map<string, number>();
       let saleResult: SaleIterationResult = {
         assetValues,
         assetCostBases,
@@ -789,8 +793,8 @@ function runSimulationAttempts({
         preTaxCashBalance: 0,
         taxableGains: 0,
       };
-      let cashBalance = purchaseCashFlow;
-      let generatedExpenseTotal = 0;
+      let cashBalance = homePurchaseResult.generatedCashTotal;
+      let generatedExpenseTotal = homePurchaseResult.expenseTotal;
       let generatedCashTotal = 0;
       let totalTaxableGains = 0;
 
@@ -804,6 +808,7 @@ function runSimulationAttempts({
           homeState,
           periodReturns: halfYearPriceReturns,
           assetReturnAmounts,
+          year: snapshotYear,
         });
 
         const taxInputWithCashGeneration = applyGeneratedCashStreams({
@@ -812,10 +817,11 @@ function runSimulationAttempts({
           assetValues: saleResult.assetValues,
           homeState,
           year: snapshotYear,
-          inflationRateApplied: yearlyPlan.inflationRateApplied,
+          inflationRateDeltaApplied: yearlyPlan.inflationRateDeltaApplied,
           filingStatus: householdTaxProfile?.filingStatus ?? "individual",
           annualNormals: annualCorrelatedNormals,
           flowTotals: saleResult.flowTotals,
+          flowPercentages,
           periodFraction: 0.5,
           periodMonths: 6,
           openingInvestmentValues,
@@ -840,7 +846,7 @@ function runSimulationAttempts({
         cashBalance += saleResult.preTaxCashBalance;
       }
 
-      const baseCashBalance = purchaseCashFlow + yearlyPlan.netAmount + generatedCashTotal;
+      const baseCashBalance = homePurchaseResult.generatedCashTotal + yearlyPlan.netAmount + generatedCashTotal;
       const filingStatus = householdTaxProfile?.filingStatus ?? "individual";
       let effectiveTaxInput = applyCapitalLossCarryforward(saleResult.taxInput, capitalLossCarryforward, filingStatus);
       let endingCapitalLossCarryforward = getCapitalLossCarryforward(
@@ -968,6 +974,7 @@ function runSimulationAttempts({
           depletionProbability: ((depletionCountsByYear[yearIndex] ?? 0) / Math.max(1, attempt + 1)) * 100,
           householdTaxInput: effectiveTaxInput,
           flowTotals: flowTotalsWithTaxes,
+          flowPercentages,
           assetValues: yearAssetValues,
           assetMarketValues: yearAssetMarketValues,
           assetReturns,
@@ -1027,6 +1034,7 @@ function buildRealizedInflationPath({
   const realizedPlans: RealizedYearlyPlan[] = [];
   let cumulativeInflationMultiplier = 1;
   let currentRegime: "low" | "high" | null = null;
+  let previousInflationRateApplied: number | null = null;
 
   if (inflation.mode === "regime-switching") {
     currentRegime = selectInitialInflationRegime(inflation, nextRandom);
@@ -1039,6 +1047,10 @@ function buildRealizedInflationPath({
     }
 
     if (yearlyPlan.legacySnapshot) {
+      const inflationRateApplied =
+        inflation.mode === "fixed" ? inflation.fixedRate : inflation.lowRegime.averageRate;
+      const inflationRateDeltaApplied =
+        previousInflationRateApplied === null ? 0 : inflationRateApplied - previousInflationRateApplied;
       realizedPlans.push({
         year: yearlyPlan.year,
         label: yearlyPlan.label,
@@ -1046,9 +1058,11 @@ function buildRealizedInflationPath({
         netAmount: yearlyPlan.legacySnapshot.netAmount,
         totalExpenses: yearlyPlan.legacySnapshot.totalExpenses,
         householdTaxInput: cloneHouseholdTaxInput(yearlyPlan.legacySnapshot.householdTaxInput),
-        inflationRateApplied: inflation.mode === "fixed" ? inflation.fixedRate : inflation.lowRegime.averageRate,
+        inflationRateApplied,
+        inflationRateDeltaApplied,
         inflationRegime: inflation.mode === "fixed" ? "fixed" : "low",
       });
+      previousInflationRateApplied = inflationRateApplied;
       continue;
     }
 
@@ -1101,8 +1115,11 @@ function buildRealizedInflationPath({
       totalExpenses,
       householdTaxInput,
       inflationRateApplied,
+      inflationRateDeltaApplied:
+        previousInflationRateApplied === null ? 0 : inflationRateApplied - previousInflationRateApplied,
       inflationRegime,
     });
+    previousInflationRateApplied = inflationRateApplied;
   }
 
   return realizedPlans;
@@ -1198,6 +1215,7 @@ function normalizeSimulationAsset(asset: SimulationAssetInput): NormalizedSimula
       expectedReturn: asset.expectedReturn,
       volatility: asset.volatility,
       cashPurchasePercent: Math.max(0, Math.min(1, asset.cashPurchasePercent)),
+      closingCostPercent: Math.max(0, Math.min(1, asset.closingCostPercent ?? 0)),
       mortgageType: asset.mortgageType ?? "amortizing",
       interestOnlyMaturityAction:
         asset.mortgageType === "interest-only" ? asset.interestOnlyMaturityAction ?? "payoff" : "payoff",
@@ -1233,7 +1251,7 @@ function normalizeSimulationAsset(asset: SimulationAssetInput): NormalizedSimula
     })),
     saleTax: asset.saleTax
       ? {
-          costBasis: Math.max(0, asset.saleTax.costBasis),
+          ...(asset.saleTax.costBasis !== undefined ? { costBasis: Math.max(0, asset.saleTax.costBasis) } : {}),
           taxTreatment: asset.saleTax.taxTreatment ?? "long-term-capital-gains",
         }
       : undefined,
@@ -1252,6 +1270,10 @@ function createHomeMortgageState(asset: NormalizedSimulationHomeAsset): HomeMort
     monthsElapsed: 0,
     interestOnlyMaturityAction: asset.interestOnlyMaturityAction,
   };
+}
+
+function calculateElapsedMortgageMonthsAtYearStart(asset: NormalizedSimulationHomeAsset, year: number): number {
+  return Math.max(0, (year - asset.purchaseYear) * 12);
 }
 
 function initializeHomeMortgageState(
@@ -1357,9 +1379,12 @@ function initializeSimulationState(
     }
 
     if (asset.purchaseYear < initialYear) {
-      const elapsedYears = initialYear - asset.purchaseYear;
-      const elapsedMonths = elapsedYears * 12;
-      const marketValue = Math.max(0, asset.initialCost * Math.pow(1 + asset.expectedReturn / 100, elapsedYears));
+      const elapsedMonths = calculateElapsedMortgageMonthsAtYearStart(asset, initialYear);
+      const elapsedAppreciationYears = Math.max(0, initialYear - asset.purchaseYear - 1);
+      const marketValue = Math.max(
+        0,
+        asset.initialCost * Math.pow(1 + asset.expectedReturn / 100, elapsedAppreciationYears)
+      );
       const { mortgageBalance, mortgageState } = initializeHomeMortgageState(asset, elapsedMonths);
       homeState.marketValues.set(asset.name, marketValue);
       homeState.mortgageBalances.set(asset.name, mortgageBalance);
@@ -1386,8 +1411,12 @@ function applyHomePurchasesForYear(
   assetValues: Map<string, number>,
   homeState: HomeSimulationState,
   flowTotals: Map<string, number>
-): number {
+): {
+  generatedCashTotal: number;
+  expenseTotal: number;
+} {
   let generatedCashTotal = 0;
+  let expenseTotal = 0;
 
   for (const asset of assets) {
     if (asset.kind !== "home" || asset.purchaseYear !== year) {
@@ -1401,6 +1430,7 @@ function applyHomePurchasesForYear(
 
     const mortgageBalance = asset.initialCost * (1 - asset.cashPurchasePercent);
     const downPayment = asset.initialCost * asset.cashPurchasePercent;
+    const closingCosts = asset.initialCost * asset.closingCostPercent;
     homeState.marketValues.set(asset.name, asset.initialCost);
     homeState.mortgageBalances.set(asset.name, mortgageBalance);
     homeState.mortgageStates.set(asset.name, createHomeMortgageState(asset));
@@ -1409,9 +1439,17 @@ function applyHomePurchasesForYear(
       generatedCashTotal -= downPayment;
       flowTotals.set(`${asset.name} down payment`, -downPayment);
     }
+    if (closingCosts > 0.000001) {
+      generatedCashTotal -= closingCosts;
+      expenseTotal += closingCosts;
+      flowTotals.set(`${asset.name} closing costs`, -closingCosts);
+    }
   }
 
-  return generatedCashTotal;
+  return {
+    generatedCashTotal,
+    expenseTotal,
+  };
 }
 
 function applyPeriodAssetReturns({
@@ -1420,12 +1458,14 @@ function applyPeriodAssetReturns({
   homeState,
   periodReturns,
   assetReturnAmounts,
+  year,
 }: {
   assets: readonly NormalizedSimulationAsset[];
   assetValues: Map<string, number>;
   homeState: HomeSimulationState;
   periodReturns: ReadonlyMap<string, number>;
   assetReturnAmounts: Map<string, number>;
+  year: number;
 }): void {
   for (const asset of assets) {
     const periodReturn = periodReturns.get(asset.name) ?? 0;
@@ -1438,6 +1478,10 @@ function applyPeriodAssetReturns({
     }
 
     const currentMarketValue = homeState.marketValues.get(asset.name) ?? 0;
+    if (year <= asset.purchaseYear) {
+      assetValues.set(asset.name, currentMarketValue - (homeState.mortgageBalances.get(asset.name) ?? 0));
+      continue;
+    }
     const nextMarketValue = currentMarketValue <= 0 ? 0 : Math.max(0, currentMarketValue * (1 + periodReturn));
     homeState.marketValues.set(asset.name, nextMarketValue);
     assetValues.set(asset.name, nextMarketValue - (homeState.mortgageBalances.get(asset.name) ?? 0));
@@ -1451,10 +1495,11 @@ function applyGeneratedCashStreams({
   assetValues,
   homeState,
   year,
-  inflationRateApplied,
+  inflationRateDeltaApplied,
   filingStatus,
   annualNormals,
   flowTotals,
+  flowPercentages,
   periodFraction,
   periodMonths,
   openingInvestmentValues,
@@ -1464,10 +1509,11 @@ function applyGeneratedCashStreams({
   assetValues: Map<string, number>;
   homeState: HomeSimulationState;
   year: number;
-  inflationRateApplied: number;
+  inflationRateDeltaApplied: number;
   filingStatus: FilingStatus;
   annualNormals: ReadonlyMap<string, number>;
   flowTotals: Map<string, number>;
+  flowPercentages: Map<string, number>;
   periodFraction: number;
   periodMonths: number;
   openingInvestmentValues: ReadonlyMap<string, number>;
@@ -1481,23 +1527,22 @@ function applyGeneratedCashStreams({
     if (asset.kind === "investment") {
       const currentValue = openingInvestmentValues.get(asset.name) ?? assetValues.get(asset.name) ?? 0;
       for (const cashGeneration of asset.cashGenerations) {
-        const generatedCash = calculateAssetCashGenerationAmount(
-          currentValue,
+        const cashGenerationRate = calculateAssetCashGenerationRate(
           annualNormals.get(asset.name) ?? 0,
           cashGeneration,
-          inflationRateApplied,
+          inflationRateDeltaApplied,
           periodFraction
         );
+        const generatedCash = currentValue * cashGenerationRate;
         if (generatedCash <= 0.000001) {
           continue;
         }
 
+        const entryName = `${asset.name} ${cashGeneration.name}`;
         generatedCashTotal += generatedCash;
         reinvestmentSources.set(asset.name, (reinvestmentSources.get(asset.name) ?? 0) + generatedCash);
-        flowTotals.set(
-          `${asset.name} ${cashGeneration.name}`,
-          (flowTotals.get(`${asset.name} ${cashGeneration.name}`) ?? 0) + generatedCash
-        );
+        flowTotals.set(entryName, (flowTotals.get(entryName) ?? 0) + generatedCash);
+        flowPercentages.set(entryName, (flowPercentages.get(entryName) ?? 0) + cashGenerationRate * 100);
         applyTaxTreatmentAmount(taxInput, cashGeneration.taxTreatment ?? "ordinary-income", generatedCash);
       }
       continue;
@@ -1964,11 +2009,10 @@ function getMortgageInterestDebtLimit(purchaseYear: number, filingStatus: Filing
   return isIndividual ? 375000 : 750000;
 }
 
-function calculateAssetCashGenerationAmount(
-  assetValue: number,
+function calculateAssetCashGenerationRate(
   annualNormal: number,
   cashGeneration: AssetCashGenerationDefinition | undefined,
-  inflationRateApplied: number,
+  inflationRateDeltaApplied: number,
   periodFraction = 1
 ): number {
   if (!cashGeneration) {
@@ -1976,13 +2020,12 @@ function calculateAssetCashGenerationAmount(
   }
 
   const inflationAdjustedAnnualRate =
-    cashGeneration.rate + (cashGeneration.inflationCorrelation ?? 0) * inflationRateApplied * 100;
-  const annualCashGenerationRate = Math.max(
+    cashGeneration.rate + (cashGeneration.inflationCorrelation ?? 0) * inflationRateDeltaApplied * 100;
+  return Math.max(
     0,
     (inflationAdjustedAnnualRate / 100) * periodFraction +
       ((cashGeneration.volatility / 100) * periodFraction) * annualNormal
   );
-  return assetValue * annualCashGenerationRate;
 }
 
 function calculatePeriodReturn(annualReturn: number, periodFraction: number): number {

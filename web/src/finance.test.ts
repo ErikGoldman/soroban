@@ -313,6 +313,30 @@ describe("Asset", () => {
     });
   });
 
+  it("allows sale tax without an explicit starting cost basis", () => {
+    const asset = new Asset({
+      name: "Index fund",
+      startingValue: 12000,
+      expectedReturn: 7.5,
+      volatility: 14.2,
+      sellProportion: 0.25,
+      saleTax: {
+        taxTreatment: "long-term-capital-gains",
+      },
+    });
+
+    expect(asset.toDefinition()).toEqual({
+      name: "Index fund",
+      startingValue: 12000,
+      expectedReturn: 7.5,
+      volatility: 14.2,
+      sellProportion: 0.25,
+      saleTax: {
+        taxTreatment: "long-term-capital-gains",
+      },
+    });
+  });
+
   it("captures a home asset definition", () => {
     const asset = new Asset({
       kind: "home",
@@ -321,6 +345,7 @@ describe("Asset", () => {
       expectedReturn: 4,
       volatility: 12,
       cashPurchasePercent: 0.2,
+      closingCostPercent: 0.03,
       mortgageType: "amortizing",
       mortgageRate: 6.5,
       mortgageTermYears: 30,
@@ -336,6 +361,7 @@ describe("Asset", () => {
       expectedReturn: 4,
       volatility: 12,
       cashPurchasePercent: 0.2,
+      closingCostPercent: 0.03,
       mortgageType: "amortizing",
       mortgageRate: 6.5,
       mortgageTermYears: 30,
@@ -343,6 +369,61 @@ describe("Asset", () => {
       propertyTaxRate: 1.25,
       purchaseYear: 2024,
     });
+  });
+
+  it("captures a home purchase year", () => {
+    const asset = new Asset({
+      kind: "home",
+      name: "Primary residence",
+      initialCost: 800000,
+      expectedReturn: 4,
+      volatility: 12,
+      cashPurchasePercent: 0.2,
+      closingCostPercent: 0.03,
+      mortgageType: "amortizing",
+      mortgageRate: 6.5,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1200,
+      propertyTaxRate: 1.25,
+      purchaseYear: 2024,
+    });
+
+    expect(asset.toDefinition()).toEqual({
+      kind: "home",
+      name: "Primary residence",
+      initialCost: 800000,
+      expectedReturn: 4,
+      volatility: 12,
+      cashPurchasePercent: 0.2,
+      closingCostPercent: 0.03,
+      mortgageType: "amortizing",
+      mortgageRate: 6.5,
+      mortgageTermYears: 30,
+      monthlyNonTaxCosts: 1200,
+      propertyTaxRate: 1.25,
+      purchaseYear: 2024,
+    });
+  });
+
+  it("rejects a zero home price", () => {
+    expect(
+      () =>
+        new Asset({
+          kind: "home",
+          name: "Primary residence",
+          initialCost: 0,
+          expectedReturn: 4,
+          volatility: 12,
+          cashPurchasePercent: 0.2,
+          closingCostPercent: 0.03,
+          mortgageType: "amortizing",
+          mortgageRate: 6.5,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 1200,
+          propertyTaxRate: 1.25,
+          purchaseYear: 2024,
+        })
+    ).toThrow('Home price for asset "Primary residence" must be greater than zero.');
   });
 
   it("preserves a home initial cost formula", () => {
@@ -354,6 +435,7 @@ describe("Asset", () => {
       expectedReturn: 4,
       volatility: 12,
       cashPurchasePercent: 0.2,
+      closingCostPercent: 0.03,
       mortgageType: "amortizing",
       mortgageRate: 6.5,
       mortgageTermYears: 30,
@@ -370,6 +452,7 @@ describe("Asset", () => {
       expectedReturn: 4,
       volatility: 12,
       cashPurchasePercent: 0.2,
+      closingCostPercent: 0.03,
       mortgageType: "amortizing",
       mortgageRate: 6.5,
       mortgageTermYears: 30,
@@ -387,6 +470,7 @@ describe("Asset", () => {
       expectedReturn: 4,
       volatility: 12,
       cashPurchasePercent: 0.2,
+      closingCostPercent: 0.03,
       mortgageType: "interest-only",
       interestOnlyMaturityAction: "sell",
       mortgageRate: 6.5,
@@ -403,6 +487,7 @@ describe("Asset", () => {
       expectedReturn: 4,
       volatility: 12,
       cashPurchasePercent: 0.2,
+      closingCostPercent: 0.03,
       mortgageType: "interest-only",
       interestOnlyMaturityAction: "sell",
       mortgageRate: 6.5,
@@ -549,7 +634,7 @@ describe("Asset", () => {
         name: "Coupon",
         rate: 4,
         volatility: 0.2,
-        inflationCorrelation: 0.75,
+        inflationCorrelation: 0.35,
         taxTreatment: "ordinary-income",
       },
     ]);
@@ -664,6 +749,7 @@ describe("resolveAssetValueFormula", () => {
           expectedReturn: 3,
           volatility: 6,
           cashPurchasePercent: 0.25,
+          closingCostPercent: 0.03,
           mortgageType: "amortizing",
           mortgageRate: 6.2,
           mortgageTermYears: 30,
@@ -681,6 +767,7 @@ describe("resolveAssetValueFormula", () => {
       expectedReturn: 3,
       volatility: 6,
       cashPurchasePercent: 0.25,
+      closingCostPercent: 0.03,
       mortgageType: "amortizing",
       mortgageRate: 6.2,
       mortgageTermYears: 30,

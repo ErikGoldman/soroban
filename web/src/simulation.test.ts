@@ -8,6 +8,7 @@ import {
   type SimulationDetailScenario,
   type SimulationYearRow,
 } from "./simulation.js";
+import { getSimulationSellProportion } from "./simulation-input.js";
 import { createDefaultHouseholdTaxProfile, Tax } from "./tax.js";
 
 const ANNUAL_VOLATILITY_10_PERCENT = 10;
@@ -359,7 +360,62 @@ describe("buildSimulationScenarios", () => {
     expect(yearThree?.flowTotals.get("Rent")).toBeCloseTo(-102, 6);
   });
 
-  it("keeps home appreciation out of cash flows and tracks market value separately from equity", () => {
+  it("starts home appreciation in year 2 and tracks market value separately from equity", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 2,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+        {
+          year: 2028,
+          label: "2028",
+          netAmount: 0,
+          totalExpenses: 0,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          kind: "home",
+          name: "Home",
+          initialCost: 100,
+          expectedReturn: 10,
+          volatility: 0,
+          cashPurchasePercent: 0.2,
+          closingCostPercent: 0,
+          mortgageType: "amortizing",
+          mortgageRate: 0,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 2027,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const [yearOne, yearTwo] = scenarios[0]?.rows ?? [];
+    expect(yearOne?.flowTotals.get("Home return")).toBeUndefined();
+    expect(yearOne?.assetReturns.get("Home")?.amount).toBeCloseTo(0, 6);
+    expect(yearOne?.assetReturns.get("Home")?.percentage).toBeCloseTo(0, 6);
+    expect(yearOne?.assetMarketValues?.get("Home")).toBeCloseTo(100, 6);
+    expect(yearOne?.assetValues.get("Home")).toBeCloseTo(22.666666666666664, 6);
+    expect(yearTwo?.assetReturns.get("Home")?.amount).toBeCloseTo(10, 6);
+    expect(yearTwo?.assetReturns.get("Home")?.percentage).toBeCloseTo(10, 6);
+    expect(yearTwo?.assetMarketValues?.get("Home")).toBeCloseTo(110, 6);
+    expect(yearTwo?.assetValues.get("Home")).toBeCloseTo(35.33333333333333, 6);
+  });
+
+  it("treats home closing costs as a one-time purchase expense", () => {
     const scenarios = buildSimulationDetails({
       attempts: 1,
       horizonYears: 1,
@@ -375,12 +431,20 @@ describe("buildSimulationScenarios", () => {
       ],
       assets: [
         {
+          name: "Reserve",
+          startingValue: 25000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
           kind: "home",
           name: "Home",
-          initialCost: 100,
-          expectedReturn: 10,
+          initialCost: 100000,
+          expectedReturn: 0,
           volatility: 0,
           cashPurchasePercent: 0.2,
+          closingCostPercent: 0.03,
           mortgageType: "amortizing",
           mortgageRate: 0,
           mortgageTermYears: 30,
@@ -390,15 +454,55 @@ describe("buildSimulationScenarios", () => {
         },
       ],
       assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Home down payment")).toBeCloseTo(-20000, 6);
+    expect(row?.flowTotals.get("Home closing costs")).toBeCloseTo(-3000, 6);
+    expect(row?.totalExpenses).toBeCloseTo(3000, 6);
+  });
+
+  it("initializes a past home purchase with a partially paid-down mortgage", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          year: 2027,
+          label: "2027",
+          netAmount: 25000,
+          totalExpenses: 0,
+          flowAmounts: new Map([["Reserve", 25000]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          kind: "home",
+          name: "Home",
+          initialCost: 100000,
+          expectedReturn: 0,
+          volatility: 0,
+          cashPurchasePercent: 0.2,
+          closingCostPercent: 0.03,
+          mortgageType: "amortizing",
+          mortgageRate: 0,
+          mortgageTermYears: 30,
+          monthlyNonTaxCosts: 0,
+          propertyTaxRate: 0,
+          purchaseYear: 2026,
+        },
+      ],
+      assetCorrelations: [],
       nextStandardNormal: createDeterministicNormals([0]),
     });
 
     const row = scenarios[0]?.rows[0];
-    expect(row?.flowTotals.get("Home return")).toBeUndefined();
-    expect(row?.assetReturns.get("Home")?.amount).toBeCloseTo(10, 6);
-    expect(row?.assetReturns.get("Home")?.percentage).toBeCloseTo(10, 6);
-    expect(row?.assetMarketValues?.get("Home")).toBeCloseTo(110, 6);
-    expect(row?.assetValues.get("Home")).toBeCloseTo(32.666666666666664, 6);
+    expect(row?.flowTotals.get("Home down payment")).toBeUndefined();
+    expect(row?.flowTotals.get("Home closing costs")).toBeUndefined();
+    expect(row?.totalExpenses).toBeCloseTo(0, 6);
+    expect(row?.assetValues.get("Home")).toBeCloseTo(25333.33333333333, 6);
   });
 
   it("carries forward reduced balances after a one-time first-year draw", () => {
@@ -728,7 +832,7 @@ describe("buildSimulationScenarios", () => {
     expect(row?.taxAmount).toBeCloseTo(0.8, 6);
   });
 
-  it("adjusts bond cash generation by inflation correlation", () => {
+  it("does not adjust first-year bond cash generation by the inflation level alone", () => {
     const scenarios = buildSimulationDetails({
       attempts: 1,
       horizonYears: 1,
@@ -753,6 +857,7 @@ describe("buildSimulationScenarios", () => {
             name: "Coupon",
             rate: 5,
             volatility: 0,
+            inflationCorrelation: 1,
             taxTreatment: "not-taxable",
           },
         },
@@ -767,8 +872,68 @@ describe("buildSimulationScenarios", () => {
 
     const row = scenarios[0]?.rows[0];
     expect(row?.inflationRateApplied).toBeCloseTo(0.04, 6);
-    expect(row?.flowTotals.get("Bond fund Coupon")).toBeCloseTo(8, 6);
-    expect(row?.assetValues.get("Bond fund")).toBeCloseTo(108, 6);
+    expect(row?.flowTotals.get("Bond fund Coupon")).toBeCloseTo(5, 6);
+    expect(row?.assetValues.get("Bond fund")).toBeCloseTo(105, 6);
+  });
+
+  it("adjusts cash generation by year-over-year inflation deltas", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 3,
+      yearlyPlans: [
+        createYearlyPlan("2027", [], 2027),
+        createYearlyPlan("2028", [], 2028),
+        createYearlyPlan("2029", [], 2029),
+      ],
+      assets: [
+        {
+          name: "Bond fund",
+          assetType: "federal-bonds",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 0,
+          cashGeneration: {
+            name: "Coupon",
+            rate: 5,
+            volatility: 0,
+            inflationCorrelation: 1,
+            taxTreatment: "not-taxable",
+          },
+        },
+      ],
+      assetCorrelations: [],
+      inflation: {
+        mode: "regime-switching",
+        lowRegime: {
+          averageRate: 0.02,
+          volatility: 0,
+        },
+        highRegime: {
+          averageRate: 0.05,
+          volatility: 0,
+        },
+        stayLowProbability: 0,
+        stayHighProbability: 0,
+      },
+      nextRandom: (() => {
+        const values = [0.1, 0.1, 0.1];
+        let index = 0;
+        return () => values[index++] ?? 0;
+      })(),
+      nextStandardNormal: createDeterministicNormals([0, 0, 0]),
+    });
+
+    const [yearOne, yearTwo, yearThree] = scenarios[0]?.rows ?? [];
+    expect(yearOne?.inflationRateApplied).toBeCloseTo(0.05, 6);
+    expect(yearTwo?.inflationRateApplied).toBeCloseTo(0.02, 6);
+    expect(yearThree?.inflationRateApplied).toBeCloseTo(0.05, 6);
+    expect(yearOne?.flowPercentages?.get("Bond fund Coupon")).toBeCloseTo(5, 6);
+    expect(yearTwo?.flowPercentages?.get("Bond fund Coupon")).toBeCloseTo(2, 6);
+    expect(yearThree?.flowPercentages?.get("Bond fund Coupon")).toBeCloseTo(8, 6);
+    expect(yearOne?.flowTotals.get("Bond fund Coupon")).toBeCloseTo(5, 6);
+    expect(yearTwo?.flowTotals.get("Bond fund Coupon")).toBeCloseTo(2.1, 6);
+    expect(yearThree?.flowTotals.get("Bond fund Coupon")).toBeCloseTo(8.568, 6);
   });
 
   it("uses average basis to realize gains on asset sales", () => {
@@ -824,6 +989,54 @@ describe("buildSimulationScenarios", () => {
     expect(row?.flowTotals.get("Stocks sale proceeds")).toBeCloseTo(20.833333248, 5);
     expect(row?.flowTotals.get("Stocks realized gain")).toBeCloseTo(8.33333248, 6);
     expect(row?.assetValues.get("Stocks")).toBeCloseTo(79.166666752, 5);
+  });
+
+  it("uses starting value as cost basis when sale tax basis is omitted", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "",
+      federalQualifiedTaxName: "Federal qualified dividends / long-term gains",
+      stateTaxName: "",
+      localTaxName: "",
+      niitTaxName: "",
+    };
+
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -20,
+          totalExpenses: 20,
+          flowAmounts: new Map(),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Stocks",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+          saleTax: {
+            taxTreatment: "long-term-capital-gains",
+          },
+        },
+      ],
+      assetCorrelations: [],
+      taxes: [new Tax({ name: "Federal qualified dividends / long-term gains", taxRates: [{ rate: 0.1 }] })],
+      householdTaxProfile: profile,
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.taxableGains).toBeCloseTo(0, 6);
+    expect(row?.taxAmount).toBeCloseTo(0, 6);
+    expect(row?.flowTotals.get("Taxes paid")).toBeUndefined();
+    expect(row?.flowTotals.get("Stocks realized gain")).toBeUndefined();
   });
 
   it("carries forward realized capital losses to offset realized gains in later years", () => {
@@ -1037,6 +1250,58 @@ describe("buildSimulationScenarios", () => {
     expect(row?.flowTotals.get("Bonds sale proceeds")).toBeCloseTo(38.82352941176471, 6);
     expect(row?.assetValues.get("Stocks")).toBeCloseTo(178.8235294117647, 6);
     expect(row?.assetValues.get("Bonds")).toBeCloseTo(61.17647058823529, 6);
+  });
+
+  it("returns to equal-proportion liquidation after custom asset liquidation is untoggled", () => {
+    let customAssetLiquidation = false;
+    customAssetLiquidation = true;
+
+    const editedAssets = [
+      {
+        name: "Stocks",
+        startingValue: 200,
+        expectedReturn: 0,
+        volatility: 0,
+        sellProportion: 0.5,
+      },
+      {
+        name: "Bonds",
+        startingValue: 100,
+        expectedReturn: 0,
+        volatility: 0,
+        sellProportion: 2,
+      },
+    ];
+
+    expect(editedAssets.map((asset) => getSimulationSellProportion(asset, customAssetLiquidation))).toEqual([0.5, 2]);
+
+    customAssetLiquidation = false;
+
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -60,
+          totalExpenses: 60,
+          flowAmounts: new Map([["Living expenses", -60]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: editedAssets.map((asset) => ({
+        ...asset,
+        sellProportion: getSimulationSellProportion(asset, customAssetLiquidation),
+      })),
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Stocks sale proceeds")).toBeCloseTo(40, 6);
+    expect(row?.flowTotals.get("Bonds sale proceeds")).toBeCloseTo(20, 6);
+    expect(row?.assetValues.get("Stocks")).toBeCloseTo(160, 6);
+    expect(row?.assetValues.get("Bonds")).toBeCloseTo(80, 6);
   });
 
   it("does not report a stock price return percentage after dividends fund a full liquidation", () => {

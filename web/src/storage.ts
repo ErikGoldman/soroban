@@ -46,7 +46,9 @@ export interface PersistedAssetDefinition {
   sellProportion?: number;
   initialCost?: number;
   initialCostFormula?: string;
+  alreadyOwned?: boolean;
   cashPurchasePercent?: number;
+  closingCostPercent?: number;
   mortgageType?: "amortizing" | "interest-only";
   interestOnlyMaturityAction?: "payoff" | "refinance" | "sell";
   mortgageRate?: number;
@@ -170,6 +172,7 @@ export interface SavedPlannerState {
   simulationAttempts?: number;
   simulationTaxPreset?: "nyc" | "custom";
   simulationHorizonYears?: number;
+  simulationCustomAssetLiquidation?: boolean;
   simulationInflationRate?: number;
   simulationInflation?: {
     preset?: "fixed" | "fixed-custom" | "regime" | "regime-custom";
@@ -199,6 +202,7 @@ export interface PlanningStorage {
   getLatestCalculation(userId: string): Promise<SavedCalculation | null>;
   saveCalculation(record: Omit<SavedCalculation, "updatedAt">): Promise<SavedCalculation>;
   getPlannerState(userId: string): Promise<SavedPlannerState | null>;
+  deletePlannerState(userId: string): Promise<void>;
   savePlannerState(
     record: Omit<SavedPlannerState, "updatedAt">
   ): Promise<SavedPlannerState>;
@@ -327,6 +331,19 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
 
       request.addEventListener("success", () => {
         resolve((request.result as SavedPlannerState | undefined) || null);
+      });
+      request.addEventListener("error", () => {
+        reject(request.error);
+      });
+    });
+  }
+
+  async deletePlannerState(userId: string): Promise<void> {
+    await withStore<void>(PLANNER_STORE_NAME, "readwrite", (store, resolve, reject) => {
+      const request = store.delete(userId);
+
+      request.addEventListener("success", () => {
+        resolve();
       });
       request.addEventListener("error", () => {
         reject(request.error);

@@ -32,7 +32,7 @@ export function getSimulationCashFlowEntries(row: SimulationDetailYearRow): Simu
     .map(([label, amount]) => ({
       label,
       amount,
-      detail: "",
+      detail: formatFlowPercentageDetail(row.flowPercentages?.get(label)),
     }));
 }
 
@@ -94,4 +94,12 @@ function compareSignedAmounts(leftAmount: number, rightAmount: number): number {
 
 function formatPercentage(value: number): string {
   return `${value.toFixed(2)}%`;
+}
+
+function formatFlowPercentageDetail(value: number | undefined): string {
+  if (value === undefined || Math.abs(value) <= 0.000001) {
+    return "";
+  }
+
+  return ` (${formatPercentage(value)})`;
 }

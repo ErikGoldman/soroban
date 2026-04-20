@@ -36,6 +36,7 @@ import {
   getSimulationSaleEntries,
   getVisibleSimulationFlowEntries,
 } from "./simulation-detail.js";
+import { getSimulationSellProportion } from "./simulation-input.js";
 import {
   Asset,
   Event,
@@ -91,8 +92,21 @@ import type {
   SimulationWorkerResponse,
 } from "./simulation-worker.js";
 
+declare global {
+  interface HTMLButtonElement {
+    disabledReason?: string;
+    disabledReasonControls?: HTMLElement[];
+  }
+}
+
 type EventActionDraftKind = EventAction["kind"] | "one-time-expense";
 type AssetDraftKind = "investment" | InvestmentAssetType | "home";
+type AssetDetailMode = "basic" | "advanced";
+
+interface DisabledSubmitState {
+  reason: string;
+  controls: HTMLElement[];
+}
 
 interface PlannerState {
   variables: VariableDefinition[];
@@ -143,6 +157,8 @@ interface FlowDraft {
   formula: string;
   inflationAdjusted: boolean;
   oneTime: boolean;
+  oneTimeYear: string;
+  changeEvents: FlowChangeDraft[];
   startYear: string;
   endYear: string;
   annualRaisePercent: string;
@@ -156,6 +172,7 @@ interface FlowEditDraft {
   formula: string;
   inflationAdjusted: boolean;
   oneTime: boolean;
+  oneTimeYear: string;
   startYear: string;
   endYear: string;
   annualRaisePercent: string;
@@ -167,12 +184,19 @@ interface FlowEventDraft {
   formula: string;
 }
 
+interface FlowChangeDraft {
+  id: string;
+  year: string;
+  formula: string;
+}
+
 interface ActiveFlowEventEdit {
   eventName: string | null;
   field: "year" | "formula";
 }
 
 interface AssetDraft {
+  detailMode: AssetDetailMode;
   kind: AssetDraftKind;
   name: string;
   startingValue: string;
@@ -180,6 +204,7 @@ interface AssetDraft {
   volatility: string;
   initialCost: string;
   cashPurchasePercent: string;
+  closingCostPercent: string;
   mortgageType: "amortizing" | "interest-only";
   interestOnlyMaturityAction: "payoff" | "refinance" | "sell";
   mortgageRate: string;
@@ -190,6 +215,7 @@ interface AssetDraft {
   cashGenerationEnabled: boolean;
   cashGenerations: AssetCashGenerationDraft[];
   saleTaxEnabled: boolean;
+  saleTaxExpanded: boolean;
   saleTaxCostBasis: string;
   saleTaxTreatment: AssetSaleTaxTreatment;
 }
@@ -301,7 +327,7 @@ const ASSET_TYPE_PRESETS: Record<InvestmentAssetType, AssetTypePreset> = {
         name: "State+local exempt income",
         rate: "3.7",
         volatility: "0.43",
-        inflationCorrelation: "0.75",
+        inflationCorrelation: "0.35",
         taxTreatment: "state-local-exempt",
       },
     ],
@@ -315,12 +341,15 @@ const ASSET_TYPE_PRESETS: Record<InvestmentAssetType, AssetTypePreset> = {
         name: "Triple exempt income",
         rate: "3.2",
         volatility: "0.19",
-        inflationCorrelation: "0.75",
+        inflationCorrelation: "0.35",
         taxTreatment: "triple-exempt",
       },
     ],
   },
 };
+
+const HOME_EXPECTED_RETURN_DEFAULT = "2.5";
+const HOME_VOLATILITY_DEFAULT = "1";
 
 interface VariableSweepDraft {
   enabled: boolean;
@@ -344,6 +373,7 @@ interface SimulationDraft {
     stayHighProbability: string;
   };
   taxPreset: TaxPreset;
+  customAssetLiquidation: boolean;
   assetRows: SimulationAssetDraft[];
   variableSweep: VariableSweepDraft;
 }
@@ -467,6 +497,9 @@ let activeSummaryTab: SummaryTab = "variables";
 let activePlannerBoardTab: PlannerBoardTab = "setup";
 let activeInlineAssetValueEditName: string | null = null;
 let activeInlineExpenseValueEditName: string | null = null;
+let shouldFocusNewAssetName = false;
+let shouldFocusNewFlowName = false;
+let shouldFocusAssetStartingValueIfZero = false;
 let selectedSimulationPercentile: SimulationPercentile = 50;
 let selectedSimulationChartMetric: SimulationChartMetric = "totalAssets";
 let simulationResults: Map<SimulationPercentile, SimulationScenario> | null = null;
@@ -479,6 +512,7 @@ let activeSimulationWorkers: Worker[] = [];
 let activeSimulationRequestId = 0;
 let taxProfilePersistTimeout: number | null = null;
 let modalEscapeHandlerBound = false;
+let modalPointerDownStartedOnBackdrop = false;
 const simulationPercentiles: readonly SimulationPercentile[] = [5, 10, 25, 50, 75, 90];
 const INCOME_FLOW_TAX_TREATMENTS = [
   { value: "wages", label: "Wages" },
@@ -510,6 +544,8 @@ function createFlowDraft(): FlowDraft {
     formula: "",
     inflationAdjusted: true,
     oneTime: false,
+    oneTimeYear: plannerState.startYear,
+    changeEvents: [],
     startYear: plannerState.startYear,
     endYear: "",
     annualRaisePercent: "0",
@@ -524,25 +560,32 @@ function createFlowEditDraft(): FlowEditDraft {
 }
 
 function createAssetDraft(): AssetDraft {
+  const defaultPreset = ASSET_TYPE_PRESETS["us-stocks"];
+  const currentYear = String(new Date().getFullYear());
   return {
-    kind: "investment",
+    detailMode: "basic",
+    kind: "us-stocks",
     name: "",
     startingValue: "0",
-    expectedReturn: "0",
-    volatility: "0",
+    expectedReturn: defaultPreset.expectedReturn,
+    volatility: defaultPreset.volatility,
     initialCost: "0",
     cashPurchasePercent: "20",
+    closingCostPercent: "3",
     mortgageType: "amortizing",
     interestOnlyMaturityAction: "payoff",
     mortgageRate: "6",
     mortgageTermYears: "30",
     monthlyNonTaxCosts: "0",
     propertyTaxRate: "1",
-    purchaseYear: String(new Date().getFullYear()),
-    cashGenerationEnabled: false,
-    cashGenerations: [createAssetCashGenerationDraft("investment", { expanded: true })],
-    saleTaxEnabled: false,
-    saleTaxCostBasis: "0",
+    purchaseYear: currentYear,
+    cashGenerationEnabled: defaultPreset.cashGenerations.length > 0,
+    cashGenerations: defaultPreset.cashGenerations.map((cashGeneration) =>
+      createAssetCashGenerationDraftFromPreset(cashGeneration)
+    ),
+    saleTaxEnabled: true,
+    saleTaxExpanded: false,
+    saleTaxCostBasis: "",
     saleTaxTreatment: "long-term-capital-gains",
   };
 }
@@ -577,7 +620,7 @@ function getAssetTypeLabel(kind: AssetDraftKind): string {
       return "Local bonds";
     case "investment":
     default:
-      return "Investment";
+      return "Other investment";
   }
 }
 
@@ -597,6 +640,14 @@ function getAssetTypePreset(kind: AssetDraftKind): AssetTypePreset | null {
   return assetType ? ASSET_TYPE_PRESETS[assetType] : null;
 }
 
+function isBondAssetDraftKind(kind: AssetDraftKind): boolean {
+  return kind === "federal-bonds" || kind === "local-bonds";
+}
+
+function getDefaultAssetDetailMode(kind: AssetDraftKind): AssetDetailMode {
+  return kind === "home" ? "advanced" : "basic";
+}
+
 function createAssetCashGenerationDraftFromPreset(
   cashGeneration: Omit<AssetCashGenerationDraft, "id" | "expanded">
 ): AssetCashGenerationDraft {
@@ -607,9 +658,31 @@ function createAssetCashGenerationDraftFromPreset(
   };
 }
 
+function resetInvestmentTaxModelDefaults(draft: AssetDraft | AssetEditDraft): void {
+  draft.cashGenerationEnabled = false;
+  draft.cashGenerations = [createAssetCashGenerationDraft(draft.kind, { expanded: true })];
+  draft.saleTaxEnabled = false;
+  draft.saleTaxExpanded = false;
+  draft.saleTaxCostBasis = "";
+  draft.saleTaxTreatment = "long-term-capital-gains";
+}
+
 function applyAssetTypePresetDefaults(draft: AssetDraft | AssetEditDraft): void {
   const preset = getAssetTypePreset(draft.kind);
+  draft.detailMode = getDefaultAssetDetailMode(draft.kind);
+
+  if (draft.kind === "home") {
+    draft.expectedReturn = HOME_EXPECTED_RETURN_DEFAULT;
+    draft.volatility = HOME_VOLATILITY_DEFAULT;
+    resetInvestmentTaxModelDefaults(draft);
+    return;
+  }
+
+  resetInvestmentTaxModelDefaults(draft);
+
   if (!preset) {
+    draft.expectedReturn = "0";
+    draft.volatility = "0";
     return;
   }
 
@@ -622,6 +695,7 @@ function applyAssetTypePresetDefaults(draft: AssetDraft | AssetEditDraft): void 
 
   if (draft.kind === "us-stocks") {
     draft.saleTaxEnabled = true;
+    draft.saleTaxExpanded = false;
     draft.saleTaxTreatment = "long-term-capital-gains";
   }
 }
@@ -645,6 +719,7 @@ function createSimulationDraft(): SimulationDraft {
       ...DEFAULT_SIMULATION_REGIME_INFLATION,
     },
     taxPreset: "nyc",
+    customAssetLiquidation: false,
     assetRows: [],
     variableSweep: {
       enabled: false,
@@ -899,6 +974,15 @@ function getEventFormulas(event: Pick<Event, "schedule">): string[] {
   );
 }
 
+function getFlowAndEventFormulas(flow: FlowDefinition): string[] {
+  return [
+    flow.formula,
+    ...plannerState.events
+      .filter((event) => event.flowName === flow.name)
+      .flatMap((event) => getEventFormulas(event)),
+  ];
+}
+
 function collectFormulaVariables(formulas: readonly string[]): Set<string> {
   const names = new Set<string>();
 
@@ -969,8 +1053,10 @@ function buildAssetDraftFromDefinition(
 ): AssetDraft {
   const cashGenerations = getAssetCashGenerations(asset);
   const resolvedAsset = resolvePlannerAssetDefinition(asset);
+  const kind = asset.kind === "home" ? "home" : asset.assetType ?? "investment";
   return {
-    kind: asset.kind === "home" ? "home" : asset.assetType ?? "investment",
+    detailMode: getDefaultAssetDetailMode(kind),
+    kind,
     name: asset.name,
     startingValue:
       options.preserveFormulaSource && isInvestmentAsset(asset)
@@ -983,6 +1069,7 @@ function buildAssetDraftFromDefinition(
         ? getAssetValueFormulaInput(asset)
         : String(isHomeAsset(resolvedAsset) ? resolvedAsset.initialCost : 0),
     cashPurchasePercent: String(isHomeAsset(resolvedAsset) ? resolvedAsset.cashPurchasePercent * 100 : 20),
+    closingCostPercent: String(isHomeAsset(resolvedAsset) ? (resolvedAsset.closingCostPercent ?? 0) * 100 : 3),
     mortgageType: isHomeAsset(resolvedAsset) ? resolvedAsset.mortgageType ?? "amortizing" : "amortizing",
     interestOnlyMaturityAction:
       isHomeAsset(resolvedAsset) && resolvedAsset.mortgageType === "interest-only"
@@ -1012,7 +1099,11 @@ function buildAssetDraftFromDefinition(
           }))
         : [createAssetCashGenerationDraft(asset.kind === "home" ? "home" : asset.assetType ?? "investment", { expanded: true })],
     saleTaxEnabled: isInvestmentAsset(resolvedAsset) && Boolean(resolvedAsset.saleTax),
-    saleTaxCostBasis: String(isInvestmentAsset(resolvedAsset) ? resolvedAsset.saleTax?.costBasis ?? 0 : 0),
+    saleTaxExpanded: false,
+    saleTaxCostBasis:
+      isInvestmentAsset(resolvedAsset) && resolvedAsset.saleTax?.costBasis !== undefined
+        ? String(resolvedAsset.saleTax.costBasis)
+        : "",
     saleTaxTreatment:
       isInvestmentAsset(resolvedAsset)
         ? resolvedAsset.saleTax?.taxTreatment ?? "long-term-capital-gains"
@@ -1027,21 +1118,23 @@ function migratePersistedAsset(
   if (asset.kind === "home") {
     return resolveAssetValueFormula(
       new Asset({
-      kind: "home",
-      name: asset.name,
-      initialCost: asset.initialCost ?? 0,
-      ...(asset.initialCostFormula ? { initialCostFormula: asset.initialCostFormula } : {}),
-      expectedReturn: asset.expectedReturn,
-      volatility: asset.volatility,
-      cashPurchasePercent: asset.cashPurchasePercent ?? 0,
-      mortgageType: asset.mortgageType ?? "amortizing",
-      interestOnlyMaturityAction:
-        asset.mortgageType === "interest-only" ? asset.interestOnlyMaturityAction ?? "payoff" : undefined,
-      mortgageRate: asset.mortgageRate ?? 0,
-      mortgageTermYears: asset.mortgageTermYears ?? 30,
-      monthlyNonTaxCosts: asset.monthlyNonTaxCosts ?? 0,
-      propertyTaxRate: asset.propertyTaxRate ?? 0,
-      purchaseYear: asset.purchaseYear ?? new Date().getFullYear(),
+        kind: "home",
+        name: asset.name,
+        initialCost: asset.initialCost ?? 0,
+        ...(asset.initialCostFormula ? { initialCostFormula: asset.initialCostFormula } : {}),
+        ...(asset.alreadyOwned ? { alreadyOwned: true } : {}),
+        expectedReturn: asset.expectedReturn,
+        volatility: asset.volatility,
+        cashPurchasePercent: asset.cashPurchasePercent ?? 0,
+        closingCostPercent: asset.closingCostPercent ?? 0,
+        mortgageType: asset.mortgageType ?? "amortizing",
+        interestOnlyMaturityAction:
+          asset.mortgageType === "interest-only" ? asset.interestOnlyMaturityAction ?? "payoff" : undefined,
+        mortgageRate: asset.mortgageRate ?? 0,
+        mortgageTermYears: asset.mortgageTermYears ?? 30,
+        monthlyNonTaxCosts: asset.monthlyNonTaxCosts ?? 0,
+        propertyTaxRate: asset.propertyTaxRate ?? 0,
+        purchaseYear: asset.purchaseYear ?? new Date().getFullYear(),
       }).toDefinition(),
       context
     );
@@ -1082,7 +1175,7 @@ function migratePersistedAsset(
       ...(asset.saleTax
         ? {
             saleTax: {
-              costBasis: asset.saleTax.costBasis ?? 0,
+              ...(asset.saleTax.costBasis !== undefined ? { costBasis: asset.saleTax.costBasis } : {}),
               taxTreatment: asset.saleTax.taxTreatment ?? "long-term-capital-gains",
             },
           }
@@ -1399,11 +1492,11 @@ function renderAssetCashTaxTreatmentOptions(selected: AssetCashTaxTreatment): st
 
 function renderAssetTypeOptions(selected: AssetDraftKind): string {
   return `
-    <option value="investment" ${selected === "investment" ? "selected" : ""}>Investment</option>
     <option value="us-stocks" ${selected === "us-stocks" ? "selected" : ""}>US stocks</option>
     <option value="federal-bonds" ${selected === "federal-bonds" ? "selected" : ""}>Federal bonds</option>
     <option value="local-bonds" ${selected === "local-bonds" ? "selected" : ""}>Local bonds</option>
-    <option value="home" ${selected === "home" ? "selected" : ""}>Home</option>
+    <option value="home" ${selected === "home" ? "selected" : ""}>House</option>
+    <option value="investment" ${selected === "investment" ? "selected" : ""}>Other investment</option>
   `;
 }
 
@@ -1447,7 +1540,7 @@ function renderAssetCashGenerationDraftPreview(cashGeneration: AssetCashGenerati
   return [
     `Yield ${formatAssetCashGenerationDraftValue(cashGeneration.rate, formatPercentage)}`,
     `Vol ${formatAssetCashGenerationDraftValue(cashGeneration.volatility, formatPercentage)}`,
-    `Infl ${formatAssetCashGenerationDraftValue(cashGeneration.inflationCorrelation, (value) => `${formatEditableNumber(value)}x`)}`,
+    `Infl dY ${formatAssetCashGenerationDraftValue(cashGeneration.inflationCorrelation, (value) => `${formatEditableNumber(value)}x`)}`,
     assetCashTaxTreatmentLabel(cashGeneration.taxTreatment),
   ].join(" | ");
 }
@@ -1457,7 +1550,7 @@ function renderAssetCashGenerationSummary(asset: AssetDefinition): string {
 
   if (cashGenerations.length === 0) {
     if (isHomeAsset(asset)) {
-      return `Home purchased ${asset.purchaseYear}`;
+      return `Home purchase ${asset.purchaseYear}`;
     }
     return "";
   }
@@ -1473,12 +1566,44 @@ function renderAssetCashGenerationSummary(asset: AssetDefinition): string {
       const taxTreatment = assetCashTaxTreatmentLabel(cashGeneration.taxTreatment ?? "ordinary-income");
       const streamName = cashGeneration.name?.trim();
       const inflationCorrelationSummary =
-        Math.abs(inflationCorrelation) > 0.000001 ? ` + ${inflationCorrelation.toFixed(2)}x inflation` : "";
+        Math.abs(inflationCorrelation) > 0.000001 ? ` + ${inflationCorrelation.toFixed(2)}x YoY inflation delta` : "";
       return streamName
         ? `${streamName}: ${rate}${inflationCorrelationSummary} ${taxTreatment}`
         : `${rate}${inflationCorrelationSummary} ${taxTreatment}`;
     })
     .join(" | ");
+}
+
+function getInterestOnlyMaturityActionLabel(action: HomeAssetDefinition["interestOnlyMaturityAction"]): string {
+  switch (action) {
+    case "refinance":
+      return "auto refinance";
+    case "sell":
+      return "auto sale";
+    case "payoff":
+    default:
+      return "force payoff";
+  }
+}
+
+function renderHomeMortgageSummary(asset: AssetDefinition): string {
+  if (!isHomeAsset(asset)) {
+    return "";
+  }
+
+  const financedPercent = Math.max(0, (1 - asset.cashPurchasePercent) * 100);
+  const mortgagePrincipal = asset.initialCost * Math.max(0, 1 - asset.cashPurchasePercent);
+
+  if (mortgagePrincipal <= 0.000001) {
+    return `Mortgage: none, ${formatPercentage(asset.cashPurchasePercent * 100)} cash purchase`;
+  }
+
+  const mortgageType =
+    asset.mortgageType === "interest-only"
+      ? `interest-only, ${getInterestOnlyMaturityActionLabel(asset.interestOnlyMaturityAction)}`
+      : "amortizing";
+
+  return `Mortgage: ${formatPercentage(financedPercent)} financed, ${formatPercentage(asset.mortgageRate)} ${mortgageType} for ${asset.mortgageTermYears} years`;
 }
 
 function parseYearInput(value: string): EventYear {
@@ -1838,6 +1963,25 @@ function clearSimulationOutputs(): void {
   expandedSimulationExampleKeys = new Set();
 }
 
+function resetPlannerWorkspaceState(): void {
+  if (taxProfilePersistTimeout !== null) {
+    window.clearTimeout(taxProfilePersistTimeout);
+    taxProfilePersistTimeout = null;
+  }
+
+  Object.assign(plannerState, createDefaultPlannerState());
+  Object.assign(simulationDraft, createSimulationDraft());
+  invalidateSimulationState();
+  closeTransientPlannerUi();
+  simulationInflationSectionExpanded = false;
+  simulationTaxesSectionExpanded = false;
+  activeSummaryTab = "variables";
+  activePlannerBoardTab = "setup";
+  syncTaxProfileDraft();
+  syncSimulationDraftAssetRows();
+  syncSimulationVariableSweepDraft();
+}
+
 function buildSimulationVariableDefinitions(
   variableOverride?: SimulationVariableOverride
 ): VariableDefinition[] {
@@ -1893,6 +2037,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
             expectedReturn: resolvedAsset.expectedReturn,
             volatility: resolvedAsset.volatility,
             cashPurchasePercent: resolvedAsset.cashPurchasePercent,
+            closingCostPercent: resolvedAsset.closingCostPercent,
             mortgageType: resolvedAsset.mortgageType,
             ...(resolvedAsset.mortgageType === "interest-only"
               ? {
@@ -1911,7 +2056,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
             startingValue: resolvedAsset.startingValue,
             expectedReturn: resolvedAsset.expectedReturn,
             volatility: resolvedAsset.volatility,
-            sellProportion: resolvedAsset.sellProportion,
+            sellProportion: getSimulationSellProportion(resolvedAsset, simulationDraft.customAssetLiquidation),
             ...((resolvedAsset.cashGenerations ?? []).length > 0
               ? {
                   cashGenerations: (resolvedAsset.cashGenerations ?? []).map((cashGeneration) => ({
@@ -1926,7 +2071,9 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
             ...(resolvedAsset.saleTax
               ? {
                   saleTax: {
-                    costBasis: resolvedAsset.saleTax.costBasis,
+                    ...(resolvedAsset.saleTax.costBasis !== undefined
+                      ? { costBasis: resolvedAsset.saleTax.costBasis }
+                      : {}),
                     taxTreatment: resolvedAsset.saleTax.taxTreatment,
                   },
                 }
@@ -1980,6 +2127,14 @@ function persistVariableSweepDraftToLocalStorage(userId: string): void {
         maxValue: simulationDraft.variableSweep.maxValue,
       })
     );
+  } catch {
+    // Ignore storage write failures and fall back to IndexedDB persistence.
+  }
+}
+
+function removeVariableSweepDraftFromLocalStorage(userId: string): void {
+  try {
+    window.localStorage.removeItem(getVariableSweepStorageKey(userId));
   } catch {
     // Ignore storage write failures and fall back to IndexedDB persistence.
   }
@@ -2064,8 +2219,19 @@ function isSingleFormulaOverrideEvent(event: Event, flowName: string): boolean {
   );
 }
 
-function getOneTimeResetYear(): EventYear {
-  return addYears(parseYearInput(plannerState.startYear), 1);
+function createOneTimeAmountEventName(flowName: string): string {
+  return `${flowName.trim()} one-time amount`;
+}
+
+function createOneTimeResetEventName(flowName: string): string {
+  return `${flowName.trim()} one-time reset`;
+}
+
+function isOneTimeAmountEvent(event: Event, flowName: string): boolean {
+  return (
+    isSingleFormulaOverrideEvent(event, flowName) &&
+    (event.name === createOneTimeAmountEventName(flowName) || event.name.endsWith(" one-time amount"))
+  );
 }
 
 function isOneTimeResetEvent(event: Event, flowName: string): boolean {
@@ -2075,15 +2241,19 @@ function isOneTimeResetEvent(event: Event, flowName: string): boolean {
 
   const action = event.schedule[0].actions[0];
   return (
+    (event.name === createOneTimeResetEventName(flowName) || event.name.endsWith(" one-time reset")) &&
     action.kind === "set-flow-formula" &&
     action.formula.trim() === "0" &&
-    compareEventYears(event.schedule[0].year, getOneTimeResetYear()) === 0
+    event.schedule.length === 1
   );
 }
 
 function getExpenseChangeEvents(flowName: string): Event[] {
   return getEventsForFlow(flowName).filter(
-    (event) => isSingleFormulaOverrideEvent(event, flowName) && !isOneTimeResetEvent(event, flowName)
+    (event) =>
+      isSingleFormulaOverrideEvent(event, flowName) &&
+      !isOneTimeAmountEvent(event, flowName) &&
+      !isOneTimeResetEvent(event, flowName)
   );
 }
 
@@ -2099,13 +2269,41 @@ function getNextExpenseChangeYear(flowName: string): string {
   return String(baseYear + 1);
 }
 
-function createOneTimeResetEvent(flowName: string): Event {
+function getNextFlowDraftChangeYear(draft: FlowDraft): string {
+  const existingYears = draft.changeEvents
+    .map((change) => Number(change.year))
+    .filter((year) => Number.isInteger(year));
+  const baseYear = existingYears.length > 0 ? Math.max(...existingYears) : new Date().getFullYear();
+
+  return String(baseYear + 1);
+}
+
+function createOneTimeAmountEvent(flowName: string, year: string, formula: string): Event {
   return new Event({
-    name: `${flowName.trim()} one-time reset`,
+    name: createOneTimeAmountEventName(flowName),
     flowName,
     schedule: [
       {
-        year: getOneTimeResetYear(),
+        year: parseYearInput(year),
+        actions: [
+          {
+            kind: "set-flow-formula",
+            flowName,
+            formula: formula.trim(),
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function createOneTimeResetEvent(flowName: string, year: string): Event {
+  return new Event({
+    name: createOneTimeResetEventName(flowName),
+    flowName,
+    schedule: [
+      {
+        year: addYears(parseYearInput(year), 1),
         actions: [
           {
             kind: "set-flow-formula",
@@ -2118,12 +2316,56 @@ function createOneTimeResetEvent(flowName: string): Event {
   });
 }
 
-function syncExpenseOneTimeReset(flowName: string, enabled: boolean): void {
-  plannerState.events = plannerState.events.filter((event) => !isOneTimeResetEvent(event, flowName));
+function syncExpenseOneTimeSchedule(flowName: string, enabled: boolean, year: string, formula: string): void {
+  plannerState.events = plannerState.events.filter(
+    (event) =>
+      event.flowName !== flowName ||
+      !(
+        isOneTimeAmountEvent(event, flowName) ||
+        isOneTimeResetEvent(event, flowName) ||
+        (enabled && isSingleFormulaOverrideEvent(event, flowName))
+      )
+  );
 
   if (enabled) {
-    plannerState.events.push(createOneTimeResetEvent(flowName));
+    plannerState.events.push(createOneTimeAmountEvent(flowName, normalizeYearInput(year), formula));
+    plannerState.events.push(createOneTimeResetEvent(flowName, normalizeYearInput(year)));
   }
+}
+
+function getOneTimeAmountEvent(flowName: string): Event | null {
+  return plannerState.events.find((event) => isOneTimeAmountEvent(event, flowName)) ?? null;
+}
+
+function getOneTimeResetEvent(flowName: string): Event | null {
+  return plannerState.events.find((event) => isOneTimeResetEvent(event, flowName)) ?? null;
+}
+
+function isFlowOneTimeMode(flow: FlowDefinition): boolean {
+  return getOneTimeAmountEvent(flow.name) !== null || getOneTimeResetEvent(flow.name) !== null;
+}
+
+function getOneTimeYearForFlow(flow: FlowDefinition): string {
+  const amountEvent = getOneTimeAmountEvent(flow.name);
+  if (amountEvent) {
+    return yearLabel(amountEvent.schedule[0].year);
+  }
+
+  const resetEvent = getOneTimeResetEvent(flow.name);
+  if (resetEvent) {
+    return yearLabel(addYears(resetEvent.schedule[0].year, -1));
+  }
+
+  return plannerState.startYear;
+}
+
+function getOneTimeFormulaForFlow(flow: FlowDefinition): string {
+  const amountAction = getOneTimeAmountEvent(flow.name)?.schedule[0]?.actions[0];
+  if (amountAction?.kind === "set-flow-formula") {
+    return amountAction.formula;
+  }
+
+  return flow.formula;
 }
 
 function upsertExpenseChangeEvent(originalEventName: string | null, flowName: string, year: string, formula: string): void {
@@ -2152,6 +2394,37 @@ function upsertExpenseChangeEvent(originalEventName: string | null, flowName: st
   plannerState.events.push(nextEvent);
 }
 
+function createExpenseChangeEvent(flowName: string, year: string, formula: string): Event {
+  return new Event({
+    name: createExpenseChangeEventName(flowName, year),
+    flowName,
+    schedule: [
+      {
+        year: parseYearInput(year),
+        actions: [
+          {
+            kind: "set-flow-formula",
+            flowName,
+            formula: formula.trim(),
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function upsertFlowChangeDraft(draft: FlowDraft, changeId: string | null, year: string, formula: string): void {
+  const nextChange = {
+    id: changeId ?? createId(),
+    year: normalizeYearInput(year),
+    formula: formula.trim(),
+  };
+
+  draft.changeEvents = changeId
+    ? draft.changeEvents.map((change) => (change.id === changeId ? nextChange : change))
+    : [...draft.changeEvents, nextChange];
+}
+
 function beginFlowEventEdit(
   flowName: string,
   field: ActiveFlowEventEdit["field"],
@@ -2175,6 +2448,28 @@ function beginFlowEventEdit(
 
   activeFlowEventEdit = {
     eventName,
+    field,
+  };
+}
+
+function beginFlowDraftChangeEdit(field: ActiveFlowEventEdit["field"], changeId: string | null = null): void {
+  if (changeId) {
+    const change = flowDraft.changeEvents.find((candidate) => candidate.id === changeId);
+    if (!change) {
+      return;
+    }
+
+    flowEventDraft.originalName = change.id;
+    flowEventDraft.year = change.year;
+    flowEventDraft.formula = change.formula;
+  } else {
+    flowEventDraft.originalName = null;
+    flowEventDraft.year = getNextFlowDraftChangeYear(flowDraft);
+    flowEventDraft.formula = flowDraft.formula;
+  }
+
+  activeFlowEventEdit = {
+    eventName: changeId,
     field,
   };
 }
@@ -2217,6 +2512,7 @@ function renderSetupAssetArea(): string {
                     ${escapeHtml(asset.name)}
                   </div>
                   ${renderAssetCashGenerationSummary(asset) ? `<p class="workspace-item-copy">${escapeHtml(renderAssetCashGenerationSummary(asset))}</p>` : ""}
+                  ${renderHomeMortgageSummary(asset) ? `<p class="workspace-item-copy">${escapeHtml(renderHomeMortgageSummary(asset))}</p>` : ""}
                 </div>
                 ${
                   activeInlineAssetValueEditName === asset.name
@@ -2279,7 +2575,7 @@ function renderExpenseValuePath(flowName: string, startYearInput: string, initia
   for (const eventYear of relevantEventYears) {
     const snapshot = snapshots[eventYear.year - startYear.year];
     const amount = snapshot ? Math.abs(snapshot.flowAmounts.get(flowName) ?? 0) : 0;
-    parts.push(formatCurrency(amount));
+    parts.push(`${formatCurrency(amount)} (${eventYear.year})`);
   }
 
   return parts.join(" -> ");
@@ -2288,6 +2584,10 @@ function renderExpenseValuePath(flowName: string, startYearInput: string, initia
 function renderIncomeTimingSummary(flow: FlowDefinition): string {
   if (flow.type !== "income") {
     return "";
+  }
+
+  if (isFlowOneTimeMode(flow)) {
+    return `One-time in ${getOneTimeYearForFlow(flow)}`;
   }
 
   const parts: string[] = [];
@@ -2394,7 +2694,7 @@ function renderVariablesCard(): string {
           <p class="kicker">Variables</p>
           <h2>Formula inputs</h2>
         </div>
-        <p class="helper-copy">Create a variable in a flow or asset editor and it will appear here. For example, create an expense and set the amount to rent * 0.1.</p>
+        <p class="helper-copy">Create a variable in the asset, income, or expense editor and it will appear here. For example, create an expense and set the amount to rent * 0.1</p>
       </div>
       <div class="workspace-list workspace-list-tight">
         ${plannerState.variables
@@ -2452,21 +2752,29 @@ function renderSetupBoard(flowRows: Array<{ flow: FlowDefinition; yearlyAmount: 
 
 function renderPlannerBoardTabs(): string {
   return `
-    <div class="tab-strip planner-tab-strip" role="tablist" aria-label="Planner views">
-      <button
-        type="button"
-        class="${activePlannerBoardTab === "setup" ? "tab-button is-active" : "tab-button"}"
-        data-board-tab="setup"
-      >
-        Setup
-      </button>
-      <button
-        type="button"
-        class="${activePlannerBoardTab === "simulation" ? "tab-button is-active" : "tab-button"}"
-        data-board-tab="simulation"
-      >
-        Simulation
-      </button>
+    <div class="planner-board-controls">
+      <div class="tab-strip planner-tab-strip" role="tablist" aria-label="Planner views">
+        <button
+          type="button"
+          class="${activePlannerBoardTab === "setup" ? "tab-button is-active" : "tab-button"}"
+          data-board-tab="setup"
+        >
+          Setup
+        </button>
+        <button
+          type="button"
+          class="${activePlannerBoardTab === "simulation" ? "tab-button is-active" : "tab-button"}"
+          data-board-tab="simulation"
+        >
+          Simulate
+        </button>
+      </div>
+      <div class="planner-header-actions">
+        <button type="button" class="secondary-button" id="save-scenario-button">Save scenario</button>
+        <button type="button" class="secondary-button" id="load-scenario-button">Load scenario</button>
+        <button type="button" class="danger-button" id="clear-scenario-button">Clear scenario</button>
+        <input id="load-scenario-input" type="file" accept=".json,application/json" hidden />
+      </div>
     </div>
   `;
 }
@@ -2502,37 +2810,18 @@ function renderPlanner(user: UserIdentity): void {
   mountedAppRoot.innerHTML = `
     <div class="app-shell">
       <header class="planner-header">
+        <span class="planner-brand-mark" aria-hidden="true">S</span>
         <div class="planner-header-copy">
-          <p class="eyebrow">Soroban</p>
-          <h1>Formula planner</h1>
+          <h1>Soroban</h1>
           <p class="hero-copy">
-            Configure assets, income, expenses, and variables in setup, then run portfolio simulations with presets or a custom tax profile.
+            Calculate the lifestyle you can afford
           </p>
-        </div>
-        <div class="planner-header-meta">
-          <div class="pill-row">
-            <span class="pill">${escapeHtml(user.email)}</span>
-            <span class="pill">Simulation tax presets + custom</span>
-          </div>
-          <div class="planner-header-actions">
-            <button type="button" class="secondary-button" id="save-scenario-button">Save scenario</button>
-            <button type="button" class="secondary-button" id="load-scenario-button">Load scenario</button>
-            <input id="load-scenario-input" type="file" accept=".json,application/json" hidden />
-          </div>
         </div>
       </header>
 
       <main class="planner-main">
         <section class="panel board-panel planner-board-shell">
-          <div class="planner-board-shell-header">
-            <div class="panel-heading">
-              <p class="kicker">Workspace</p>
-              <h2>${activeBoardLabel}</h2>
-            </div>
-          </div>
-          <div class="planner-board-tabs-sticky">
-            ${renderPlannerBoardTabs()}
-          </div>
+          ${renderPlannerBoardTabs()}
           <div class="planner-board-shell-body">
           ${
             activePlannerBoardTab === "setup"
@@ -2574,7 +2863,7 @@ function renderExpensesBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAm
             .map(
               ({ flow, yearlyAmount }) => {
                 const changes = getExpenseChangeEvents(flow.name);
-                const hasOneTimeReset = plannerState.events.some((event) => isOneTimeResetEvent(event, flow.name));
+                const hasOneTimeReset = isFlowOneTimeMode(flow);
 
                 return `
                 <tr>
@@ -2603,7 +2892,7 @@ function renderExpensesBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAm
                                 )}</code>`
                             ),
                             ...(hasOneTimeReset
-                              ? [`<span class="summary-meta">One-time reset in ${escapeHtml(yearLabel(getOneTimeResetYear()))}</span>`]
+                              ? [`<span class="summary-meta">One-time in ${escapeHtml(getOneTimeYearForFlow(flow))}</span>`]
                               : []),
                           ].join("<br />")
                     }
@@ -2781,8 +3070,8 @@ function updateFlowDraftType(draft: FlowDraft | FlowEditDraft, type: FlowType): 
   draft.taxTreatment = normalizeFlowDraftTaxTreatment(type, draft.taxTreatment);
 
   if (type === "income") {
-    draft.oneTime = false;
     draft.inflationAdjusted = false;
+    draft.oneTimeYear = normalizeYearInput(draft.oneTimeYear || draft.startYear || plannerState.startYear);
     draft.startYear = normalizeYearInput(draft.startYear);
     draft.endYear = normalizeOptionalYearInput(draft.endYear);
     if (!draft.annualRaisePercent.trim()) {
@@ -2791,7 +3080,7 @@ function updateFlowDraftType(draft: FlowDraft | FlowEditDraft, type: FlowType): 
     return;
   }
 
-  draft.inflationAdjusted = true;
+  draft.inflationAdjusted = draft.oneTime ? false : true;
 }
 
 function renderFlowTaxTreatmentOptions(type: FlowType, selectedValue: FlowTaxTreatment): string {
@@ -2805,9 +3094,9 @@ function renderFlowTaxTreatmentOptions(type: FlowType, selectedValue: FlowTaxTre
 
 function buildFlowDefinitionFromDraft(draft: FlowDraft | FlowEditDraft): FlowDefinition {
   if (draft.type === "income") {
-    const startYear = parseYearInput(draft.startYear).year;
-    const endYear = draft.endYear.trim() ? parseYearInput(draft.endYear).year : undefined;
-    const annualRaisePercent = Number(draft.annualRaisePercent);
+    const startYear = parseYearInput(draft.oneTime ? draft.oneTimeYear : draft.startYear).year;
+    const endYear = !draft.oneTime && draft.endYear.trim() ? parseYearInput(draft.endYear).year : undefined;
+    const annualRaisePercent = draft.oneTime ? 0 : Number(draft.annualRaisePercent);
 
     if (!Number.isFinite(annualRaisePercent)) {
       throw new Error("Income annual raise % must be a finite number.");
@@ -2816,7 +3105,7 @@ function buildFlowDefinitionFromDraft(draft: FlowDraft | FlowEditDraft): FlowDef
     return new Flow({
       name: draft.name.trim(),
       type: "income",
-      formula: draft.formula.trim(),
+      formula: draft.oneTime ? "0" : draft.formula.trim(),
       taxTreatment: draft.taxTreatment,
       startYear,
       ...(endYear === undefined ? {} : { endYear }),
@@ -2827,19 +3116,103 @@ function buildFlowDefinitionFromDraft(draft: FlowDraft | FlowEditDraft): FlowDef
   return new Flow({
     name: draft.name.trim(),
     type: "expense",
-    formula: draft.formula.trim(),
-    inflationAdjusted: draft.inflationAdjusted,
+    formula: draft.oneTime ? "0" : draft.formula.trim(),
+    inflationAdjusted: draft.oneTime ? false : draft.inflationAdjusted,
     taxTreatment: draft.taxTreatment,
   }).toDefinition();
 }
 
 function focusFlowNameInputIfEmpty(formSelector: "#flow-form" | "#flow-edit-form"): void {
-  const nameInput = document.querySelector<HTMLInputElement>(`${formSelector} input[name="name"]`);
+  const nameInput = document.querySelector<HTMLInputElement>(`${formSelector} input[name="flowLabel"]`);
   if (!nameInput || nameInput.value.trim()) {
     return;
   }
 
   nameInput.focus();
+}
+
+function focusNewFlowNameInput(): void {
+  if (!shouldFocusNewFlowName) {
+    return;
+  }
+
+  shouldFocusNewFlowName = false;
+  focusFlowNameInputIfEmpty("#flow-form");
+}
+
+function focusFlowFormulaEditor(formSelector: "#flow-form" | "#flow-edit-form"): void {
+  const hiddenInput = document.querySelector<HTMLInputElement>(
+    `${formSelector} .formula-editor-hidden-input[name="formula"]`
+  );
+  const editor = hiddenInput?.closest("[data-formula-editor]")?.querySelector<HTMLDivElement>(".formula-editor-input");
+  if (!editor) {
+    return;
+  }
+
+  editor.focus();
+  setCaretCharacterOffset(editor, editor.textContent?.length ?? 0);
+}
+
+function focusNewAssetNameInput(): void {
+  if (!shouldFocusNewAssetName) {
+    return;
+  }
+
+  shouldFocusNewAssetName = false;
+  const nameInput = document.querySelector<HTMLInputElement>("#asset-form input[name=\"assetLabel\"]");
+  if (!nameInput || nameInput.value.trim()) {
+    return;
+  }
+
+  nameInput.focus();
+}
+
+function isZeroValueInput(value: string): boolean {
+  const parsed = parseEditableNumber(value);
+  return Number.isFinite(parsed) && Math.abs(parsed) <= 0.000001;
+}
+
+function doesAssetValueResolveToZero(value: string): boolean {
+  const formula = value.trim();
+  if (!formula) {
+    return false;
+  }
+
+  try {
+    return Math.abs(evaluateFormula(formula, buildPlannerFormulaContext())) <= 0.000001;
+  } catch {
+    return isZeroValueInput(value);
+  }
+}
+
+function focusAssetStartingValueInputIfZero(): void {
+  if (!shouldFocusAssetStartingValueIfZero) {
+    return;
+  }
+
+  shouldFocusAssetStartingValueIfZero = false;
+  if (!isZeroValueInput(assetDraft.startingValue)) {
+    return;
+  }
+
+  const hiddenInput = document.querySelector<HTMLInputElement>("#asset-form input[name=\"startingValue\"]");
+  const editor = hiddenInput
+    ?.closest<HTMLElement>("[data-formula-editor]")
+    ?.querySelector<HTMLDivElement>(".formula-editor-input");
+  if (!editor) {
+    return;
+  }
+
+  editor.focus();
+  const selection = window.getSelection();
+  if (!selection) {
+    return;
+  }
+
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
 function getSimulationSubmitState(): { disabled: boolean; reason: string } {
@@ -3210,6 +3583,7 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
             expectedReturn: resolvedAsset.expectedReturn,
             volatility: resolvedAsset.volatility,
             cashPurchasePercent: resolvedAsset.cashPurchasePercent,
+            closingCostPercent: resolvedAsset.closingCostPercent,
             mortgageType: resolvedAsset.mortgageType,
             ...(resolvedAsset.mortgageType === "interest-only"
               ? {
@@ -3244,7 +3618,9 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
             ...(resolvedAsset.saleTax
               ? {
                   saleTax: {
-                    costBasis: resolvedAsset.saleTax.costBasis,
+                    ...(resolvedAsset.saleTax.costBasis !== undefined
+                      ? { costBasis: resolvedAsset.saleTax.costBasis }
+                      : {}),
                     taxTreatment: resolvedAsset.saleTax.taxTreatment,
                   },
                 }
@@ -3267,6 +3643,7 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
     simulationAttempts: simulationDraft.attempts,
     simulationTaxPreset: simulationDraft.taxPreset,
     simulationHorizonYears: simulationDraft.horizonYears,
+    simulationCustomAssetLiquidation: simulationDraft.customAssetLiquidation,
     simulationInflationRate:
       getSimulationInflationModeForPreset(simulationDraft.inflationPreset) === "fixed" &&
       Number.isFinite(parseEditableNumber(simulationDraft.fixedInflationRate))
@@ -3331,6 +3708,25 @@ function downloadScenarioExport(user: UserIdentity): void {
   window.setTimeout(() => {
     URL.revokeObjectURL(url);
   }, 0);
+}
+
+async function clearScenario(user: UserIdentity): Promise<void> {
+  const confirmed = window.confirm(
+    "Delete all scenario data, clear the current simulation setup, and start from scratch? This cannot be undone."
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await storage.deletePlannerState(user.id);
+    removeVariableSweepDraftFromLocalStorage(user.id);
+    resetPlannerWorkspaceState();
+    renderPlanner(user);
+  } catch (error) {
+    console.error(error);
+    window.alert(error instanceof Error ? error.message : "Scenario data could not be cleared.");
+  }
 }
 
 function getExampleSimulationYear(
@@ -4088,15 +4484,20 @@ function renderSimulationBoard(): string {
           <div class="simulation-config-subsection">
             <div class="simulation-section-header">
               <div class="simulation-section-leading">
-                <label class="switch-field">
-                  <input
-                    name="simulationVariableSweepEnabled"
-                    type="checkbox"
-                    ${simulationDraft.variableSweep.enabled ? "checked" : ""}
-                    ${plannerState.variables.length === 0 ? "disabled" : ""}
-                  />
-                  <span class="switch-track" aria-hidden="true"></span>
-                </label>
+                <span
+                  class="disabled-reason-anchor"
+                  ${plannerState.variables.length === 0 ? `data-disabled-reason="Create at least one variable before running a variable sweep."` : ""}
+                >
+                  <label class="switch-field">
+                    <input
+                      name="simulationVariableSweepEnabled"
+                      type="checkbox"
+                      ${simulationDraft.variableSweep.enabled ? "checked" : ""}
+                      ${plannerState.variables.length === 0 ? "disabled" : ""}
+                    />
+                    <span class="switch-track" aria-hidden="true"></span>
+                  </label>
+                </span>
                 <div class="simulation-section-heading">
                   <h3>Variable Sweep</h3>
                 </div>
@@ -4105,13 +4506,7 @@ function renderSimulationBoard(): string {
               </div>
             </div>
             ${
-              plannerState.variables.length === 0
-                ? `
-            <div class="simulation-sweep-config">
-              <p class="helper-copy">Create a variable in Setup before using a sweep.</p>
-            </div>
-                `
-                : simulationDraft.variableSweep.enabled
+              plannerState.variables.length > 0 && simulationDraft.variableSweep.enabled
                   ? `
             <div class="simulation-sweep-config">
               <p class="helper-copy">Run ${VARIABLE_SWEEP_STEP_COUNT} simulations with one variable interpolated from min to max.</p>
@@ -4161,47 +4556,65 @@ function renderSimulationBoard(): string {
             : `
         <section class="simulation-section">
           <div class="simulation-section-header">
-            <div>
-              <h3>Assets</h3>
+            <div class="simulation-section-leading">
+              <label class="switch-field" aria-label="Custom asset liquidation">
+                <input
+                  name="simulationCustomAssetLiquidation"
+                  type="checkbox"
+                  ${simulationDraft.customAssetLiquidation ? "checked" : ""}
+                />
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
+              <div class="simulation-section-heading">
+                <h3>Custom Asset Liquidation</h3>
+              </div>
             </div>
           </div>
-          <p class="helper-copy">Assets are sold in proportion to their current portfolio weight. Use multipliers to tilt that weight. A multiplier of <code>1</code> keeps the current balance.</p>
-          <div class="board-scroll">
-            <table class="flow-table simulation-input-table">
-              <thead>
-                <tr>
-                  <th>Sell multiplier</th>
-                  <th>Asset</th>
-                  <th>Value</th>
-                  <th>Expected return (%)</th>
-                  <th>Volatility (%)</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${simulationDraft.assetRows
-                  .map(
-                    (asset) => `
-                      <tr>
-                        <td>${
-                          asset.kind === "home"
-                            ? "Not sellable"
-                            : `<input type="number" min="0" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" />`
-                        }</td>
-                        <th>
-                          <button type="button" class="link-button" data-edit-asset="${escapeHtml(asset.name)}">
-                            ${escapeHtml(asset.name)}
-                          </button>
-                        </th>
-                        <td>${formatCurrency(Number(asset.kind === "home" ? asset.initialCost : asset.startingValue))}</td>
-                        <td>${formatPercentage(Number(asset.expectedReturn))}</td>
-                        <td>${formatPercentage(Number(asset.volatility))}</td>
-                      </tr>
-                    `
-                  )
-                  .join("")}
-              </tbody>
-            </table>
+          ${
+            simulationDraft.customAssetLiquidation
+              ? `
+          <div class="simulation-section-body">
+            <p class="helper-copy">Assets are sold in proportion to their current portfolio weight. Use multipliers to tilt that weight. A multiplier of <code>1</code> keeps the current balance.</p>
+            <div class="board-scroll">
+              <table class="flow-table simulation-input-table">
+                <thead>
+                  <tr>
+                    <th>Sell multiplier</th>
+                    <th>Asset</th>
+                    <th>Value</th>
+                    <th>Expected return (%)</th>
+                    <th>Volatility (%)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${simulationDraft.assetRows
+                    .map(
+                      (asset) => `
+                        <tr>
+                          <td>${
+                            asset.kind === "home"
+                              ? "Not sellable"
+                              : `<input type="number" min="0" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" />`
+                          }</td>
+                          <th>
+                            <button type="button" class="link-button" data-edit-asset="${escapeHtml(asset.name)}">
+                              ${escapeHtml(asset.name)}
+                            </button>
+                          </th>
+                          <td>${formatCurrency(Number(asset.kind === "home" ? asset.initialCost : asset.startingValue))}</td>
+                          <td>${formatPercentage(Number(asset.expectedReturn))}</td>
+                          <td>${formatPercentage(Number(asset.volatility))}</td>
+                        </tr>
+                      `
+                    )
+                    .join("")}
+                </tbody>
+              </table>
+            </div>
           </div>
+                `
+              : ""
+          }
         </section>
             `
         }
@@ -4418,8 +4831,8 @@ function renderAssetComposer(): string {
         </div>
         <form id="asset-form" class="stack-form">
           <label>
-            Name
-            <input name="name" type="text" value="${escapeHtml(assetDraft.name)}" placeholder="Brokerage account" required />
+            Asset name
+            <input name="assetLabel" type="text" value="${escapeHtml(assetDraft.name)}" placeholder="Brokerage account" required />
           </label>
           <label>
             Asset type
@@ -4427,12 +4840,8 @@ function renderAssetComposer(): string {
               ${renderAssetTypeOptions(assetDraft.kind)}
             </select>
           </label>
-          ${renderAssetCoreFields(assetDraft)}
-          ${renderAssetReturnFields(assetDraft)}
-          ${renderAssetTaxModelFields(assetDraft)}
-          <p class="helper-copy">
-            Price return, cash generation, and taxable sales are modeled separately for simulation.
-          </p>
+          ${renderAssetDetailModeFields(assetDraft)}
+          ${renderAssetAdvancedSettingsToggle(assetDraft)}
           <div class="event-buttons">
             <button type="button" class="secondary-button" id="close-asset-composer-secondary">Cancel</button>
             <button type="submit">Save asset</button>
@@ -4479,8 +4888,8 @@ function renderAssetEditor(): string {
         </div>
         <form id="asset-edit-form" class="stack-form">
           <label>
-            Name
-            <input name="name" type="text" value="${escapeHtml(assetEditDraft.name)}" required />
+            Asset name
+            <input name="assetLabel" type="text" value="${escapeHtml(assetEditDraft.name)}" required />
           </label>
           <label>
             Asset type
@@ -4488,55 +4897,9 @@ function renderAssetEditor(): string {
               ${renderAssetTypeOptions(assetEditDraft.kind)}
             </select>
           </label>
-          ${renderAssetCoreFields(assetEditDraft)}
-          ${renderAssetReturnFields(assetEditDraft)}
-          ${renderAssetTaxModelFields(assetEditDraft)}
-          <p class="helper-copy">
-            Changes here only affect the saved asset record.
-          </p>
-          <section class="composer-subsection">
-            <div class="event-entry-header">
-              <strong>Correlation</strong>
-              <span class="summary-meta">-1 to 1 annual return correlation</span>
-            </div>
-            ${
-              relatedAssets.length === 0
-                ? `<p class="helper-copy">Create another asset to define pairwise correlations.</p>`
-                : `
-            <div class="board-scroll">
-              <table class="flow-table correlation-table">
-                <thead>
-                  <tr>
-                    <th>Other asset</th>
-                    <th>Correlation</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${relatedAssets
-                    .map(
-                      (asset) => `
-                        <tr>
-                          <th>${escapeHtml(asset.name)}</th>
-                          <td>
-                            <input
-                              type="number"
-                              min="-1"
-                              max="1"
-                              step="0.01"
-                              data-asset-correlation="${escapeAttribute(asset.name)}"
-                              value="${escapeHtml(assetEditDraft.correlations[asset.name] ?? "0")}"
-                            />
-                          </td>
-                        </tr>
-                      `
-                    )
-                    .join("")}
-                </tbody>
-              </table>
-            </div>
-                `
-            }
-          </section>
+          ${renderAssetDetailModeFields(assetEditDraft)}
+          ${renderAssetCorrelationFields(relatedAssets)}
+          ${renderAssetAdvancedSettingsToggle(assetEditDraft)}
           <div class="event-buttons">
             <button type="button" class="secondary-button" id="close-asset-editor">Cancel</button>
             <button type="submit">Save asset</button>
@@ -4547,22 +4910,140 @@ function renderAssetEditor(): string {
   `;
 }
 
-function renderAssetCoreFields(draft: AssetDraft): string {
+function renderAssetCorrelationFields(relatedAssets: readonly AssetDefinition[]): string {
+  if (assetEditDraft.kind !== "home" && assetEditDraft.detailMode !== "advanced") {
+    return "";
+  }
+
+  return `
+    <section class="composer-subsection">
+      <div class="event-entry-header">
+        <strong>Correlation</strong>
+        <span class="summary-meta">-1 to 1 annual return correlation</span>
+      </div>
+      ${
+        relatedAssets.length === 0
+          ? `<p class="helper-copy">Create another asset to define pairwise correlations.</p>`
+          : `
+      <div class="board-scroll">
+        <table class="flow-table correlation-table">
+          <thead>
+            <tr>
+              <th>Other asset</th>
+              <th>Correlation</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${relatedAssets
+              .map(
+                (asset) => `
+                  <tr>
+                    <th>${escapeHtml(asset.name)}</th>
+                    <td>
+                      <input
+                        type="number"
+                        min="-1"
+                        max="1"
+                        step="0.01"
+                        data-asset-correlation="${escapeAttribute(asset.name)}"
+                        value="${escapeHtml(assetEditDraft.correlations[asset.name] ?? "0")}"
+                      />
+                    </td>
+                  </tr>
+                `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+          `
+      }
+    </section>
+  `;
+}
+
+function renderAssetAdvancedSettingsToggle(draft: AssetDraft): string {
   if (draft.kind === "home") {
+    return "";
+  }
+
+  return `
+    <div class="asset-toggle-row asset-advanced-toggle-row">
+      <label class="switch-field asset-toggle-switch" aria-label="Show advanced settings">
+        <input
+          type="checkbox"
+          name="advancedSettingsEnabled"
+          ${draft.detailMode === "advanced" ? "checked" : ""}
+        />
+        <span class="switch-track" aria-hidden="true"></span>
+      </label>
+      <div class="asset-toggle-copy">
+        <strong>Show advanced settings</strong>
+      </div>
+    </div>
+  `;
+}
+
+function renderAssetDetailModeFields(draft: AssetDraft): string {
+  if (draft.kind === "home") {
+    return renderHomeAssetFields(draft);
+  }
+
+  if (draft.detailMode === "advanced") {
     return `
-      <label>
-        Initial cost
-        ${renderFormulaEditor({
-          inputName: "initialCost",
-          value: draft.initialCost,
-          placeholder: "salary * 4",
-          variablesScope: "planner",
-        })}
-      </label>
-      <label>
-        Cash purchase (%)
-        <input name="cashPurchasePercent" type="number" step="0.01" value="${escapeHtml(draft.cashPurchasePercent)}" required />
-      </label>
+      ${renderAssetCoreFields(draft)}
+      ${renderAssetReturnFields(draft)}
+      ${renderAssetTaxModelFields(draft)}
+    `;
+  }
+
+  return `
+    ${renderAssetCoreFields(draft)}
+    ${isBondAssetDraftKind(draft.kind) ? renderBasicBondReturnFields(draft) : renderBasicStockReturnFields(draft)}
+  `;
+}
+
+function renderHomeAssetFields(draft: AssetDraft): string {
+  return `
+    <section class="composer-subsection asset-form-section">
+      <div class="event-entry-header">
+        <strong>Value and upkeep</strong>
+      </div>
+      <div class="split-fields">
+        <label>
+          Home price
+          ${renderFormulaEditor({
+            inputName: "initialCost",
+            value: draft.initialCost,
+            placeholder: "salary * 4",
+            variablesScope: "planner",
+          })}
+        </label>
+        <label>
+          Purchase year
+          <input name="purchaseYear" type="number" step="1" value="${escapeHtml(draft.purchaseYear)}" required />
+        </label>
+      </div>
+      <div class="split-fields">
+        <label>
+          Property tax rate (%)
+          <input name="propertyTaxRate" type="number" step="0.01" value="${escapeHtml(draft.propertyTaxRate)}" required />
+        </label>
+        <label>
+          Other monthly $
+          <input
+            name="monthlyNonTaxCosts"
+            ${renderEditableNumberInputAttributes()}
+            value="${escapeHtml(formatEditableNumberInput(draft.monthlyNonTaxCosts))}"
+            required
+          />
+        </label>
+      </div>
+    </section>
+    <section class="composer-subsection asset-form-section">
+      <div class="event-entry-header">
+        <strong>Mortgage</strong>
+      </div>
       <div class="split-fields">
         <label>
           Mortgage type
@@ -4593,29 +5074,28 @@ function renderAssetCoreFields(draft: AssetDraft): string {
           Mortgage term (years)
           <input name="mortgageTermYears" type="number" step="1" value="${escapeHtml(draft.mortgageTermYears)}" required />
         </label>
+        <label>
+          Down payment %
+          <input name="cashPurchasePercent" type="number" step="0.01" value="${escapeHtml(draft.cashPurchasePercent)}" required />
+        </label>
       </div>
       <div class="split-fields">
         <label>
-          Non-tax monthlies
-          <input
-            name="monthlyNonTaxCosts"
-            ${renderEditableNumberInputAttributes()}
-            value="${escapeHtml(formatEditableNumberInput(draft.monthlyNonTaxCosts))}"
-            required
-          />
-        </label>
-        <label>
-          Property tax rate (%)
-          <input name="propertyTaxRate" type="number" step="0.01" value="${escapeHtml(draft.propertyTaxRate)}" required />
+          Closing costs (%)
+          <input name="closingCostPercent" type="number" step="0.01" value="${escapeHtml(draft.closingCostPercent)}" required />
         </label>
       </div>
-      <label>
-        Purchase year
-        <input name="purchaseYear" type="number" step="1" value="${escapeHtml(draft.purchaseYear)}" required />
-      </label>
-    `;
-  }
+    </section>
+    <section class="composer-subsection asset-form-section">
+      <div class="event-entry-header">
+        <strong>Appreciation</strong>
+      </div>
+      ${renderAssetReturnFields(draft)}
+    </section>
+  `;
+}
 
+function renderAssetCoreFields(draft: AssetDraft): string {
   return `
     <label>
       Starting value
@@ -4626,6 +5106,84 @@ function renderAssetCoreFields(draft: AssetDraft): string {
         variablesScope: "planner",
       })}
     </label>
+  `;
+}
+
+function getPrimaryBondCashGenerationDraft(draft: AssetDraft): AssetCashGenerationDraft {
+  if (!isBondAssetDraftKind(draft.kind)) {
+    throw new Error(`Basic bond fields require a bond asset draft.`);
+  }
+
+  draft.cashGenerationEnabled = true;
+
+  if (draft.cashGenerations.length === 0) {
+    const preset = getAssetTypePreset(draft.kind);
+    const presetCashGeneration = preset?.cashGenerations[0];
+    draft.cashGenerations = [
+      presetCashGeneration
+        ? createAssetCashGenerationDraftFromPreset(presetCashGeneration)
+        : createAssetCashGenerationDraft(draft.kind, { expanded: true }),
+    ];
+  }
+
+  return draft.cashGenerations[0];
+}
+
+function renderBasicBondReturnFields(draft: AssetDraft): string {
+  const cashGeneration = getPrimaryBondCashGenerationDraft(draft);
+
+  return `
+    <div class="split-fields asset-basic-fields">
+      <label>
+        Interest rate (%)
+        <input
+          name="assetBasicBondInterestRate"
+          data-cash-generation-field="${cashGeneration.id}:rate"
+          type="number"
+          step="0.01"
+          value="${escapeHtml(cashGeneration.rate)}"
+          required
+        />
+      </label>
+      <label>
+        Volatility (%)
+        <input
+          name="assetBasicBondVolatility"
+          data-cash-generation-field="${cashGeneration.id}:volatility"
+          type="number"
+          step="0.01"
+          value="${escapeHtml(cashGeneration.volatility)}"
+          required
+        />
+      </label>
+    </div>
+  `;
+}
+
+function renderBasicStockReturnFields(draft: AssetDraft): string {
+  return `
+    <div class="split-fields asset-basic-fields">
+      <label>
+        Returns (%)
+        <input
+          name="expectedReturn"
+          type="number"
+          step="0.01"
+          value="${escapeHtml(draft.expectedReturn)}"
+          required
+        />
+      </label>
+      <label>
+        Volatility (%)
+        <input
+          name="volatility"
+          type="number"
+          step="0.01"
+          value="${escapeHtml(draft.volatility)}"
+          required
+        />
+      </label>
+    </div>
   `;
 }
 
@@ -4657,42 +5215,89 @@ function renderAssetReturnFields(draft: AssetDraft): string {
         />
       </label>
     </div>
-    ${preset ? `<p class="helper-copy">${escapeHtml(preset.label)} uses locked price-return settings.</p>` : ""}
   `;
 }
 
+function getAssetSaleTaxTreatmentLabel(treatment: AssetSaleTaxTreatment): string {
+  switch (treatment) {
+    case "short-term-capital-gains":
+      return "Short-term capital gains";
+    case "not-taxable":
+      return "Not taxable";
+    case "long-term-capital-gains":
+    default:
+      return "Long-term capital gains";
+  }
+}
+
+function renderAssetSaleTaxDraftPreview(draft: AssetDraft): string {
+  const costBasis = draft.saleTaxCostBasis.trim();
+  const basisLabel = costBasis ? `basis ${costBasis}` : "basis not set";
+  return `${getAssetSaleTaxTreatmentLabel(draft.saleTaxTreatment)}, ${basisLabel}`;
+}
+
 function renderAssetSaleTaxFields(draft: AssetDraft): string {
+  const bodyId = "asset-sale-tax-body";
+
   return `
     <section class="composer-subsection">
       <div class="asset-toggle-row">
-        <div class="asset-toggle-copy">
-          <strong>Tax on selling for cash</strong>
-          <span class="summary-meta">For realized capital gains or other taxable sale events</span>
+        <div class="asset-toggle-leading">
+          ${
+            draft.saleTaxEnabled
+              ? `
+          <button
+            type="button"
+            class="ghost-button icon-button disclosure-button"
+            data-toggle-sale-tax="true"
+            aria-label="${draft.saleTaxExpanded ? "Collapse tax when selling" : "Expand tax when selling"}"
+            aria-expanded="${draft.saleTaxExpanded ? "true" : "false"}"
+            aria-controls="${bodyId}"
+          >
+            ${renderDisclosureIcon(draft.saleTaxExpanded)}
+          </button>
+              `
+              : ""
+          }
+          <div class="asset-toggle-copy">
+            <strong>Tax when selling</strong>
+            <span class="summary-meta">
+              ${
+                draft.saleTaxEnabled
+                  ? escapeHtml(renderAssetSaleTaxDraftPreview(draft))
+                  : "For realized capital gains or other taxable sale events"
+              }
+            </span>
+          </div>
         </div>
-        <label class="switch-field asset-toggle-switch" aria-label="Enable tax on selling for cash">
-          <input type="checkbox" name="saleTaxEnabled" ${draft.saleTaxEnabled ? "checked" : ""} />
-          <span class="switch-track" aria-hidden="true"></span>
-        </label>
+        <div class="asset-toggle-actions">
+          <label class="switch-field asset-toggle-switch" aria-label="Enable tax on selling for cash">
+            <input type="checkbox" name="saleTaxEnabled" ${draft.saleTaxEnabled ? "checked" : ""} />
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
       </div>
       ${
         draft.saleTaxEnabled
           ? `
-        <label>
-          Starting cost basis
-          <input
-            name="saleTaxCostBasis"
-            ${renderEditableNumberInputAttributes()}
-            value="${escapeHtml(formatEditableNumberInput(draft.saleTaxCostBasis))}"
-          />
-        </label>
-        <label>
-          Realized gain tax treatment
-          <select name="saleTaxTreatment">
-            <option value="short-term-capital-gains" ${draft.saleTaxTreatment === "short-term-capital-gains" ? "selected" : ""}>Short-term capital gains</option>
-            <option value="long-term-capital-gains" ${draft.saleTaxTreatment === "long-term-capital-gains" ? "selected" : ""}>Long-term capital gains</option>
-            <option value="not-taxable" ${draft.saleTaxTreatment === "not-taxable" ? "selected" : ""}>Not taxable</option>
-          </select>
-        </label>
+        <div id="${bodyId}" class="asset-sale-tax-body" ${draft.saleTaxExpanded ? "" : "hidden"}>
+          <label>
+            Starting cost basis
+            <input
+              name="saleTaxCostBasis"
+              ${renderEditableNumberInputAttributes()}
+              value="${escapeHtml(formatEditableNumberInput(draft.saleTaxCostBasis))}"
+            />
+          </label>
+          <label>
+            Realized gain tax treatment
+            <select name="saleTaxTreatment">
+              <option value="short-term-capital-gains" ${draft.saleTaxTreatment === "short-term-capital-gains" ? "selected" : ""}>Short-term capital gains</option>
+              <option value="long-term-capital-gains" ${draft.saleTaxTreatment === "long-term-capital-gains" ? "selected" : ""}>Long-term capital gains</option>
+              <option value="not-taxable" ${draft.saleTaxTreatment === "not-taxable" ? "selected" : ""}>Not taxable</option>
+            </select>
+          </label>
+        </div>
           `
           : ""
       }
@@ -4702,15 +5307,7 @@ function renderAssetSaleTaxFields(draft: AssetDraft): string {
 
 function renderAssetTaxModelFields(draft: AssetDraft): string {
   if (draft.kind === "home") {
-    return `
-      <section class="composer-subsection">
-        <div class="event-entry-header">
-          <strong>Home cash model</strong>
-          <span class="summary-meta">Mortgage, property tax, and operating costs are generated automatically.</span>
-        </div>
-        <p class="helper-copy">Mortgage interest and property tax feed federal itemized deduction analysis. Home assets cannot be sold in simulation.</p>
-      </section>
-    `;
+    return "";
   }
 
   return `
@@ -4782,7 +5379,7 @@ function renderAssetTaxModelFields(draft: AssetDraft): string {
                         <input name="cashGenerationVolatility" data-cash-generation-field="${cashGeneration.id}:volatility" type="number" step="0.01" value="${escapeHtml(cashGeneration.volatility)}" />
                       </label>
                       <label>
-                        Inflation correlation
+                        Inflation correlation (YoY delta)
                         <input name="cashGenerationInflationCorrelation" data-cash-generation-field="${cashGeneration.id}:inflationCorrelation" type="number" step="0.01" value="${escapeHtml(cashGeneration.inflationCorrelation)}" />
                       </label>
                     </div>
@@ -4834,8 +5431,8 @@ function renderTaxComposer(): string {
         </div>
         <form id="tax-form" class="stack-form">
           <label>
-            Name
-            <input name="name" type="text" value="${escapeHtml(taxDraft.name)}" placeholder="Qualified dividends" required />
+            Tax model name
+            <input name="taxLabel" type="text" value="${escapeHtml(taxDraft.name)}" placeholder="Qualified dividends" required />
           </label>
           <label>
             Maximum tax
@@ -4898,7 +5495,7 @@ function renderTaxComposer(): string {
                             <button type="button" class="ghost-button" data-remove-tax-exclusion="${exclusion.id}">Remove</button>
                           </div>
                           <label>
-                            Name
+                            Exclusion name
                             <input type="text" data-tax-exclusion-field="${exclusion.id}:name" value="${escapeHtml(exclusion.name)}" />
                           </label>
                           <div class="split-fields">
@@ -4952,19 +5549,35 @@ function renderExpenseToggle(name: "oneTime" | "inflationAdjusted", checked: boo
 
 function renderIncomeFlowFields(draft: FlowDraft | FlowEditDraft): string {
   return `
-    <div class="split-fields">
-      <label>
-        Start year
-        <input name="startYear" type="number" min="1900" max="9999" value="${escapeHtml(draft.startYear)}" required />
-      </label>
-      <label>
-        End year
-        <input name="endYear" type="number" min="1900" max="9999" value="${escapeHtml(draft.endYear)}" placeholder="Optional" />
-      </label>
-    </div>
+    ${renderExpenseToggle("oneTime", draft.oneTime, "One-time income")}
+    ${
+      draft.oneTime
+        ? renderOneTimeFlowFields(draft)
+        : `
+          <div class="split-fields">
+            <label>
+              Start year
+              <input name="startYear" type="number" min="1900" max="9999" value="${escapeHtml(draft.startYear)}" required />
+            </label>
+            <label>
+              End year
+              <input name="endYear" type="number" min="1900" max="9999" value="${escapeHtml(draft.endYear)}" placeholder="Optional" />
+            </label>
+          </div>
+          <label>
+            % raise per year
+            <input name="annualRaisePercent" type="number" step="0.01" value="${escapeHtml(draft.annualRaisePercent)}" />
+          </label>
+        `
+    }
+  `;
+}
+
+function renderOneTimeFlowFields(draft: FlowDraft | FlowEditDraft): string {
+  return `
     <label>
-      % raise per year
-      <input name="annualRaisePercent" type="number" step="0.01" value="${escapeHtml(draft.annualRaisePercent)}" />
+      Year
+      <input name="oneTimeYear" type="number" min="1900" max="9999" value="${escapeHtml(draft.oneTimeYear)}" required />
     </label>
   `;
 }
@@ -4992,9 +5605,9 @@ function renderFlowComposer(): string {
             </select>
           </label>
           <label>
-            Name
+            ${flowDraft.type === "income" ? "Income name" : "Expense name"}
             <input
-              name="name"
+              name="flowLabel"
               type="text"
               placeholder="${flowDraft.type === "income" ? "Salary" : "Health insurance"}"
               value="${escapeHtml(flowDraft.name)}"
@@ -5021,11 +5634,13 @@ function renderFlowComposer(): string {
               ? renderIncomeFlowFields(flowDraft)
               : `
                 ${renderExpenseToggle("oneTime", flowDraft.oneTime, "One-time expense")}
-                ${renderExpenseToggle("inflationAdjusted", flowDraft.inflationAdjusted, "Apply inflation")}
-                <p class="helper-copy">
-                  One-time expenses automatically create a next-year override that sets the formula to 0.
-                </p>
+                ${flowDraft.oneTime ? renderOneTimeFlowFields(flowDraft) : renderExpenseToggle("inflationAdjusted", flowDraft.inflationAdjusted, "Apply inflation")}
               `
+          }
+          ${
+            flowDraft.oneTime
+              ? ""
+              : renderFlowChangePanel(renderFlowDraftEvents(flowDraft), "open-flow-draft-event-composer")
           }
           <div class="event-buttons">
             <button type="button" class="secondary-button" id="close-flow-composer-secondary">Cancel</button>
@@ -5054,7 +5669,7 @@ function renderEventComposer(): string {
         <form id="event-form" class="stack-form">
           <label>
             Event name
-            <input id="event-name" name="name" type="text" value="${escapeHtml(eventDraft.name)}" placeholder="Promotion cycle" required />
+            <input id="event-name" name="eventLabel" type="text" value="${escapeHtml(eventDraft.name)}" placeholder="Promotion cycle" required />
           </label>
           <label>
             Flow
@@ -5135,7 +5750,10 @@ function renderFlowEvents(flowName: string): string {
   const rows = hasDraftRow ? [...events, null] : events;
 
   if (rows.length === 0) {
-    return `<p class="helper-copy">No scheduled flow changes yet.</p>`;
+    const flowType =
+      plannerState.flows.find((flow) => flow.name === flowName)?.type ??
+      (flowEditDraft.originalName === flowName ? flowEditDraft.type : "expense");
+    return `<p class="helper-copy">Modify the amount of ${flowType === "income" ? "income" : "this expense"} over time.</p>`;
   }
 
   return `
@@ -5213,6 +5831,95 @@ function renderFlowEvents(flowName: string): string {
   `;
 }
 
+function renderFlowDraftEvents(draft: FlowDraft): string {
+  const hasDraftRow = activeFlowEventEdit?.eventName === null;
+  const rows = hasDraftRow ? [...draft.changeEvents, null] : draft.changeEvents;
+
+  if (rows.length === 0) {
+    return `<p class="helper-copy">Modify the amount of ${draft.type === "income" ? "income" : "this expense"} over time.</p>`;
+  }
+
+  return `
+    <div class="board-scroll">
+      <table class="flow-table flow-event-table">
+        <thead>
+          <tr>
+            <th>Year</th>
+            <th>Formula</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map((change) => {
+              const changeId = change?.id ?? null;
+              const yearValue = activeFlowEventEdit?.eventName === changeId ? flowEventDraft.year : change?.year ?? "";
+              const formulaValue =
+                activeFlowEventEdit?.eventName === changeId ? flowEventDraft.formula : change?.formula ?? "";
+              const isEditingYear = activeFlowEventEdit?.eventName === changeId && activeFlowEventEdit.field === "year";
+              const isEditingFormula =
+                activeFlowEventEdit?.eventName === changeId && activeFlowEventEdit.field === "formula";
+
+              return `
+                <tr>
+                  <td>
+                    ${
+                      isEditingYear
+                        ? `<input class="flow-event-inline-input" data-inline-flow-event-year="${escapeAttribute(
+                            changeId ?? "__new__"
+                          )}" type="number" min="1900" max="9999" value="${escapeHtml(yearValue)}" />`
+                        : `<button type="button" class="link-button flow-event-inline-button" data-start-edit-flow-draft-event-year="${escapeAttribute(
+                            changeId ?? "__new__"
+                          )}">${escapeHtml(yearValue || "Year")}</button>`
+                    }
+                  </td>
+                  <td>
+                    ${
+                      isEditingFormula
+                        ? `<div data-inline-flow-event-formula-editor="${escapeAttribute(changeId ?? "__new__")}">
+                            ${renderFormulaEditor({
+                              inputName: "flowEventFormula",
+                              value: formulaValue,
+                              placeholder: "1,000",
+                              variablesScope: "planner",
+                            })}
+                          </div>`
+                        : `<button type="button" class="link-button flow-event-inline-button flow-event-inline-formula" data-start-edit-flow-draft-event-formula="${escapeAttribute(
+                            changeId ?? "__new__"
+                          )}"><code>${escapeHtml(formulaValue ? formatFormulaText(formulaValue) : "Formula")}</code></button>`
+                    }
+                  </td>
+                  <td>
+                    ${
+                      change
+                        ? `<button type="button" class="ghost-button" data-delete-flow-draft-event="${escapeHtml(change.id)}">Delete</button>`
+                        : `<span class="summary-meta">New</span>`
+                    }
+                  </td>
+                </tr>
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderFlowChangePanel(content: string, addButtonId: string): string {
+  return `
+    <section class="composer-subsection flow-editor-events-section">
+      <div class="event-entry-header">
+        <h3>Change over time</h3>
+      </div>
+      ${content}
+      <div class="event-buttons">
+        <button type="button" class="secondary-button" id="${addButtonId}">Add change</button>
+      </div>
+    </section>
+  `;
+}
+
 function renderFlowEditor(): string {
   if (!flowEditorOpen) {
     return "";
@@ -5254,8 +5961,8 @@ function renderFlowEditor(): string {
             </select>
           </label>
           <label>
-            Name
-            <input name="name" type="text" value="${escapeHtml(flowEditDraft.name)}" required />
+            ${flowEditDraft.type === "income" ? "Income name" : "Expense name"}
+            <input name="flowLabel" type="text" value="${escapeHtml(flowEditDraft.name)}" required />
           </label>
           <label>
             Tax treatment
@@ -5277,27 +5984,19 @@ function renderFlowEditor(): string {
               ? renderIncomeFlowFields(flowEditDraft)
               : `
                 ${renderExpenseToggle("oneTime", flowEditDraft.oneTime, "One-time expense")}
-                ${renderExpenseToggle("inflationAdjusted", flowEditDraft.inflationAdjusted, "Apply inflation")}
-                <p class="helper-copy">
-                  Keeps this expense active for the start year, then creates a hidden next-year formula override to 0.
-                </p>
+                ${flowEditDraft.oneTime ? renderOneTimeFlowFields(flowEditDraft) : renderExpenseToggle("inflationAdjusted", flowEditDraft.inflationAdjusted, "Apply inflation")}
               `
+          }
+          ${
+            flowEditDraft.oneTime
+              ? ""
+              : renderFlowChangePanel(renderFlowEvents(flowEditDraft.originalName), "open-flow-event-composer")
           }
           <div class="event-buttons">
             <button type="button" class="secondary-button" id="close-flow-editor-secondary">Cancel</button>
             <button type="submit">Save ${flowEditDraft.type}</button>
           </div>
         </form>
-        <section class="composer-subsection flow-editor-events-section">
-          <div class="event-entry-header">
-            <strong>Change over time</strong>
-            <div class="event-buttons">
-              <span class="summary-meta">Sorted by effective year</span>
-              <button type="button" class="secondary-button" id="open-flow-event-composer">Add change</button>
-            </div>
-          </div>
-          ${renderFlowEvents(flowEditDraft.originalName)}
-        </section>
       </section>
     </div>
   `;
@@ -5401,11 +6100,13 @@ function bindHandlers(user: UserIdentity): void {
   bindSimulationChartTooltip();
   focusInlineAssetValueInput();
   focusInlineExpenseValueInput();
+  focusNewAssetNameInput();
 
   const openAssetButton = document.querySelector<HTMLButtonElement>("#open-asset-composer");
   const openFlowButton = document.querySelector<HTMLButtonElement>("#open-flow-composer");
   const saveScenarioButton = document.querySelector<HTMLButtonElement>("#save-scenario-button");
   const loadScenarioButton = document.querySelector<HTMLButtonElement>("#load-scenario-button");
+  const clearScenarioButton = document.querySelector<HTMLButtonElement>("#clear-scenario-button");
   const loadScenarioInput = document.querySelector<HTMLInputElement>("#load-scenario-input");
 
   saveScenarioButton?.addEventListener("click", () => {
@@ -5414,6 +6115,10 @@ function bindHandlers(user: UserIdentity): void {
 
   loadScenarioButton?.addEventListener("click", () => {
     loadScenarioInput?.click();
+  });
+
+  clearScenarioButton?.addEventListener("click", () => {
+    void clearScenario(user);
   });
 
   loadScenarioInput?.addEventListener("change", async () => {
@@ -5456,11 +6161,13 @@ function bindHandlers(user: UserIdentity): void {
 
   openFlowButton?.addEventListener("click", () => {
     flowComposerOpen = true;
+    shouldFocusNewFlowName = true;
     renderPlanner(user);
   });
 
   openAssetButton?.addEventListener("click", () => {
     assetComposerOpen = true;
+    shouldFocusNewAssetName = true;
     activeSummaryTab = "assets";
     renderPlanner(user);
   });
@@ -5603,6 +6310,13 @@ function bindHandlers(user: UserIdentity): void {
         syncSimulationVariableSweepDraft();
       }
       invalidateSimulationState();
+      renderPlanner(user);
+      void persistPlannerState(user);
+      return;
+    } else if (target.name === "simulationCustomAssetLiquidation" && target instanceof HTMLInputElement) {
+      simulationDraft.customAssetLiquidation = target.checked;
+      invalidateSimulationState();
+      syncSimulationSubmitState();
       renderPlanner(user);
       void persistPlannerState(user);
       return;
@@ -6281,6 +6995,8 @@ function bindHandlers(user: UserIdentity): void {
   bindFlowComposer(user);
   bindFlowEditor(user);
   bindEventComposer(user);
+  focusNewFlowNameInput();
+  focusAssetStartingValueInputIfZero();
 }
 
 function focusInlineAssetValueInput(): void {
@@ -6382,7 +7098,8 @@ function bindFormulaEditors(): void {
 
         if (
           wrapper.closest("[data-inline-asset-value-form]") ||
-          wrapper.closest("[data-inline-expense-value-form]")
+          wrapper.closest("[data-inline-expense-value-form]") ||
+          wrapper.closest("[data-inline-flow-event-formula-editor]")
         ) {
           editor.blur();
           return;
@@ -6589,7 +7306,7 @@ function isPlainNumericFormula(formula: string): boolean {
 
 function resolveAssetValueInput(
   input: string,
-  fieldLabel: "Value" | "Initial cost"
+  fieldLabel: "Value" | "Home price"
 ): {
   value: number;
   formula?: string;
@@ -6691,11 +7408,246 @@ function updateFormulaEditorValidation(binding: FormulaEditorBinding): void {
   binding.status.hidden = result.message.length === 0;
 }
 
+function setDisabledReasonControlsHighlighted(controls: HTMLElement[] | undefined, highlighted: boolean): void {
+  for (const control of controls ?? []) {
+    if (highlighted) {
+      control.dataset.disabledReasonControl = "true";
+    } else {
+      delete control.dataset.disabledReasonControl;
+    }
+  }
+}
+
+function bindDisabledReasonAnchorControls(anchor: HTMLElement, button: HTMLButtonElement): void {
+  if (anchor.dataset.disabledReasonControlsBound === "true") {
+    return;
+  }
+
+  anchor.dataset.disabledReasonControlsBound = "true";
+  anchor.addEventListener("pointerenter", () => {
+    setDisabledReasonControlsHighlighted(button.disabledReasonControls, true);
+  });
+  anchor.addEventListener("pointerleave", () => {
+    setDisabledReasonControlsHighlighted(button.disabledReasonControls, false);
+  });
+  anchor.addEventListener("focusin", () => {
+    setDisabledReasonControlsHighlighted(button.disabledReasonControls, true);
+  });
+  anchor.addEventListener("focusout", () => {
+    setDisabledReasonControlsHighlighted(button.disabledReasonControls, false);
+  });
+}
+
+function setButtonDisabledReason(
+  button: HTMLButtonElement,
+  { reason, controls }: DisabledSubmitState
+): void {
+  const anchor = getButtonDisabledReasonAnchor(button);
+  bindDisabledReasonAnchorControls(anchor, button);
+  setDisabledReasonControlsHighlighted(button.disabledReasonControls, false);
+  button.disabledReason = reason || undefined;
+  button.disabledReasonControls = reason ? controls : [];
+  button.disabled = Boolean(button.disabledReason);
+  button.setAttribute("aria-disabled", button.disabledReason ? "true" : "false");
+  button.title = "";
+  if (button.disabledReason) {
+    anchor.dataset.disabledReason = button.disabledReason;
+  } else {
+    delete anchor.dataset.disabledReason;
+    delete button.dataset.disabledReason;
+  }
+}
+
+function getButtonDisabledReasonAnchor(button: HTMLButtonElement): HTMLElement {
+  const parent = button.parentElement;
+  if (parent?.classList.contains("disabled-reason-anchor")) {
+    return parent;
+  }
+
+  const anchor = document.createElement("span");
+  anchor.className = "disabled-reason-anchor";
+  button.parentNode?.insertBefore(anchor, button);
+  anchor.appendChild(button);
+  return anchor;
+}
+
+function getNamedInputControl(form: HTMLFormElement, name: string): HTMLElement | null {
+  return form.querySelector<HTMLElement>(`[name="${name}"]`);
+}
+
+function getFormulaEditorControlByInputName(form: HTMLFormElement, name: string): HTMLElement | null {
+  const input = form.querySelector<HTMLInputElement>(`.formula-editor-hidden-input[name="${name}"]`);
+  return input?.closest<HTMLElement>("[data-formula-editor]") ?? input;
+}
+
+function getInvalidFormulaSubmitState(form: HTMLFormElement): DisabledSubmitState {
+  const invalidFormulas = [...form.querySelectorAll<HTMLElement>("[data-formula-editor]")]
+    .filter((wrapper) => wrapper.dataset.invalid === "true");
+  if (invalidFormulas.length === 0) {
+    return { reason: "", controls: [] };
+  }
+
+  const status = invalidFormulas[0]?.querySelector<HTMLElement>(".formula-editor-status");
+  const reason = status?.textContent?.trim() || "Fix the highlighted formula.";
+  return {
+    reason,
+    controls: invalidFormulas.filter((wrapper) => {
+      const wrapperReason =
+        wrapper.querySelector<HTMLElement>(".formula-editor-status")?.textContent?.trim() ||
+        "Fix the highlighted formula.";
+      return wrapperReason === reason;
+    }),
+  };
+}
+
+function getAssetDraftSubmitDisabledState(form: HTMLFormElement, draft: AssetDraft | AssetEditDraft): DisabledSubmitState {
+  if (!draft.name.trim()) {
+    const nameInput = getNamedInputControl(form, "assetLabel");
+    return {
+      reason: "Enter an asset name.",
+      controls: nameInput ? [nameInput] : [],
+    };
+  }
+
+  const invalidFormulaState = getInvalidFormulaSubmitState(form);
+  if (invalidFormulaState.reason) {
+    return invalidFormulaState;
+  }
+
+  if (draft.kind === "home" && doesAssetValueResolveToZero(draft.initialCost)) {
+    const homePriceControl = getFormulaEditorControlByInputName(form, "initialCost");
+    return {
+      reason: "Home price must be greater than 0.",
+      controls: homePriceControl ? [homePriceControl] : [],
+    };
+  }
+
+  if (draft.kind !== "home" && doesAssetValueResolveToZero(draft.startingValue)) {
+    const startingValueControl = getFormulaEditorControlByInputName(form, "startingValue");
+    return {
+      reason: "Starting value must be greater than 0.",
+      controls: startingValueControl ? [startingValueControl] : [],
+    };
+  }
+
+  return { reason: "", controls: [] };
+}
+
+function getFlowChangeSubmitDisabledState(form: HTMLFormElement, draft: FlowDraft | FlowEditDraft): DisabledSubmitState {
+  if (draft.oneTime || !form.querySelector(".flow-editor-events-section")) {
+    return { reason: "", controls: [] };
+  }
+
+  const formulaControl = getFormulaEditorControlByInputName(form, "flowEventFormula");
+  const reason = "Enter a formula for the change over time.";
+
+  if (activeFlowEventEdit && !flowEventDraft.formula.trim()) {
+    return {
+      reason,
+      controls: formulaControl ? [formulaControl] : [],
+    };
+  }
+
+  if ("changeEvents" in draft && draft.changeEvents.some((change) => !change.formula.trim())) {
+    return {
+      reason,
+      controls: formulaControl ? [formulaControl] : [],
+    };
+  }
+
+  if ("originalName" in draft) {
+    const hasEmptyChange = getExpenseChangeEvents(draft.originalName).some((event) => {
+      const action = event.schedule[0]?.actions[0];
+      return action?.kind === "set-flow-formula" && !action.formula.trim();
+    });
+
+    if (hasEmptyChange) {
+      return {
+        reason,
+        controls: formulaControl ? [formulaControl] : [],
+      };
+    }
+  }
+
+  return { reason: "", controls: [] };
+}
+
+function getFlowDraftSubmitDisabledState(form: HTMLFormElement, draft: FlowDraft | FlowEditDraft): DisabledSubmitState {
+  if (!draft.name.trim()) {
+    const nameInput = getNamedInputControl(form, "flowLabel");
+    return {
+      reason: `Enter ${draft.type === "income" ? "an income" : "an expense"} name.`,
+      controls: nameInput ? [nameInput] : [],
+    };
+  }
+
+  if (!draft.formula.trim()) {
+    const formulaControl = getFormulaEditorControlByInputName(form, "formula");
+    return {
+      reason: `Enter a ${draft.type} amount.`,
+      controls: formulaControl ? [formulaControl] : [],
+    };
+  }
+
+  const invalidFormulaState = getInvalidFormulaSubmitState(form);
+  if (invalidFormulaState.reason) {
+    return invalidFormulaState;
+  }
+
+  const invalidChangeState = getFlowChangeSubmitDisabledState(form, draft);
+  if (invalidChangeState.reason) {
+    return invalidChangeState;
+  }
+
+  if (draft.oneTime && !/^\d{4}$/.test(draft.oneTimeYear.trim())) {
+    const yearInput = getNamedInputControl(form, "oneTimeYear");
+    return {
+      reason: `Enter a one-time ${draft.type} year.`,
+      controls: yearInput ? [yearInput] : [],
+    };
+  }
+
+  try {
+    const resolvedAmount = evaluateFormula(draft.formula, buildPlannerFormulaContext());
+    if (Number.isFinite(resolvedAmount) && resolvedAmount < 0) {
+      const formulaControl = getFormulaEditorControlByInputName(form, "formula");
+      return {
+        reason: `${draft.type === "income" ? "Income" : "Expense"} amount cannot be negative.`,
+        controls: formulaControl ? [formulaControl] : [],
+      };
+    }
+  } catch {
+    // Unknown variables are valid here because they can be created on save.
+  }
+
+  return { reason: "", controls: [] };
+}
+
+function getFormSubmitDisabledState(form: HTMLFormElement): DisabledSubmitState {
+  if (form.id === "asset-form") {
+    return getAssetDraftSubmitDisabledState(form, assetDraft);
+  }
+
+  if (form.id === "asset-edit-form") {
+    return getAssetDraftSubmitDisabledState(form, assetEditDraft);
+  }
+
+  if (form.id === "flow-form") {
+    return getFlowDraftSubmitDisabledState(form, flowDraft);
+  }
+
+  if (form.id === "flow-edit-form") {
+    return getFlowDraftSubmitDisabledState(form, flowEditDraft);
+  }
+
+  return getInvalidFormulaSubmitState(form);
+}
+
 function updateFormSubmissionState(form: HTMLFormElement): void {
-  const hasInvalidFormula = hasInvalidFormulaEditors(form);
+  const disabledState = getFormSubmitDisabledState(form);
 
   for (const submitButton of form.querySelectorAll<HTMLButtonElement>('button[type="submit"]')) {
-    submitButton.disabled = hasInvalidFormula;
+    setButtonDisabledReason(submitButton, disabledState);
   }
 }
 
@@ -6721,7 +7673,7 @@ function renderFormulaEditorTokens(
     .map((token) => {
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(token)) {
         const valid = variables.has(token);
-        return `<span class="${valid ? "formula-token formula-token-variable" : "formula-token formula-token-variable is-invalid"}">${escapeHtml(token)}</span>`;
+        return `<span class="${valid ? "formula-token formula-token-variable" : "formula-token formula-token-variable is-new-variable"}">${escapeHtml(token)}</span>`;
       }
 
       if (/^\s+$/.test(token)) {
@@ -6918,11 +7870,16 @@ function bindAssetComposer(user: UserIdentity): void {
       return;
     }
 
-    if (target.name === "name") {
+    if (target.name === "assetLabel") {
       assetDraft.name = target.value;
     } else if (target.name === "kind") {
       assetDraft.kind = target.value as AssetDraftKind;
       applyAssetTypePresetDefaults(assetDraft);
+      shouldFocusAssetStartingValueIfZero = assetDraft.kind !== "home" && isZeroValueInput(assetDraft.startingValue);
+      renderPlanner(user);
+      return;
+    } else if (target.name === "advancedSettingsEnabled") {
+      assetDraft.detailMode = target instanceof HTMLInputElement && target.checked ? "advanced" : "basic";
       renderPlanner(user);
       return;
     } else if (target.name === "startingValue") {
@@ -6931,6 +7888,8 @@ function bindAssetComposer(user: UserIdentity): void {
       assetDraft.initialCost = target.value;
     } else if (target.name === "cashPurchasePercent") {
       assetDraft.cashPurchasePercent = target.value;
+    } else if (target.name === "closingCostPercent") {
+      assetDraft.closingCostPercent = target.value;
     } else if (target.name === "mortgageType") {
       assetDraft.mortgageType = target.value as AssetDraft["mortgageType"];
       if (assetDraft.mortgageType !== "interest-only") {
@@ -6963,6 +7922,7 @@ function bindAssetComposer(user: UserIdentity): void {
       return;
     } else if (target.name === "saleTaxEnabled") {
       assetDraft.saleTaxEnabled = target instanceof HTMLInputElement ? target.checked : target.value === "true";
+      assetDraft.saleTaxExpanded = false;
       renderPlanner(user);
       return;
     } else if (target.name === "saleTaxCostBasis") {
@@ -6970,6 +7930,8 @@ function bindAssetComposer(user: UserIdentity): void {
     } else if (target.name === "saleTaxTreatment") {
       assetDraft.saleTaxTreatment = target.value as AssetSaleTaxTreatment;
     }
+
+    updateFormSubmissionState(assetForm);
   });
 
   assetForm.addEventListener("click", (event) => {
@@ -6987,6 +7949,12 @@ function bindAssetComposer(user: UserIdentity): void {
     if (toggleCashGenerationId) {
       const cashGeneration = findAssetCashGenerationDraft(assetDraft, toggleCashGenerationId);
       cashGeneration.expanded = !cashGeneration.expanded;
+      renderPlanner(user);
+      return;
+    }
+
+    if (button.dataset.toggleSaleTax === "true") {
+      assetDraft.saleTaxExpanded = !assetDraft.saleTaxExpanded;
       renderPlanner(user);
       return;
     }
@@ -7015,6 +7983,12 @@ function bindAssetComposer(user: UserIdentity): void {
 
   assetForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+
+    const disabledState = getAssetDraftSubmitDisabledState(assetForm, assetDraft);
+    if (disabledState.reason) {
+      updateFormSubmissionState(assetForm);
+      return;
+    }
 
     try {
       ensurePlannerVariablesExist(
@@ -7068,11 +8042,15 @@ function bindAssetEditor(user: UserIdentity): void {
       return;
     }
 
-    if (target.name === "name") {
+    if (target.name === "assetLabel") {
       assetEditDraft.name = target.value;
     } else if (target.name === "kind") {
       assetEditDraft.kind = target.value as AssetDraftKind;
       applyAssetTypePresetDefaults(assetEditDraft);
+      renderPlanner(user);
+      return;
+    } else if (target.name === "advancedSettingsEnabled") {
+      assetEditDraft.detailMode = target instanceof HTMLInputElement && target.checked ? "advanced" : "basic";
       renderPlanner(user);
       return;
     } else if (target.name === "startingValue") {
@@ -7081,6 +8059,8 @@ function bindAssetEditor(user: UserIdentity): void {
       assetEditDraft.initialCost = target.value;
     } else if (target.name === "cashPurchasePercent") {
       assetEditDraft.cashPurchasePercent = target.value;
+    } else if (target.name === "closingCostPercent") {
+      assetEditDraft.closingCostPercent = target.value;
     } else if (target.name === "mortgageType") {
       assetEditDraft.mortgageType = target.value as AssetDraft["mortgageType"];
       if (assetEditDraft.mortgageType !== "interest-only") {
@@ -7113,6 +8093,7 @@ function bindAssetEditor(user: UserIdentity): void {
       return;
     } else if (target.name === "saleTaxEnabled") {
       assetEditDraft.saleTaxEnabled = target instanceof HTMLInputElement ? target.checked : target.value === "true";
+      assetEditDraft.saleTaxExpanded = false;
       renderPlanner(user);
       return;
     } else if (target.name === "saleTaxCostBasis") {
@@ -7122,6 +8103,8 @@ function bindAssetEditor(user: UserIdentity): void {
     } else if (target.dataset.assetCorrelation) {
       assetEditDraft.correlations[target.dataset.assetCorrelation] = target.value;
     }
+
+    updateFormSubmissionState(assetEditForm);
   });
 
   assetEditorPanel.addEventListener("click", (event) => {
@@ -7139,6 +8122,12 @@ function bindAssetEditor(user: UserIdentity): void {
     if (toggleCashGenerationId) {
       const cashGeneration = findAssetCashGenerationDraft(assetEditDraft, toggleCashGenerationId);
       cashGeneration.expanded = !cashGeneration.expanded;
+      renderPlanner(user);
+      return;
+    }
+
+    if (button.dataset.toggleSaleTax === "true") {
+      assetEditDraft.saleTaxExpanded = !assetEditDraft.saleTaxExpanded;
       renderPlanner(user);
       return;
     }
@@ -7186,6 +8175,12 @@ function bindAssetEditor(user: UserIdentity): void {
   assetEditForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
+    const disabledState = getAssetDraftSubmitDisabledState(assetEditForm, assetEditDraft);
+    if (disabledState.reason) {
+      updateFormSubmissionState(assetEditForm);
+      return;
+    }
+
     const previousAsset = plannerState.assets.find((asset) => asset.name === assetEditDraft.originalName);
     const previousFormulas = previousAsset ? getAssetDefinitionFormulas(previousAsset) : [];
     try {
@@ -7225,7 +8220,7 @@ function bindTaxComposer(user: UserIdentity): void {
       return;
     }
 
-    if (target.name === "name") {
+    if (target.name === "taxLabel") {
       taxDraft.name = target.value;
       return;
     }
@@ -7508,6 +8503,77 @@ function renameTaxReference(previousName: string, nextName: string): void {
   syncTaxProfileDraft();
 }
 
+function bindInlineFlowEventInputs(user: UserIdentity, saveInlineFlowEvent: () => Promise<void>): void {
+  for (const input of document.querySelectorAll<HTMLInputElement>("[data-inline-flow-event-year]")) {
+    let isSwitchingInlineFlowEventField = false;
+
+    input.addEventListener("input", () => {
+      flowEventDraft.year = input.value;
+    });
+    input.addEventListener("blur", () => {
+      if (isSwitchingInlineFlowEventField) {
+        return;
+      }
+
+      void saveInlineFlowEvent();
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        input.blur();
+        return;
+      }
+
+      if (event.key === "Tab" && !event.shiftKey) {
+        event.preventDefault();
+        flowEventDraft.year = input.value;
+        const token = input.dataset.inlineFlowEventYear;
+        activeFlowEventEdit = {
+          eventName: token === "__new__" ? null : token ?? null,
+          field: "formula",
+        };
+        isSwitchingInlineFlowEventField = true;
+        renderPlanner(user);
+      }
+    });
+    input.focus();
+    input.select();
+  }
+
+  for (const wrapper of document.querySelectorAll<HTMLElement>("[data-inline-flow-event-formula-editor]")) {
+    const syncInlineFlowEventFormulaDraft = (): void => {
+      const hiddenInput = wrapper.querySelector<HTMLInputElement>(".formula-editor-hidden-input");
+      const editor = wrapper.querySelector<HTMLElement>(".formula-editor-input");
+      const editorFormula = formatFormulaText(normalizeEditorText(editor?.textContent ?? ""));
+      flowEventDraft.formula = editorFormula || hiddenInput?.value || "";
+    };
+
+    wrapper.addEventListener("focusout", () => {
+      window.setTimeout(() => {
+        if (wrapper.contains(document.activeElement)) {
+          return;
+        }
+
+        syncInlineFlowEventFormulaDraft();
+
+        const formulaWrapper = wrapper.querySelector<HTMLElement>("[data-formula-editor]");
+        if (formulaWrapper?.dataset.invalid === "true") {
+          return;
+        }
+
+        void saveInlineFlowEvent();
+      }, 0);
+    });
+
+    const editor = wrapper.querySelector<HTMLElement>(".formula-editor-input");
+    if (!editor) {
+      continue;
+    }
+
+    editor.focus();
+    setCaretCharacterOffset(editor, editor.textContent?.length ?? 0);
+  }
+}
+
 function bindFlowComposer(user: UserIdentity): void {
   const flowForm = document.querySelector<HTMLFormElement>("#flow-form");
   if (!flowForm) {
@@ -7525,7 +8591,7 @@ function bindFlowComposer(user: UserIdentity): void {
       renderPlanner(user);
       focusFlowNameInputIfEmpty("#flow-form");
       return;
-    } else if (target.name === "name") {
+    } else if (target.name === "flowLabel") {
       flowDraft.name = target.value;
     } else if (target.name === "taxTreatment") {
       flowDraft.taxTreatment = target.value as FlowTaxTreatment;
@@ -7539,29 +8605,108 @@ function bindFlowComposer(user: UserIdentity): void {
       flowDraft.annualRaisePercent = target.value;
     } else if (target.name === "oneTime" && target instanceof HTMLInputElement) {
       flowDraft.oneTime = target.checked;
+      flowDraft.oneTimeYear = normalizeYearInput(flowDraft.oneTimeYear || plannerState.startYear);
+      renderPlanner(user);
+      return;
+    } else if (target.name === "oneTimeYear") {
+      flowDraft.oneTimeYear = target.value;
     } else if (target.name === "inflationAdjusted" && target instanceof HTMLInputElement) {
       flowDraft.inflationAdjusted = target.checked;
     }
 
     refreshFormulaEditors(flowForm);
+    if (target.name === "taxTreatment") {
+      window.setTimeout(() => focusFlowFormulaEditor("#flow-form"), 0);
+    }
   });
 
   flowForm.addEventListener("click", (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLButtonElement)) {
+    if (!(target instanceof HTMLElement)) {
       return;
     }
 
-    if (target.id === "close-flow-composer" || target.id === "close-flow-composer-secondary") {
+    const button = target.closest<HTMLButtonElement>("button");
+    if (!button) {
+      return;
+    }
+
+    if (button.id === "close-flow-composer" || button.id === "close-flow-composer-secondary") {
       closeFlowComposer();
+      renderPlanner(user);
+      return;
+    }
+
+    if (button.id === "open-flow-draft-event-composer") {
+      beginFlowDraftChangeEdit("year");
+      renderPlanner(user);
+      return;
+    }
+
+    const deleteChangeId = button.dataset.deleteFlowDraftEvent;
+    if (deleteChangeId) {
+      flowDraft.changeEvents = flowDraft.changeEvents.filter((change) => change.id !== deleteChangeId);
+      if (activeFlowEventEdit?.eventName === deleteChangeId) {
+        activeFlowEventEdit = null;
+      }
       renderPlanner(user);
     }
   });
 
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-start-edit-flow-draft-event-year]")) {
+    button.addEventListener("click", () => {
+      const token = button.dataset.startEditFlowDraftEventYear;
+      beginFlowDraftChangeEdit("year", token === "__new__" ? null : token ?? null);
+      renderPlanner(user);
+    });
+  }
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-start-edit-flow-draft-event-formula]")) {
+    button.addEventListener("click", () => {
+      const token = button.dataset.startEditFlowDraftEventFormula;
+      beginFlowDraftChangeEdit("formula", token === "__new__" ? null : token ?? null);
+      renderPlanner(user);
+    });
+  }
+
+  const saveInlineFlowDraftEvent = async (): Promise<void> => {
+    if (!flowEventDraft.formula.trim()) {
+      activeFlowEventEdit = {
+        eventName: flowEventDraft.originalName,
+        field: "formula",
+      };
+      return;
+    }
+
+    upsertFlowChangeDraft(
+      flowDraft,
+      flowEventDraft.originalName,
+      normalizeYearInput(flowEventDraft.year),
+      flowEventDraft.formula
+    );
+    resetFlowEventDraft(flowDraft.name, flowDraft.formula);
+    activeFlowEventEdit = null;
+    renderPlanner(user);
+  };
+
+  bindInlineFlowEventInputs(user, saveInlineFlowDraftEvent);
+
   flowForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     markFormulaEditorsSubmitted(flowForm);
-    if (hasInvalidFormulaEditors(flowForm)) {
+    if (activeFlowEventEdit && flowEventDraft.formula.trim()) {
+      upsertFlowChangeDraft(
+        flowDraft,
+        flowEventDraft.originalName,
+        normalizeYearInput(flowEventDraft.year),
+        flowEventDraft.formula
+      );
+      activeFlowEventEdit = null;
+    }
+
+    const disabledState = getFlowDraftSubmitDisabledState(flowForm, flowDraft);
+    if (disabledState.reason) {
+      updateFormSubmissionState(flowForm);
       return;
     }
 
@@ -7573,9 +8718,20 @@ function bindFlowComposer(user: UserIdentity): void {
       return;
     }
 
-    ensurePlannerVariablesExist(collectMissingFormulaVariables([flowDraft.formula.trim()]));
+    const draftChangeFormulas = flowDraft.oneTime ? [] : flowDraft.changeEvents.map((change) => change.formula.trim());
+    ensurePlannerVariablesExist(collectMissingFormulaVariables([flowDraft.formula.trim(), ...draftChangeFormulas]));
     plannerState.flows.push(nextFlow);
-    syncExpenseOneTimeReset(nextFlow.name, nextFlow.type === "expense" && flowDraft.oneTime);
+    if (!flowDraft.oneTime) {
+      for (const change of flowDraft.changeEvents) {
+        plannerState.events.push(createExpenseChangeEvent(nextFlow.name, normalizeYearInput(change.year), change.formula));
+      }
+    }
+    syncExpenseOneTimeSchedule(
+      nextFlow.name,
+      flowDraft.oneTime,
+      flowDraft.oneTimeYear,
+      flowDraft.formula
+    );
     invalidateSimulationState();
     closeFlowComposer();
     activeSummaryTab = "variables";
@@ -7741,7 +8897,7 @@ function bindFlowEditor(user: UserIdentity): void {
   const flowEditForm = document.querySelector<HTMLFormElement>("#flow-edit-form");
   const openFlowEventComposerButton = document.querySelector<HTMLButtonElement>("#open-flow-event-composer");
   const deleteFlowButton = document.querySelector<HTMLButtonElement>("#delete-flow-from-editor");
-  if (!flowEditForm || !openFlowEventComposerButton) {
+  if (!flowEditForm) {
     return;
   }
 
@@ -7756,7 +8912,7 @@ function bindFlowEditor(user: UserIdentity): void {
       renderPlanner(user);
       focusFlowNameInputIfEmpty("#flow-edit-form");
       return;
-    } else if (target.name === "name") {
+    } else if (target.name === "flowLabel") {
       flowEditDraft.name = target.value;
     } else if (target.name === "taxTreatment") {
       flowEditDraft.taxTreatment = target.value as FlowTaxTreatment;
@@ -7770,8 +8926,18 @@ function bindFlowEditor(user: UserIdentity): void {
       flowEditDraft.annualRaisePercent = target.value;
     } else if (target.name === "oneTime" && target instanceof HTMLInputElement) {
       flowEditDraft.oneTime = target.checked;
+      flowEditDraft.oneTimeYear = normalizeYearInput(flowEditDraft.oneTimeYear || plannerState.startYear);
+      renderPlanner(user);
+      return;
+    } else if (target.name === "oneTimeYear") {
+      flowEditDraft.oneTimeYear = target.value;
     } else if (target.name === "inflationAdjusted" && target instanceof HTMLInputElement) {
       flowEditDraft.inflationAdjusted = target.checked;
+    }
+
+    refreshFormulaEditors(flowEditForm);
+    if (target.name === "taxTreatment") {
+      window.setTimeout(() => focusFlowFormulaEditor("#flow-edit-form"), 0);
     }
   });
 
@@ -7808,7 +8974,7 @@ function bindFlowEditor(user: UserIdentity): void {
     }
   });
 
-  openFlowEventComposerButton.addEventListener("click", () => {
+  openFlowEventComposerButton?.addEventListener("click", () => {
     beginFlowEventEdit(flowEditDraft.originalName, "year");
     renderPlanner(user);
   });
@@ -7848,12 +9014,25 @@ function bindFlowEditor(user: UserIdentity): void {
   flowEditForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     markFormulaEditorsSubmitted(flowEditForm);
-    if (hasInvalidFormulaEditors(flowEditForm)) {
+    const previousFlow = plannerState.flows.find((flow) => flow.name === flowEditDraft.originalName);
+    const previousFormulas = previousFlow ? getFlowAndEventFormulas(previousFlow) : [];
+    if (activeFlowEventEdit && flowEventDraft.formula.trim()) {
+      ensurePlannerVariablesExist(collectMissingFormulaVariables([flowEventDraft.formula.trim()]));
+      upsertExpenseChangeEvent(
+        flowEventDraft.originalName,
+        flowEditDraft.originalName,
+        normalizeYearInput(flowEventDraft.year),
+        flowEventDraft.formula
+      );
+      activeFlowEventEdit = null;
+    }
+
+    const disabledState = getFlowDraftSubmitDisabledState(flowEditForm, flowEditDraft);
+    if (disabledState.reason) {
+      updateFormSubmissionState(flowEditForm);
       return;
     }
 
-    const previousFlow = plannerState.flows.find((flow) => flow.name === flowEditDraft.originalName);
-    const previousFormulas = previousFlow ? [previousFlow.formula] : [];
     let nextFlow: FlowDefinition;
     try {
       nextFlow = buildFlowDefinitionFromDraft(flowEditDraft);
@@ -7864,8 +9043,15 @@ function bindFlowEditor(user: UserIdentity): void {
 
     ensurePlannerVariablesExist(collectMissingFormulaVariables([flowEditDraft.formula.trim()]));
     updateFlow(flowEditDraft.originalName, nextFlow);
-    pruneUnusedPlannerVariables(collectRemovedFormulaVariables(previousFormulas, [flowEditDraft.formula.trim()]));
-    syncExpenseOneTimeReset(nextFlow.name, nextFlow.type === "expense" && flowEditDraft.oneTime);
+    syncExpenseOneTimeSchedule(
+      nextFlow.name,
+      flowEditDraft.oneTime,
+      flowEditDraft.oneTimeYear,
+      flowEditDraft.formula
+    );
+    pruneUnusedPlannerVariables(
+      collectRemovedFormulaVariables(previousFormulas, getFlowAndEventFormulas(nextFlow))
+    );
     invalidateSimulationState();
     closeFlowEditor();
     activeSummaryTab = "variables";
@@ -7876,9 +9062,10 @@ function bindFlowEditor(user: UserIdentity): void {
   const saveInlineFlowEvent = async (): Promise<void> => {
     try {
       if (!flowEventDraft.formula.trim()) {
-        resetFlowEventDraft(flowEditDraft.originalName, flowEditDraft.formula);
-        activeFlowEventEdit = null;
-        renderPlanner(user);
+        activeFlowEventEdit = {
+          eventName: flowEventDraft.originalName,
+          field: "formula",
+        };
         return;
       }
 
@@ -7904,49 +9091,15 @@ function bindFlowEditor(user: UserIdentity): void {
       await persistPlannerState(user);
       renderPlanner(user);
     } catch {
+      activeFlowEventEdit = {
+        eventName: flowEventDraft.originalName,
+        field: "formula",
+      };
       renderPlanner(user);
     }
   };
 
-  for (const input of document.querySelectorAll<HTMLInputElement>("[data-inline-flow-event-year]")) {
-    input.addEventListener("input", () => {
-      flowEventDraft.year = input.value;
-    });
-    input.addEventListener("blur", () => {
-      void saveInlineFlowEvent();
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        input.blur();
-      }
-    });
-    input.focus();
-    input.select();
-  }
-
-  for (const wrapper of document.querySelectorAll<HTMLElement>("[data-inline-flow-event-formula-editor]")) {
-    wrapper.addEventListener("focusout", (event) => {
-      const nextTarget = event.relatedTarget;
-      if (nextTarget instanceof Node && wrapper.contains(nextTarget)) {
-        return;
-      }
-
-      const formulaWrapper = wrapper.querySelector<HTMLElement>("[data-formula-editor]");
-      if (formulaWrapper?.dataset.invalid === "true") {
-        return;
-      }
-
-      void saveInlineFlowEvent();
-    });
-
-    const editor = wrapper.querySelector<HTMLElement>(".formula-editor-input");
-    if (!editor) {
-      continue;
-    }
-
-    editor.focus();
-    setCaretCharacterOffset(editor, editor.textContent?.length ?? 0);
-  }
+  bindInlineFlowEventInputs(user, saveInlineFlowEvent);
 }
 
 function toEventAction(action: EventActionDraft, flowName: string): EventAction {
@@ -8195,7 +9348,8 @@ function syncAssetCashGenerationDraftPresentation(
 
 function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
   if (draft.kind === "home") {
-    const initialCost = resolveAssetValueInput(draft.initialCost, "Initial cost");
+    const initialCost = resolveAssetValueInput(draft.initialCost, "Home price");
+
     return new Asset({
       kind: "home",
       name: draft.name,
@@ -8204,6 +9358,7 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
       expectedReturn: Number(draft.expectedReturn),
       volatility: Number(draft.volatility),
       cashPurchasePercent: Number(draft.cashPurchasePercent) / 100,
+      closingCostPercent: Number(draft.closingCostPercent) / 100,
       mortgageType: draft.mortgageType,
       ...(draft.mortgageType === "interest-only"
         ? {
@@ -8244,7 +9399,7 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
     ...(draft.saleTaxEnabled
       ? {
           saleTax: {
-            costBasis: parseEditableNumber(draft.saleTaxCostBasis),
+            ...(draft.saleTaxCostBasis.trim() ? { costBasis: parseEditableNumber(draft.saleTaxCostBasis) } : {}),
             taxTreatment: draft.saleTaxTreatment,
           } satisfies AssetSaleTaxDefinition,
         }
@@ -8455,9 +9610,10 @@ function openFlowEditor(flowName: string): void {
   flowEditDraft.type = flow.type;
   flowEditDraft.name = flow.name;
   flowEditDraft.taxTreatment = flow.taxTreatment ?? getDefaultFlowTaxTreatment(flow.type);
-  flowEditDraft.formula = flow.formula;
+  flowEditDraft.oneTime = isFlowOneTimeMode(flow);
+  flowEditDraft.formula = flowEditDraft.oneTime ? getOneTimeFormulaForFlow(flow) : flow.formula;
   flowEditDraft.inflationAdjusted = isFlowInflationAdjusted(flow);
-  flowEditDraft.oneTime = flow.type === "expense" && plannerState.events.some((event) => isOneTimeResetEvent(event, flow.name));
+  flowEditDraft.oneTimeYear = flowEditDraft.oneTime ? getOneTimeYearForFlow(flow) : plannerState.startYear;
   flowEditDraft.startYear = flow.startYear === undefined ? plannerState.startYear : String(flow.startYear);
   flowEditDraft.endYear = flow.endYear === undefined ? "" : String(flow.endYear);
   flowEditDraft.annualRaisePercent = String(flow.annualRaisePercent ?? 0);
@@ -8567,7 +9723,7 @@ async function saveInlineAssetValue(assetName: string, formula: string, user: Us
     ensurePlannerVariablesExist(collectMissingFormulaVariables([formula]));
     const resolvedValue = isInvestmentAsset(existingAsset)
       ? resolveAssetValueInput(formula, "Value")
-      : resolveAssetValueInput(formula, "Initial cost");
+      : resolveAssetValueInput(formula, "Home price");
 
     updateAsset(
       assetName,
@@ -8827,6 +9983,7 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
     typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
       ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
       : fallbackSimulationDraft.horizonYears;
+  simulationDraft.customAssetLiquidation = partialState.simulationCustomAssetLiquidation === true;
   simulationDraft.inflationPreset = normalizeSimulationInflationPreset(partialState.simulationInflation);
   simulationDraft.fixedInflationRate =
     typeof partialState.simulationInflation?.fixedRate === "number" && Number.isFinite(partialState.simulationInflation.fixedRate)
@@ -9012,11 +10169,26 @@ function bindModalDismissHandlers(user: UserIdentity): void {
     renderPlanner(user);
   });
 
-  document.addEventListener("click", (event) => {
+  document.addEventListener("pointerdown", (event) => {
     if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("modal-shell")) {
+      modalPointerDownStartedOnBackdrop = false;
       return;
     }
 
+    modalPointerDownStartedOnBackdrop = true;
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("modal-shell")) {
+      modalPointerDownStartedOnBackdrop = false;
+      return;
+    }
+
+    if (!modalPointerDownStartedOnBackdrop) {
+      return;
+    }
+
+    modalPointerDownStartedOnBackdrop = false;
     if (!closeTopmostModal()) {
       return;
     }
