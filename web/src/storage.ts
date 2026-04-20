@@ -136,6 +136,7 @@ export interface SavedPlannerState {
       maximum?: number;
     }[];
     maximum?: number;
+    taxableIncomeMultiplier?: number;
   }[];
   taxProfile?: {
     filingStatus?:
@@ -161,6 +162,7 @@ export interface SavedPlannerState {
     federalOrdinaryTaxName?: string;
     federalQualifiedTaxName?: string;
     stateTaxName?: string;
+    stateCapitalGainsTaxName?: string;
     localTaxName?: string;
     niitTaxName?: string;
   };
@@ -170,7 +172,7 @@ export interface SavedPlannerState {
   startYear: string;
   yearsToShow: number;
   simulationAttempts?: number;
-  simulationTaxPreset?: "nyc" | "custom";
+  simulationTaxPreset?: "nyc" | `state:${string}` | "custom";
   simulationHorizonYears?: number;
   simulationCustomAssetLiquidation?: boolean;
   simulationInflationRate?: number;

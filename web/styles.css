@@ -59,6 +59,10 @@ button:disabled {
   cursor: not-allowed;
 }
 
+input[type="range"]:not(:disabled) {
+  cursor: pointer;
+}
+
 .disabled-reason-anchor {
   position: relative;
   display: inline-flex;
@@ -955,6 +959,10 @@ label {
   min-width: 200px;
 }
 
+.tax-preset-summary {
+  max-width: 520px;
+}
+
 .switch-field {
   position: relative;
   display: inline-flex;
@@ -977,6 +985,7 @@ label {
   height: 28px;
   border-radius: 999px;
   background: rgba(20, 24, 27, 0.16);
+  cursor: pointer;
   transition:
     background 160ms ease,
     filter 160ms ease,
@@ -1019,6 +1028,7 @@ label {
 
 .switch-field input:disabled + .switch-track {
   opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .disclosure-button {
@@ -1112,6 +1122,32 @@ label {
   align-items: start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.simulation-chart-metric-tabs {
+  margin-bottom: 0;
+}
+
+.simulation-example-card {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.46);
+  border: 1px solid rgba(45, 31, 22, 0.08);
+}
+
+.simulation-example-card-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.simulation-example-percentile-tabs {
+  margin-bottom: 0;
 }
 
 .simulation-chart-legend {
@@ -1355,6 +1391,41 @@ label {
   font-size: 1.05rem;
 }
 
+.simulation-results-divider {
+  height: 1px;
+  margin: 8px 0 2px;
+  background: rgba(45, 31, 22, 0.12);
+}
+
+.simulation-results-section {
+  display: grid;
+  gap: 16px;
+}
+
+.simulation-results-heading {
+  display: grid;
+  gap: 6px;
+}
+
+.simulation-results-heading h2 {
+  margin: 0;
+  font-size: 1.45rem;
+  line-height: 1.05;
+}
+
+.simulation-results-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1.5;
+}
+
+.simulation-results-heading strong {
+  color: var(--ink);
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
 .action-card {
   padding: 14px;
   border-radius: 18px;
@@ -1365,6 +1436,15 @@ label {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tax-preset-load-action {
+  display: flex;
+  align-items: end;
+}
+
+.tax-preset-load-action .secondary-button {
+  width: 100%;
 }
 
 .summary-grid {

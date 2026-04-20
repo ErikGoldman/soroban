@@ -19,7 +19,7 @@ Soroban is a browser-based financial planning sandbox built with TypeScript and 
   - optional cash generation streams
   - optional sale tax basis and tax treatment
   - pairwise correlations
-- Configures household taxes and tax profiles, including a built-in NYC 2025 preset
+- Configures household taxes and tax profiles, including built-in 2026 presets for NYC, every state, and DC
 - Runs Monte Carlo simulations with percentile views, depletion probability, and representative scenario detail
 - Persists planner state locally in IndexedDB
 
@@ -166,7 +166,7 @@ Official docs:
 - Authentication is currently a stubbed demo user defined in [`web/src/auth.ts`](/home/erikg/projects/soroban/main/web/src/auth.ts).
 - Persistence is local to the browser via IndexedDB. There is no backend sync, multi-user support, or server-side storage.
 - The simulation operates on yearly snapshots and annual return assumptions.
-- The simulation UI currently exposes a single tax preset option: `NYC`.
+- The simulation UI exposes built-in 2026 tax presets for NYC, every state, DC, and custom schedules.
 - Simulations require at least one asset. By default, sales track current portfolio weights, and sell multipliers let you tilt that mix.
 
 ## Notes for future extension

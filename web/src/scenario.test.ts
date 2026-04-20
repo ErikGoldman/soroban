@@ -79,6 +79,7 @@ function createScenarioPlannerState(): ScenarioPlannerState {
       federalOrdinaryTaxName: "Federal ordinary",
       federalQualifiedTaxName: "Federal capital gains",
       stateTaxName: "NY State",
+      stateCapitalGainsTaxName: "NY State capital gains",
       localTaxName: "NYC",
       niitTaxName: "NIIT",
     },

@@ -2150,6 +2150,8 @@ function emptyHouseholdTaxBreakdown(): HouseholdTaxBreakdown {
     federalPreferentialIncome: 0,
     federalTaxableIncome: 0,
     stateTaxableIncome: 0,
+    stateOrdinaryTaxableIncome: 0,
+    stateCapitalGainsTaxableIncome: 0,
     localTaxableIncome: 0,
     modifiedAdjustedGrossIncome: 0,
     netInvestmentIncome: 0,

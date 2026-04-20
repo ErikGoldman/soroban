@@ -4,6 +4,8 @@ import {
   calculateTax,
   computeHouseholdTaxes,
   createDefaultHouseholdTaxProfile,
+  createStateHouseholdTaxes,
+  getStateHouseholdTaxPresetOptions,
   normalizeFilingStatus,
   Tax,
   TaxExclusion,
@@ -16,6 +18,67 @@ describe("normalizeFilingStatus", () => {
     expect(normalizeFilingStatus("head-of-household")).toBe("individual");
     expect(normalizeFilingStatus("married-filing-separately")).toBe("individual");
     expect(normalizeFilingStatus("married-filing-jointly")).toBe("married-couple-jointly");
+  });
+});
+
+describe("state household tax presets", () => {
+  it("exposes a preset for every state plus DC", () => {
+    const options = getStateHouseholdTaxPresetOptions();
+
+    expect(options).toHaveLength(51);
+    expect(options.map((option) => option.label)).toContain("California");
+    expect(options.map((option) => option.label)).toContain("District of Columbia");
+  });
+
+  it("builds a state preset with federal, state, and NIIT schedules", () => {
+    const preset = createStateHouseholdTaxes("california", "individual");
+
+    expect(preset.profile.stateTaxName).toBe("California state income tax");
+    expect(preset.profile.stateCapitalGainsTaxName).toBe("California long-term capital gains");
+    expect(preset.profile.stateTaxableIncomeAdjustment).toBe(5540);
+    expect(preset.profile.localTaxName).toBe("");
+    expect(preset.taxes.map((tax) => tax.name)).toEqual([
+      "Federal ordinary income",
+      "Federal qualified dividends / long-term gains",
+      "California state income tax",
+      "California long-term capital gains",
+      "Federal NIIT",
+    ]);
+    expect(preset.taxes[2].taxRates.at(-1)?.rate).toBe(0.133);
+    expect(preset.taxes[3].taxRates.at(-1)?.rate).toBe(0.133);
+  });
+
+  it("keeps no-income-tax state presets from referencing a missing state schedule", () => {
+    const preset = createStateHouseholdTaxes("texas", "married-couple-jointly");
+
+    expect(preset.profile.stateTaxName).toBe("");
+    expect(preset.profile.stateCapitalGainsTaxName).toBe("");
+    expect(preset.profile.stateTaxableIncomeAdjustment).toBe(0);
+    expect(preset.taxes.map((tax) => tax.name)).toEqual([
+      "Federal ordinary income",
+      "Federal qualified dividends / long-term gains",
+      "Federal NIIT",
+    ]);
+  });
+
+  it("fills special state long-term capital gains schedules", () => {
+    const washington = createStateHouseholdTaxes("washington", "individual");
+    expect(washington.profile.stateTaxName).toBe("");
+    expect(washington.profile.stateCapitalGainsTaxName).toBe("Washington long-term capital gains");
+    expect(washington.taxes.find((tax) => tax.name === "Washington long-term capital gains")).toMatchObject({
+      taxRates: [{ rate: 0.07, upTo: 1000000 }, { rate: 0.099 }],
+      exclusions: [{ name: "Capital gains exclusion", amount: 278000 }],
+    });
+
+    const arizona = createStateHouseholdTaxes("arizona", "individual");
+    expect(arizona.taxes.find((tax) => tax.name === "Arizona long-term capital gains")).toMatchObject({
+      taxRates: [{ rate: 0.025 }],
+      taxableIncomeMultiplier: 0.75,
+    });
+
+    const missouri = createStateHouseholdTaxes("missouri", "individual");
+    expect(missouri.profile.stateTaxName).toBe("Missouri state income tax");
+    expect(missouri.profile.stateCapitalGainsTaxName).toBe("");
   });
 });
 
@@ -173,6 +236,9 @@ describe("Tax", () => {
     expect(() => new Tax({ name: "Broken", taxRates: [{ rate: 0.1 }], maximum: -1 })).toThrow(
       'Maximum tax for "Broken" cannot be negative.'
     );
+    expect(() => new Tax({ name: "Broken", taxRates: [{ rate: 0.1 }], taxableIncomeMultiplier: -1 })).toThrow(
+      'Taxable income multiplier for "Broken" cannot be negative.'
+    );
   });
 });
 
@@ -230,6 +296,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "Federal ordinary income",
       federalQualifiedTaxName: "Federal qualified dividends / long-term gains",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitTaxName: "",
     };
@@ -266,6 +333,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "Federal ordinary income",
       federalQualifiedTaxName: "Federal qualified dividends / long-term gains",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitTaxName: "",
     };
@@ -303,6 +371,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "Federal ordinary income",
       federalQualifiedTaxName: "",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitTaxName: "",
     };
@@ -335,6 +404,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "",
       federalQualifiedTaxName: "",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitThreshold: 200000,
       niitTaxName: "Federal NIIT",
@@ -371,6 +441,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "",
       federalQualifiedTaxName: "",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitThreshold: 200000,
       niitTaxName: "Federal NIIT",
@@ -407,6 +478,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "",
       federalQualifiedTaxName: "",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitThreshold: 200000,
       niitTaxName: "Federal NIIT",
@@ -443,6 +515,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "",
       federalQualifiedTaxName: "",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitThreshold: 200000,
       niitTaxName: "Federal NIIT",
@@ -486,6 +559,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "Federal ordinary income",
       federalQualifiedTaxName: "",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitTaxName: "",
     };
@@ -525,6 +599,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "Federal ordinary income",
       federalQualifiedTaxName: "",
       stateTaxName: "State tax",
+      stateCapitalGainsTaxName: "",
       localTaxName: "Local tax",
       niitTaxName: "",
     };
@@ -558,6 +633,81 @@ describe("computeHouseholdTaxes", () => {
     expect(result.taxByName.get("Local tax")).toBeCloseTo(5, 6);
   });
 
+  it("applies state long-term capital gains after the ordinary state taxable base", () => {
+    const profile = {
+      ...createDefaultHouseholdTaxProfile(),
+      federalStandardDeduction: 0,
+      federalOrdinaryTaxName: "",
+      federalQualifiedTaxName: "",
+      stateTaxName: "State ordinary",
+      stateCapitalGainsTaxName: "State capital gains",
+      localTaxName: "",
+      niitTaxName: "",
+    };
+    const taxes = [
+      new Tax({
+        name: "State ordinary",
+        taxRates: [
+          { rate: 0.01, upTo: 1000 },
+          { rate: 0.02 },
+        ],
+      }),
+      new Tax({
+        name: "State capital gains",
+        taxRates: [
+          { rate: 0.01, upTo: 1000 },
+          { rate: 0.02 },
+        ],
+        taxableIncomeMultiplier: 0.5,
+      }),
+    ];
+
+    const result = computeHouseholdTaxes(
+      {
+        wages: 1000,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: 0,
+        longTermCapitalGains: 1000,
+        taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
+        deductibleExpenses: 0,
+      },
+      profile,
+      taxes
+    );
+
+    expect(result.stateOrdinaryTaxableIncome).toBe(1000);
+    expect(result.stateCapitalGainsTaxableIncome).toBe(1000);
+    expect(result.stateTaxableIncome).toBe(2000);
+    expect(result.taxByName.get("State ordinary")).toBeCloseTo(10, 6);
+    expect(result.taxByName.get("State capital gains")).toBeCloseTo(10, 6);
+  });
+
+  it("applies state capital gains exclusions before the capital gains schedule", () => {
+    const preset = createStateHouseholdTaxes("washington", "individual");
+    const result = computeHouseholdTaxes(
+      {
+        wages: 0,
+        ordinaryIncome: 0,
+        qualifiedDividends: 0,
+        shortTermCapitalGains: 0,
+        longTermCapitalGains: 300000,
+        taxExemptIncome: 0,
+        stateLocalExemptIncome: 0,
+        tripleExemptIncome: 0,
+        deductibleExpenses: 0,
+      },
+      preset.profile,
+      preset.taxes.map((tax) => new Tax(tax))
+    );
+
+    expect(result.stateOrdinaryTaxableIncome).toBe(0);
+    expect(result.stateCapitalGainsTaxableIncome).toBe(300000);
+    expect(result.taxByName.get("Washington long-term capital gains")).toBeCloseTo(1540, 6);
+  });
+
   it("treats state-local exempt income as federally taxable but exempt from state and local tax", () => {
     const profile = {
       ...createDefaultHouseholdTaxProfile(),
@@ -565,6 +715,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "Federal ordinary income",
       federalQualifiedTaxName: "",
       stateTaxName: "State tax",
+      stateCapitalGainsTaxName: "",
       localTaxName: "Local tax",
       niitTaxName: "Federal NIIT",
       niitThreshold: 0,
@@ -610,6 +761,7 @@ describe("computeHouseholdTaxes", () => {
       federalOrdinaryTaxName: "Federal ordinary income",
       federalQualifiedTaxName: "",
       stateTaxName: "State tax",
+      stateCapitalGainsTaxName: "",
       localTaxName: "Local tax",
       niitTaxName: "Federal NIIT",
       niitThreshold: 0,

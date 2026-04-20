@@ -78,6 +78,9 @@ import {
   Tax,
   createDefaultHouseholdTaxProfile,
   createDefaultNYCHouseholdTaxes,
+  createStateHouseholdTaxes,
+  getStateHouseholdTaxPresetOptions,
+  isStateHouseholdTaxPresetId,
   type DeductionMode,
   type FilingStatus,
   type HouseholdTaxInput,
@@ -272,6 +275,7 @@ interface TaxProfileDraft {
   federalOrdinaryTaxName: string;
   federalQualifiedTaxName: string;
   stateTaxName: string;
+  stateCapitalGainsTaxName: string;
   localTaxName: string;
   niitTaxName: string;
 }
@@ -431,7 +435,9 @@ type SummaryTab = "variables" | "assets" | "taxes";
 type PlannerBoardTab = "setup" | "simulation";
 type SimulationChartMetric = "totalAssets" | "liquidAssets";
 type SimulationInflationPreset = "fixed" | "fixed-custom" | "regime" | "regime-custom";
-type TaxPreset = "nyc" | "custom";
+type TaxPreset = "nyc" | `state:${string}` | "custom";
+const STATE_TAX_PRESET_PREFIX = "state:";
+const NYC_TAX_PRESET_OPTION = { id: "nyc", label: "NYC 2026" } as const;
 const VARIABLE_SWEEP_STORAGE_KEY_PREFIX = "soroban:simulation-variable-sweep:";
 // When true, each active worker is assigned a distinct sweep value before any sweep is split into chunks.
 const ENABLE_VARIABLE_SWEEP_WORKER_FANOUT = true;
@@ -501,7 +507,7 @@ let shouldFocusNewAssetName = false;
 let shouldFocusNewFlowName = false;
 let shouldFocusAssetStartingValueIfZero = false;
 let selectedSimulationPercentile: SimulationPercentile = 50;
-let selectedSimulationChartMetric: SimulationChartMetric = "totalAssets";
+let selectedSimulationChartMetric: SimulationChartMetric = "liquidAssets";
 let simulationResults: Map<SimulationPercentile, SimulationScenario> | null = null;
 let simulationDetailResults: SimulationDetailScenario[] | null = null;
 let simulationSweepResults: SimulationSweepResult | null = null;
@@ -771,6 +777,31 @@ function normalizeSimulationInflationPreset(
   return "regime";
 }
 
+function normalizeSimulationTaxPreset(value: string | undefined, fallback: TaxPreset = "nyc"): TaxPreset {
+  if (value === "nyc" || value === "custom") {
+    return value;
+  }
+
+  if (value?.startsWith(STATE_TAX_PRESET_PREFIX)) {
+    const statePresetId = value.slice(STATE_TAX_PRESET_PREFIX.length);
+    if (isStateHouseholdTaxPresetId(statePresetId)) {
+      return `${STATE_TAX_PRESET_PREFIX}${statePresetId}`;
+    }
+  }
+
+  return fallback;
+}
+
+function getBuiltInTaxPresetOptions(): { id: "nyc" | `state:${string}`; label: string }[] {
+  return [
+    NYC_TAX_PRESET_OPTION,
+    ...getStateHouseholdTaxPresetOptions().map((preset) => ({
+      id: `${STATE_TAX_PRESET_PREFIX}${preset.id}` as const,
+      label: `${preset.label} 2026`,
+    })),
+  ].sort((left, right) => left.label.localeCompare(right.label));
+}
+
 function getSavedRegimeSwitchingInflationValue(
   regimeSwitching:
     | {
@@ -847,6 +878,7 @@ function createTaxProfileDraft(): TaxProfileDraft {
     federalOrdinaryTaxName: profile.federalOrdinaryTaxName,
     federalQualifiedTaxName: profile.federalQualifiedTaxName,
     stateTaxName: profile.stateTaxName,
+    stateCapitalGainsTaxName: profile.stateCapitalGainsTaxName,
     localTaxName: profile.localTaxName,
     niitTaxName: profile.niitTaxName,
   };
@@ -866,6 +898,7 @@ function buildNormalizedTaxDefinition(definition: TaxDefinition): TaxDefinition 
       ...(exclusion.maximum === null ? {} : { maximum: exclusion.maximum }),
     })),
     ...(normalized.maximum === null ? {} : { maximum: normalized.maximum }),
+    ...(normalized.taxableIncomeMultiplier === 1 ? {} : { taxableIncomeMultiplier: normalized.taxableIncomeMultiplier }),
   };
 }
 
@@ -1262,6 +1295,9 @@ function buildTaxProfileDefinitionFromSaved(
     federalOrdinaryTaxName: availableTaxNames.has(next.federalOrdinaryTaxName) ? next.federalOrdinaryTaxName : "",
     federalQualifiedTaxName: availableTaxNames.has(next.federalQualifiedTaxName) ? next.federalQualifiedTaxName : "",
     stateTaxName: availableTaxNames.has(next.stateTaxName) ? next.stateTaxName : "",
+    stateCapitalGainsTaxName: availableTaxNames.has(next.stateCapitalGainsTaxName)
+      ? next.stateCapitalGainsTaxName
+      : "",
     localTaxName: availableTaxNames.has(next.localTaxName) ? next.localTaxName : "",
     niitTaxName: availableTaxNames.has(next.niitTaxName) ? next.niitTaxName : "",
   };
@@ -1279,6 +1315,7 @@ function createDefaultPlannerState(): PlannerState {
       federalOrdinaryTaxName: "",
       federalQualifiedTaxName: "",
       stateTaxName: "",
+      stateCapitalGainsTaxName: "",
       localTaxName: "",
       niitTaxName: "",
     },
@@ -1959,7 +1996,7 @@ function clearSimulationOutputs(): void {
   simulationSweepResults = null;
   selectedSimulationSweepStepIndex = 0;
   selectedSimulationPercentile = 50;
-  selectedSimulationChartMetric = "totalAssets";
+  selectedSimulationChartMetric = "liquidAssets";
   expandedSimulationExampleKeys = new Set();
 }
 
@@ -2798,7 +2835,42 @@ function getSimulationTaxPresetDefinition(
         householdTaxProfile: nextCustomProfile ? { ...nextCustomProfile } : { ...plannerState.taxProfile },
       };
     }
+    default: {
+      const statePresetId = taxPreset.slice(STATE_TAX_PRESET_PREFIX.length);
+      const preset = createStateHouseholdTaxes(statePresetId, filingStatus);
+      return {
+        taxes: preset.taxes,
+        householdTaxProfile: preset.profile,
+      };
+    }
   }
+}
+
+function createBuiltInTaxPresetDefinition(
+  taxPreset: Exclude<TaxPreset, "custom">,
+  filingStatus: FilingStatus
+): { profile: HouseholdTaxProfileDefinition; taxes: TaxDefinition[] } {
+  if (taxPreset === "nyc") {
+    return createDefaultNYCHouseholdTaxes(filingStatus);
+  }
+
+  return createStateHouseholdTaxes(taxPreset.slice(STATE_TAX_PRESET_PREFIX.length), filingStatus);
+}
+
+function seedCustomTaxProfileFromPreset(taxPreset: TaxPreset): void {
+  if (taxPreset === "custom" && plannerState.taxes.length > 0) {
+    return;
+  }
+
+  if (plannerState.taxes.length > 0) {
+    return;
+  }
+
+  const sourcePreset = taxPreset === "custom" ? "nyc" : taxPreset;
+  const preset = createBuiltInTaxPresetDefinition(sourcePreset, taxProfileDraft.filingStatus);
+  plannerState.taxes = preset.taxes.map((tax) => buildNormalizedTaxDefinition(tax));
+  plannerState.taxProfile = preset.profile;
+  syncTaxProfileDraft();
 }
 
 function renderPlanner(user: UserIdentity): void {
@@ -3021,23 +3093,47 @@ function renderTaxProfileFields(): string {
           <select name="stateTaxName">${renderTaxProfileOptions(taxOptions, taxProfileDraft.stateTaxName)}</select>
         </label>
         <label>
+          State LTCG schedule
+          <select name="stateCapitalGainsTaxName">${renderTaxProfileOptions(taxOptions, taxProfileDraft.stateCapitalGainsTaxName)}</select>
+        </label>
+      </div>
+      <div class="split-fields">
+        <label>
           Local schedule
           <select name="localTaxName">${renderTaxProfileOptions(taxOptions, taxProfileDraft.localTaxName)}</select>
         </label>
+        <label>
+          NIIT schedule
+          <select name="niitTaxName">${renderTaxProfileOptions(taxOptions, taxProfileDraft.niitTaxName)}</select>
+        </label>
       </div>
-      <label>
-        NIIT schedule
-        <select name="niitTaxName">${renderTaxProfileOptions(taxOptions, taxProfileDraft.niitTaxName)}</select>
-      </label>
   `;
 }
 
 function renderTaxProfileEditor(): string {
+  const builtInTaxPresetOptions = getBuiltInTaxPresetOptions()
+    .map(
+      (preset) => `
+        <option value="${escapeAttribute(preset.id)}">${escapeHtml(preset.label)}</option>
+      `
+    )
+    .join("");
+
   return `
     <form id="tax-profile-form" class="stack-form composer-subsection" data-tax-profile-editor="setup">
       <div class="event-entry-header">
         <strong>Household tax profile</strong>
-        <button type="button" class="secondary-button" id="load-nyc-tax-preset">Load NYC 2025</button>
+      </div>
+      <div class="split-fields">
+        <label>
+          Tax preset
+          <select name="taxPresetToLoad">
+            ${builtInTaxPresetOptions}
+          </select>
+        </label>
+        <div class="tax-preset-load-action">
+          <button type="button" class="secondary-button" id="load-tax-preset">Load selected preset</button>
+        </div>
       </div>
       ${renderTaxProfileFields()}
     </form>
@@ -3375,6 +3471,8 @@ function renderSimulationTaxBreakdown(row: SimulationDetailYearRow): string {
     ["Federal preferential income", row.taxBreakdown.federalPreferentialIncome],
     ["Deduction used", row.taxBreakdown.deductionUsed],
     ["State taxable income", row.taxBreakdown.stateTaxableIncome],
+    ["State ordinary taxable income", row.taxBreakdown.stateOrdinaryTaxableIncome],
+    ["State long-term capital gains", row.taxBreakdown.stateCapitalGainsTaxableIncome],
     ["Local taxable income", row.taxBreakdown.localTaxableIncome],
     ["Modified adjusted gross income", row.taxBreakdown.modifiedAdjustedGrossIncome],
     ["Net investment income", row.taxBreakdown.netInvestmentIncome],
@@ -3503,6 +3601,8 @@ function buildSimulationExampleExport(
             federalPreferentialIncome: exampleYear.taxBreakdown.federalPreferentialIncome,
             deductionUsed: exampleYear.taxBreakdown.deductionUsed,
             stateTaxableIncome: exampleYear.taxBreakdown.stateTaxableIncome,
+            stateOrdinaryTaxableIncome: exampleYear.taxBreakdown.stateOrdinaryTaxableIncome,
+            stateCapitalGainsTaxableIncome: exampleYear.taxBreakdown.stateCapitalGainsTaxableIncome,
             localTaxableIncome: exampleYear.taxBreakdown.localTaxableIncome,
             modifiedAdjustedGrossIncome: exampleYear.taxBreakdown.modifiedAdjustedGrossIncome,
             netInvestmentIncome: exampleYear.taxBreakdown.netInvestmentIncome,
@@ -3896,6 +3996,44 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
   `;
 }
 
+function getSimulationChartAxisValues(
+  results: Map<SimulationPercentile, SimulationScenario>,
+  valueKey: SimulationChartMetric
+): number[] {
+  const resultSets =
+    simulationSweepResults && simulationSweepResults.steps.length > 0
+      ? simulationSweepResults.steps.map((step) => step.results)
+      : [results];
+
+  return resultSets.flatMap((resultSet) =>
+    simulationPercentiles.flatMap((percentile) => {
+      const scenario = resultSet.get(percentile);
+      return scenario?.rows.map((row) => row[valueKey] ?? 0) ?? [];
+    })
+  );
+}
+
+function roundUpToSingleSignificantDigit(value: number): number {
+  if (value <= 0) {
+    return 10_000;
+  }
+
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  const leadingDigit = Math.ceil(value / magnitude);
+  return leadingDigit <= 9 ? leadingDigit * magnitude : 10 * magnitude;
+}
+
+function getSimulationChartYAxis(maxValue: number): { yMax: number; yStep: number; yTicks: number[] } {
+  const yMax = roundUpToSingleSignificantDigit(maxValue);
+  const magnitude = 10 ** Math.floor(Math.log10(yMax));
+  const leadingDigit = Math.round(yMax / magnitude);
+  const yStep = leadingDigit === 1 ? 2 * (magnitude / 10) : magnitude;
+  const tickCount = Math.max(1, Math.round(yMax / yStep));
+  const yTicks = Array.from({ length: tickCount + 1 }, (_, index) => index * yStep);
+
+  return { yMax, yStep, yTicks };
+}
+
 function renderSimulationChart(
   results: Map<SimulationPercentile, SimulationScenario>,
   {
@@ -3928,13 +4066,11 @@ function renderSimulationChart(
   const chartWidth = width - marginLeft - marginRight;
   const chartHeight = height - marginTop - marginBottom;
   const yearCount = Math.max(...scenarios.map((scenario) => scenario.rows.length));
-  const values = scenarios.flatMap((scenario) => scenario.rows.map((row) => row[valueKey] ?? 0));
+  const values = getSimulationChartAxisValues(results, valueKey);
   const maxValue = Math.max(...values, 0);
-  const yStep = 10_000_000;
   const yMin = 0;
-  const yMax = Math.max(yStep, Math.ceil(maxValue / yStep) * yStep);
+  const { yMax, yStep, yTicks } = getSimulationChartYAxis(maxValue);
   const yRange = Math.max(yStep, yMax - yMin);
-  const yTicks = Array.from({ length: Math.round((yMax - yMin) / yStep) + 1 }, (_, index) => yMin + index * yStep);
   const xTicks = Array.from(
     new Set([1, Math.max(1, Math.ceil(yearCount / 2)), yearCount].filter((value) => value <= yearCount))
   );
@@ -3962,6 +4098,22 @@ function renderSimulationChart(
             )
             .join("")}
         </div>
+      </div>
+      <div class="tab-strip simulation-chart-metric-tabs" role="tablist" aria-label="Simulation chart metric">
+        <button
+          type="button"
+          class="${selectedSimulationChartMetric === "liquidAssets" ? "tab-button is-active" : "tab-button"}"
+          data-simulation-chart-metric="liquidAssets"
+        >
+          Liquid assets
+        </button>
+        <button
+          type="button"
+          class="${selectedSimulationChartMetric === "totalAssets" ? "tab-button is-active" : "tab-button"}"
+          data-simulation-chart-metric="totalAssets"
+        >
+          Total assets
+        </button>
       </div>
       <div class="board-scroll">
         <svg class="simulation-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttribute(ariaLabel)}">
@@ -4042,6 +4194,14 @@ function getDisplayedSimulationResults(): Map<SimulationPercentile, SimulationSc
 
 function getDisplayedSimulationDetailResults(): SimulationDetailScenario[] | null {
   return getSelectedSimulationSweepStep()?.details ?? simulationDetailResults;
+}
+
+function getDisplayedSimulationRunOutProbability(): number {
+  const displayedSimulationResults = getDisplayedSimulationResults();
+  const scenario =
+    displayedSimulationResults?.get(50) ?? Array.from(displayedSimulationResults?.values() ?? [])[0] ?? null;
+  const rows = scenario?.rows ?? [];
+  return rows[rows.length - 1]?.depletionProbability ?? 0;
 }
 
 function isSimulationChartMetric(value: string | undefined): value is SimulationChartMetric {
@@ -4132,105 +4292,93 @@ function renderSimulationResultsBody(): string {
         };
 
   return `
-      <div class="tab-strip" role="tablist" aria-label="Simulation chart metric">
-        <button
-          type="button"
-          class="${selectedSimulationChartMetric === "totalAssets" ? "tab-button is-active" : "tab-button"}"
-          data-simulation-chart-metric="totalAssets"
-        >
-          Total assets
-        </button>
-        <button
-          type="button"
-          class="${selectedSimulationChartMetric === "liquidAssets" ? "tab-button is-active" : "tab-button"}"
-          data-simulation-chart-metric="liquidAssets"
-        >
-          Liquid assets
-        </button>
-      </div>
       ${renderSimulationChart(displayedSimulationResults, selectedSimulationChart)}
-      <div class="tab-strip" role="tablist" aria-label="Simulation percentiles">
-        ${simulationPercentiles
-          .map(
-            (percentile) => `
-              <button
-                type="button"
-                class="${selectedSimulationPercentile === percentile ? "tab-button is-active" : "tab-button"}"
-                data-simulation-percentile="${percentile}"
-              >
-                ${percentile}th
-              </button>
-            `
-          )
-          .join("")}
-      </div>
-      <div class="simulation-actions simulation-results-actions">
-        <button
-          type="button"
-          class="secondary-button"
-          data-export-simulation-example="${selectedSimulationPercentile}"
-          ${selectedDetailScenario ? "" : "disabled"}
-        >
-          Export example
-        </button>
-      </div>
-      <p class="helper-copy">Depletion is cumulative by year and means the plan ran out of non-home assets or cash. Home equity still remains in total assets because homes are not sold in the simulation.</p>
-      <div class="board-scroll simulation-results">
-        <table class="flow-table">
-          <thead>
-            <tr>
-              <th>Year</th>
-              <th>${selectedSimulationPercentile}th percentile assets</th>
-              <th>Depleted by year</th>
-              <th>Example</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows
-              .map((row) => {
-                const expandedKey = `${selectedSimulationPercentile}:${row.yearNumber}`;
-                const isExpanded = expandedSimulationExampleKeys.has(expandedKey);
-                const exampleYear =
-                  isExpanded
-                    ? getExampleSimulationYear(selectedDetailScenario, row.yearNumber)
-                    : null;
-
-                return `
-                  <tr>
-                    <th>${escapeHtml(row.label)}</th>
-                    <td>${formatCurrency(row.totalAssets)}</td>
-                    <td>${formatPercentage(row.depletionProbability)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        class="link-button simulation-year-button"
-                        data-toggle-simulation-example="${expandedKey}"
-                      >
-                        ${isExpanded ? "Hide example" : "Show example"}
-                      </button>
-                    </td>
-                  </tr>
-                  ${
-                    isExpanded
-                      ? `
-                  <tr class="simulation-detail-row">
-                    <td colspan="4">
-                      ${
-                        exampleYear
-                          ? renderSimulationExampleYear(exampleYear)
-                          : `<div class="simulation-detail-panel"><p class="helper-copy">No example year was available for this percentile row.</p></div>`
-                      }
-                    </td>
-                  </tr>
-                      `
-                      : ""
-                  }
-                `;
-              })
+      <section class="simulation-example-card">
+        <div class="simulation-example-card-controls">
+          <div class="tab-strip simulation-example-percentile-tabs" role="tablist" aria-label="Simulation percentiles">
+            ${simulationPercentiles
+              .map(
+                (percentile) => `
+                  <button
+                    type="button"
+                    class="${selectedSimulationPercentile === percentile ? "tab-button is-active" : "tab-button"}"
+                    data-simulation-percentile="${percentile}"
+                  >
+                    ${percentile}th
+                  </button>
+                `
+              )
               .join("")}
-          </tbody>
-        </table>
-      </div>
+          </div>
+          <div class="simulation-actions simulation-results-actions">
+            <button
+              type="button"
+              class="secondary-button"
+              data-export-simulation-example="${selectedSimulationPercentile}"
+              ${selectedDetailScenario ? "" : "disabled"}
+            >
+              Export example
+            </button>
+          </div>
+        </div>
+        <p class="helper-copy">Depletion is cumulative by year and means the plan ran out of non-home assets or cash. Home equity still remains in total assets because homes are not sold in the simulation.</p>
+        <div class="board-scroll simulation-results">
+          <table class="flow-table">
+            <thead>
+              <tr>
+                <th>Year</th>
+                <th>${selectedSimulationPercentile}th percentile assets</th>
+                <th>Depleted by year</th>
+                <th>Example</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows
+                .map((row) => {
+                  const expandedKey = `${selectedSimulationPercentile}:${row.yearNumber}`;
+                  const isExpanded = expandedSimulationExampleKeys.has(expandedKey);
+                  const exampleYear =
+                    isExpanded
+                      ? getExampleSimulationYear(selectedDetailScenario, row.yearNumber)
+                      : null;
+
+                  return `
+                    <tr>
+                      <th>${escapeHtml(row.label)}</th>
+                      <td>${formatCurrency(row.totalAssets)}</td>
+                      <td>${formatPercentage(row.depletionProbability)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          class="link-button simulation-year-button"
+                          data-toggle-simulation-example="${expandedKey}"
+                        >
+                          ${isExpanded ? "Hide example" : "Show example"}
+                        </button>
+                      </td>
+                    </tr>
+                    ${
+                      isExpanded
+                        ? `
+                    <tr class="simulation-detail-row">
+                      <td colspan="4">
+                        ${
+                          exampleYear
+                            ? renderSimulationExampleYear(exampleYear)
+                            : `<div class="simulation-detail-panel"><p class="helper-copy">No example year was available for this percentile row.</p></div>`
+                        }
+                      </td>
+                    </tr>
+                        `
+                        : ""
+                    }
+                  `;
+                })
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
   `;
 }
 
@@ -4251,7 +4399,89 @@ function getSimulationInflationSummary(): string {
 }
 
 function getSimulationTaxPresetLabel(): string {
-  return simulationDraft.taxPreset === "custom" ? "Custom" : "NYC 2025";
+  if (simulationDraft.taxPreset === "custom") {
+    return "Custom";
+  }
+
+  if (simulationDraft.taxPreset === "nyc") {
+    return "NYC 2026";
+  }
+
+  return getBuiltInTaxPresetOptions().find((preset) => preset.id === simulationDraft.taxPreset)?.label ?? "State 2026";
+}
+
+function getSimulationTaxPresetSummary(): string {
+  if (simulationDraft.taxPreset === "custom") {
+    return getTaxScheduleSummary(
+      "Custom",
+      plannerState.taxes,
+      taxProfileDraft.stateTaxName,
+      taxProfileDraft.stateCapitalGainsTaxName,
+      taxProfileDraft.localTaxName,
+      parseEditableNumber(taxProfileDraft.stateTaxableIncomeAdjustment)
+    );
+  }
+
+  const preset = createBuiltInTaxPresetDefinition(simulationDraft.taxPreset, plannerState.taxProfile.filingStatus);
+  return getTaxScheduleSummary(
+    getSimulationTaxPresetLabel(),
+    preset.taxes,
+    preset.profile.stateTaxName,
+    preset.profile.stateCapitalGainsTaxName,
+    preset.profile.localTaxName,
+    preset.profile.stateTaxableIncomeAdjustment
+  );
+}
+
+function getTaxScheduleSummary(
+  label: string,
+  taxes: readonly TaxDefinition[],
+  stateTaxName: string,
+  stateCapitalGainsTaxName: string,
+  localTaxName: string,
+  stateAdjustment: number
+): string {
+  const stateTax = taxes.find((tax) => tax.name === stateTaxName);
+  const stateCapitalGainsTax = taxes.find((tax) => tax.name === stateCapitalGainsTaxName);
+  const localTax = taxes.find((tax) => tax.name === localTaxName);
+  const parts: string[] = [];
+
+  if (stateTax) {
+    parts.push(`State ${formatTaxRateRange(stateTax.taxRates)}`);
+  } else {
+    parts.push("No state wage income tax");
+  }
+
+  if (stateCapitalGainsTax) {
+    parts.push(`LTCG ${formatTaxRateRange(stateCapitalGainsTax.taxRates)}`);
+  } else {
+    parts.push("no state LTCG tax");
+  }
+
+  if (localTax) {
+    parts.push(`local ${formatTaxRateRange(localTax.taxRates)}`);
+  }
+
+  if (stateTax && stateAdjustment > 0) {
+    parts.push(`${formatCurrency(stateAdjustment)} deduction/exemption`);
+  }
+
+  return `${label}: ${parts.join("; ")}`;
+}
+
+function formatTaxRateRange(taxRates: readonly TaxRateDefinition[]): string {
+  if (taxRates.length === 0) {
+    return "none";
+  }
+
+  const rates = taxRates.map((taxRate) => taxRate.rate * 100);
+  const minRate = Math.min(...rates);
+  const maxRate = Math.max(...rates);
+  if (Math.abs(minRate - maxRate) < 0.000001) {
+    return formatPercentage(maxRate);
+  }
+
+  return `${formatPercentage(minRate)}-${formatPercentage(maxRate)}`;
 }
 
 function renderDisclosureIcon(expanded: boolean): string {
@@ -4278,6 +4508,15 @@ function renderSimulationBoard(): string {
         </option>
       `
     )
+    .join("");
+  const builtInTaxPresetOptions = getBuiltInTaxPresetOptions()
+    .map((preset) => {
+      return `
+        <option value="${escapeAttribute(preset.id)}" ${simulationDraft.taxPreset === preset.id ? "selected" : ""}>
+          ${escapeHtml(preset.label)}
+        </option>
+      `;
+    })
     .join("");
   return `
     <div class="simulation-panel">
@@ -4444,9 +4683,10 @@ function renderSimulationBoard(): string {
                   <h3>Taxes</h3>
                 </div>
                 <select name="simulationTaxPreset" class="simulation-header-select">
-                  <option value="nyc" ${simulationDraft.taxPreset === "nyc" ? "selected" : ""}>NYC 2025</option>
+                  ${builtInTaxPresetOptions}
                   <option value="custom" ${simulationDraft.taxPreset === "custom" ? "selected" : ""}>Custom</option>
                 </select>
+                <span class="summary-meta tax-preset-summary">${escapeHtml(getSimulationTaxPresetSummary())}</span>
               </div>
               ${
                 simulationDraft.taxPreset === "custom"
@@ -4654,8 +4894,15 @@ function renderSimulationBoard(): string {
       ${
         getDisplayedSimulationResults()
           ? `
-      ${renderSimulationSweepResults()}
-      <div id="simulation-results-panel">${renderSimulationResultsBody()}</div>
+      <div class="simulation-results-divider" aria-hidden="true"></div>
+      <section class="simulation-results-section" aria-labelledby="simulation-results-heading">
+        <div class="simulation-results-heading">
+          <h2 id="simulation-results-heading">Results</h2>
+          <p>You run out of liquid assets <strong>${formatPercentage(getDisplayedSimulationRunOutProbability())}</strong> of the time</p>
+        </div>
+        ${renderSimulationSweepResults()}
+        <div id="simulation-results-panel">${renderSimulationResultsBody()}</div>
+      </section>
           `
           : ``
       }
@@ -6293,8 +6540,10 @@ function bindHandlers(user: UserIdentity): void {
       syncSimulationAttemptsLabel(simulationForm);
       return;
     } else if (target.name === "simulationTaxPreset") {
-      simulationDraft.taxPreset = target.value as TaxPreset;
+      const previousTaxPreset = simulationDraft.taxPreset;
+      simulationDraft.taxPreset = normalizeSimulationTaxPreset(target.value, simulationDraft.taxPreset);
       if (simulationDraft.taxPreset === "custom") {
+        seedCustomTaxProfileFromPreset(previousTaxPreset);
         simulationTaxesSectionExpanded = true;
       } else {
         simulationTaxesSectionExpanded = false;
@@ -8423,6 +8672,8 @@ function bindTaxProfileForm(user: UserIdentity): void {
         taxProfileDraft.federalQualifiedTaxName = target.value;
       } else if (target.name === "stateTaxName") {
         taxProfileDraft.stateTaxName = target.value;
+      } else if (target.name === "stateCapitalGainsTaxName") {
+        taxProfileDraft.stateCapitalGainsTaxName = target.value;
       } else if (target.name === "localTaxName") {
         taxProfileDraft.localTaxName = target.value;
       } else if (target.name === "niitTaxName") {
@@ -8454,13 +8705,18 @@ function bindTaxProfileForm(user: UserIdentity): void {
         return;
       }
 
-      const button = target.closest<HTMLButtonElement>("#load-nyc-tax-preset");
-      if (!button) {
+      const presetButton = target.closest<HTMLButtonElement>("#load-tax-preset");
+      if (!presetButton) {
         return;
       }
 
       event.preventDefault();
-      const preset = createDefaultNYCHouseholdTaxes(taxProfileDraft.filingStatus);
+      const selectedTaxPresetId = form.querySelector<HTMLSelectElement>('select[name="taxPresetToLoad"]')?.value ?? "nyc";
+      const normalizedTaxPreset = normalizeSimulationTaxPreset(selectedTaxPresetId, "nyc");
+      const preset = createBuiltInTaxPresetDefinition(
+        normalizedTaxPreset === "custom" ? "nyc" : normalizedTaxPreset,
+        taxProfileDraft.filingStatus
+      );
       plannerState.taxes = preset.taxes.map((tax) => buildNormalizedTaxDefinition(tax));
       plannerState.taxProfile = preset.profile;
       syncTaxProfileDraft();
@@ -8483,6 +8739,8 @@ function clearDeletedTaxReference(taxName: string): void {
     federalQualifiedTaxName:
       plannerState.taxProfile.federalQualifiedTaxName === taxName ? "" : plannerState.taxProfile.federalQualifiedTaxName,
     stateTaxName: plannerState.taxProfile.stateTaxName === taxName ? "" : plannerState.taxProfile.stateTaxName,
+    stateCapitalGainsTaxName:
+      plannerState.taxProfile.stateCapitalGainsTaxName === taxName ? "" : plannerState.taxProfile.stateCapitalGainsTaxName,
     localTaxName: plannerState.taxProfile.localTaxName === taxName ? "" : plannerState.taxProfile.localTaxName,
     niitTaxName: plannerState.taxProfile.niitTaxName === taxName ? "" : plannerState.taxProfile.niitTaxName,
   };
@@ -8497,6 +8755,10 @@ function renameTaxReference(previousName: string, nextName: string): void {
     federalQualifiedTaxName:
       plannerState.taxProfile.federalQualifiedTaxName === previousName ? nextName : plannerState.taxProfile.federalQualifiedTaxName,
     stateTaxName: plannerState.taxProfile.stateTaxName === previousName ? nextName : plannerState.taxProfile.stateTaxName,
+    stateCapitalGainsTaxName:
+      plannerState.taxProfile.stateCapitalGainsTaxName === previousName
+        ? nextName
+        : plannerState.taxProfile.stateCapitalGainsTaxName,
     localTaxName: plannerState.taxProfile.localTaxName === previousName ? nextName : plannerState.taxProfile.localTaxName,
     niitTaxName: plannerState.taxProfile.niitTaxName === previousName ? nextName : plannerState.taxProfile.niitTaxName,
   };
@@ -9504,6 +9766,7 @@ function buildTaxProfileDefinition(draft: TaxProfileDraft): HouseholdTaxProfileD
     federalOrdinaryTaxName: draft.federalOrdinaryTaxName,
     federalQualifiedTaxName: draft.federalQualifiedTaxName,
     stateTaxName: draft.stateTaxName,
+    stateCapitalGainsTaxName: draft.stateCapitalGainsTaxName,
     localTaxName: draft.localTaxName,
     niitTaxName: draft.niitTaxName,
   };
@@ -9526,6 +9789,7 @@ function syncTaxProfileDraft(): void {
   taxProfileDraft.federalOrdinaryTaxName = profile.federalOrdinaryTaxName;
   taxProfileDraft.federalQualifiedTaxName = profile.federalQualifiedTaxName;
   taxProfileDraft.stateTaxName = profile.stateTaxName;
+  taxProfileDraft.stateCapitalGainsTaxName = profile.stateCapitalGainsTaxName;
   taxProfileDraft.localTaxName = profile.localTaxName;
   taxProfileDraft.niitTaxName = profile.niitTaxName;
 }
@@ -9975,10 +10239,10 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
     typeof partialState.simulationAttempts === "number" && Number.isFinite(partialState.simulationAttempts)
       ? Math.max(1000, Math.min(50000, partialState.simulationAttempts))
       : fallbackSimulationDraft.attempts;
-  simulationDraft.taxPreset =
-    partialState.simulationTaxPreset === "nyc" || partialState.simulationTaxPreset === "custom"
-      ? partialState.simulationTaxPreset
-      : fallbackSimulationDraft.taxPreset;
+  simulationDraft.taxPreset = normalizeSimulationTaxPreset(
+    partialState.simulationTaxPreset,
+    fallbackSimulationDraft.taxPreset
+  );
   simulationDraft.horizonYears =
     typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
       ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
