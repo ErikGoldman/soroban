@@ -30,7 +30,6 @@ import {
   type SimulationYearlyPlan,
 } from "./simulation.js";
 import {
-  getSimulationAssetReturnEntries,
   getSimulationAssetValueEntries,
   getSimulationCashFlowEntries,
   getSimulationSaleEntries,
@@ -382,6 +381,18 @@ interface SimulationDraft {
   variableSweep: VariableSweepDraft;
 }
 
+interface PersistedSimulationSettingsDraft {
+  startYear: string;
+  attempts: number;
+  horizonYears: number;
+  inflationPreset: SimulationInflationPreset;
+  fixedInflationRate: string;
+  regimeSwitchingInflation: SimulationDraft["regimeSwitchingInflation"];
+  taxPreset: TaxPreset;
+  customAssetLiquidation: boolean;
+  variableSweep: VariableSweepDraft;
+}
+
 interface SimulationRunState {
   completedAttempts: number;
   totalAttempts: number;
@@ -439,6 +450,8 @@ type TaxPreset = "nyc" | `state:${string}` | "custom";
 const STATE_TAX_PRESET_PREFIX = "state:";
 const NYC_TAX_PRESET_OPTION = { id: "nyc", label: "NYC 2026" } as const;
 const VARIABLE_SWEEP_STORAGE_KEY_PREFIX = "soroban:simulation-variable-sweep:";
+const SIMULATION_TAX_PRESET_STORAGE_KEY_PREFIX = "soroban:simulation-tax-preset:";
+const SIMULATION_SETTINGS_STORAGE_KEY_PREFIX = "soroban:simulation-settings:";
 // When true, each active worker is assigned a distinct sweep value before any sweep is split into chunks.
 const ENABLE_VARIABLE_SWEEP_WORKER_FANOUT = true;
 const VARIABLE_SWEEP_DETAIL_SAMPLE_LIMIT = 128;
@@ -466,6 +479,14 @@ function requireElement<T extends Element>(element: T | null, selector: string):
 
 function getVariableSweepStorageKey(userId: string): string {
   return `${VARIABLE_SWEEP_STORAGE_KEY_PREFIX}${userId}`;
+}
+
+function getSimulationTaxPresetStorageKey(userId: string): string {
+  return `${SIMULATION_TAX_PRESET_STORAGE_KEY_PREFIX}${userId}`;
+}
+
+function getSimulationSettingsStorageKey(userId: string): string {
+  return `${SIMULATION_SETTINGS_STORAGE_KEY_PREFIX}${userId}`;
 }
 
 const mountedAppRoot = requireElement(appRoot, "#app");
@@ -554,7 +575,7 @@ function createFlowDraft(): FlowDraft {
     changeEvents: [],
     startYear: plannerState.startYear,
     endYear: "",
-    annualRaisePercent: "0",
+    annualRaisePercent: "4",
   };
 }
 
@@ -1380,6 +1401,7 @@ function renderFormulaEditor({
   inputName,
   inputId,
   fieldToken,
+  requiredLabel = "Formula",
 }: {
   value: string;
   placeholder: string;
@@ -1387,12 +1409,14 @@ function renderFormulaEditor({
   inputName?: string;
   inputId?: string;
   fieldToken?: string;
+  requiredLabel?: string;
 }): string {
   return `
     <div
       class="formula-editor"
       data-formula-editor
       data-variables-scope="${variablesScope}"
+      data-required-label="${escapeAttribute(requiredLabel)}"
       ${fieldToken ? `data-field-token="${escapeAttribute(fieldToken)}"` : ""}
     >
       <div
@@ -1501,6 +1525,10 @@ function formatCompactCurrency(value: number): string {
 
 function formatSignedCurrency(value: number): string {
   return `${value >= 0 ? "+" : "-"}${formatCurrency(Math.abs(value))}`;
+}
+
+function formatCurrencyWithDelta(value: number, delta: number): string {
+  return `${formatCurrency(value)} (${formatSignedCurrency(delta)})`;
 }
 
 function renderSimulationDetailRows(entries: readonly [string, number][]): string {
@@ -2202,6 +2230,136 @@ function applyVariableSweepDraftFromLocalStorage(userId: string): void {
   }
 }
 
+function persistSimulationTaxPresetToLocalStorage(userId: string): void {
+  try {
+    window.localStorage.setItem(getSimulationTaxPresetStorageKey(userId), simulationDraft.taxPreset);
+  } catch {
+    // Ignore storage write failures and fall back to IndexedDB persistence.
+  }
+}
+
+function removeSimulationTaxPresetFromLocalStorage(userId: string): void {
+  try {
+    window.localStorage.removeItem(getSimulationTaxPresetStorageKey(userId));
+  } catch {
+    // Ignore storage write failures and fall back to IndexedDB persistence.
+  }
+}
+
+function applySimulationTaxPresetFromLocalStorage(userId: string): void {
+  try {
+    const rawValue = window.localStorage.getItem(getSimulationTaxPresetStorageKey(userId));
+    if (!rawValue) {
+      return;
+    }
+
+    simulationDraft.taxPreset = normalizeSimulationTaxPreset(rawValue, simulationDraft.taxPreset);
+    simulationTaxesSectionExpanded = simulationDraft.taxPreset === "custom";
+  } catch {
+    // Ignore storage read failures and continue with IndexedDB-backed state.
+  }
+}
+
+function isSimulationInflationPreset(value: unknown): value is SimulationInflationPreset {
+  return value === "fixed" || value === "fixed-custom" || value === "regime" || value === "regime-custom";
+}
+
+function buildPersistedSimulationSettingsDraft(): PersistedSimulationSettingsDraft {
+  return {
+    startYear: simulationDraft.startYear,
+    attempts: simulationDraft.attempts,
+    horizonYears: simulationDraft.horizonYears,
+    inflationPreset: simulationDraft.inflationPreset,
+    fixedInflationRate: simulationDraft.fixedInflationRate,
+    regimeSwitchingInflation: { ...simulationDraft.regimeSwitchingInflation },
+    taxPreset: simulationDraft.taxPreset,
+    customAssetLiquidation: simulationDraft.customAssetLiquidation,
+    variableSweep: { ...simulationDraft.variableSweep },
+  };
+}
+
+function persistSimulationSettingsDraftToLocalStorage(userId: string): void {
+  try {
+    window.localStorage.setItem(
+      getSimulationSettingsStorageKey(userId),
+      JSON.stringify(buildPersistedSimulationSettingsDraft())
+    );
+  } catch {
+    // Ignore storage write failures and fall back to IndexedDB persistence.
+  }
+}
+
+function removeSimulationSettingsDraftFromLocalStorage(userId: string): void {
+  try {
+    window.localStorage.removeItem(getSimulationSettingsStorageKey(userId));
+  } catch {
+    // Ignore storage write failures and fall back to IndexedDB persistence.
+  }
+}
+
+function applySimulationSettingsDraftFromLocalStorage(userId: string): void {
+  try {
+    const rawValue = window.localStorage.getItem(getSimulationSettingsStorageKey(userId));
+    if (!rawValue) {
+      return;
+    }
+
+    const parsedValue = JSON.parse(rawValue) as Partial<PersistedSimulationSettingsDraft>;
+    if (typeof parsedValue.startYear === "string") {
+      const normalizedYear = normalizeYearInput(parsedValue.startYear);
+      simulationDraft.startYear = normalizedYear;
+      plannerState.startYear = normalizedYear;
+    }
+    if (typeof parsedValue.attempts === "number" && Number.isFinite(parsedValue.attempts)) {
+      simulationDraft.attempts = Math.max(1000, Math.min(50000, parsedValue.attempts));
+    }
+    if (typeof parsedValue.horizonYears === "number" && Number.isFinite(parsedValue.horizonYears)) {
+      simulationDraft.horizonYears = Math.max(1, Math.min(50, parsedValue.horizonYears));
+    }
+    if (isSimulationInflationPreset(parsedValue.inflationPreset)) {
+      simulationDraft.inflationPreset = parsedValue.inflationPreset;
+      simulationInflationSectionExpanded = isSimulationInflationCustomPreset(simulationDraft.inflationPreset);
+    }
+    if (typeof parsedValue.fixedInflationRate === "string") {
+      simulationDraft.fixedInflationRate = parsedValue.fixedInflationRate;
+    }
+    const savedRegimeSwitchingInflation = parsedValue.regimeSwitchingInflation;
+    if (savedRegimeSwitchingInflation && typeof savedRegimeSwitchingInflation === "object") {
+      for (const key of Object.keys(simulationDraft.regimeSwitchingInflation) as Array<
+        keyof SimulationDraft["regimeSwitchingInflation"]
+      >) {
+        const value = savedRegimeSwitchingInflation[key];
+        if (typeof value === "string") {
+          simulationDraft.regimeSwitchingInflation[key] = value;
+        }
+      }
+    }
+    if (typeof parsedValue.taxPreset === "string") {
+      simulationDraft.taxPreset = normalizeSimulationTaxPreset(parsedValue.taxPreset, simulationDraft.taxPreset);
+      simulationTaxesSectionExpanded = simulationDraft.taxPreset === "custom";
+    }
+    if (typeof parsedValue.customAssetLiquidation === "boolean") {
+      simulationDraft.customAssetLiquidation = parsedValue.customAssetLiquidation;
+    }
+    if (parsedValue.variableSweep && typeof parsedValue.variableSweep === "object") {
+      if (typeof parsedValue.variableSweep.enabled === "boolean") {
+        simulationDraft.variableSweep.enabled = parsedValue.variableSweep.enabled;
+      }
+      if (typeof parsedValue.variableSweep.variableName === "string") {
+        simulationDraft.variableSweep.variableName = parsedValue.variableSweep.variableName;
+      }
+      if (typeof parsedValue.variableSweep.minValue === "string") {
+        simulationDraft.variableSweep.minValue = parsedValue.variableSweep.minValue;
+      }
+      if (typeof parsedValue.variableSweep.maxValue === "string") {
+        simulationDraft.variableSweep.maxValue = parsedValue.variableSweep.maxValue;
+      }
+    }
+  } catch {
+    // Ignore storage read failures and continue with IndexedDB-backed state.
+  }
+}
+
 function cancelActiveSimulationRun(): void {
   for (const worker of activeSimulationWorkers) {
     worker.terminate();
@@ -2220,7 +2378,7 @@ function eventSummary(action: EventAction): string {
     case "adjust-variable":
       return `Adjust ${action.variableName} with ${action.adjustment.m}x + ${action.adjustment.b}`;
     case "set-flow-formula":
-      return `Set ${action.flowName} formula to ${action.formula}`;
+      return `Set ${action.flowName} amount to ${action.formula}`;
     case "add-variable":
       return `Add variable ${action.variable.name} = ${action.variable.value}`;
     case "add-flow":
@@ -2698,6 +2856,7 @@ function renderSetupFlowArea(flowRows: Array<{ flow: FlowDefinition; yearlyAmoun
                           value: flow.formula,
                           placeholder: "1,000",
                           variablesScope: "planner",
+                          requiredLabel: "Amount",
                         })}
                       </div>
                     </form>
@@ -2925,7 +3084,7 @@ function renderExpensesBoard(expenseRows: Array<{ flow: FlowDefinition; yearlyAm
         <thead>
           <tr>
             <th>Expense</th>
-            <th>Formula</th>
+            <th>Amount</th>
             <th>Change over time</th>
             <th>Yearly amount</th>
           </tr>
@@ -3171,7 +3330,7 @@ function updateFlowDraftType(draft: FlowDraft | FlowEditDraft, type: FlowType): 
     draft.startYear = normalizeYearInput(draft.startYear);
     draft.endYear = normalizeOptionalYearInput(draft.endYear);
     if (!draft.annualRaisePercent.trim()) {
-      draft.annualRaisePercent = "0";
+      draft.annualRaisePercent = "4";
     }
     return;
   }
@@ -3461,10 +3620,6 @@ function renderSimulationTaxInputs(row: SimulationDetailYearRow): string {
 }
 
 function renderSimulationTaxBreakdown(row: SimulationDetailYearRow): string {
-  if (Math.abs(row.taxAmount) <= 0.000001) {
-    return `<p class="helper-copy">No tax was due for this example year.</p>`;
-  }
-
   const calculationEntries: Array<[string, number]> = [
     ["Federal taxable income", row.taxBreakdown.federalTaxableIncome],
     ["Federal ordinary taxable income", row.taxBreakdown.federalOrdinaryTaxableIncome],
@@ -3482,6 +3637,10 @@ function renderSimulationTaxBreakdown(row: SimulationDetailYearRow): string {
   const visibleCalculationEntries = calculationEntries.filter(([, amount]) => Math.abs(amount) > 0.000001);
   const taxEntries = [...row.taxBreakdown.taxByName.entries()].sort((left, right) => right[1] - left[1]);
 
+  if (visibleCalculationEntries.length === 0 && taxEntries.length === 0 && Math.abs(row.taxAmount) <= 0.000001) {
+    return `<p class="helper-copy">No tax was due for this example year.</p>`;
+  }
+
   return `
     <div class="board-scroll">
       <table class="flow-table simulation-flow-detail-table">
@@ -3493,7 +3652,7 @@ function renderSimulationTaxBreakdown(row: SimulationDetailYearRow): string {
         </thead>
         <tbody>
           ${renderSimulationDetailRows(visibleCalculationEntries)}
-          ${taxEntries.length > 0 ? `<tr><th>Total tax paid</th><td>${formatCurrency(row.taxAmount)}</td></tr>` : ""}
+          ${Math.abs(row.taxAmount) > 0.000001 ? `<tr><th>Total tax paid</th><td>${formatCurrency(row.taxAmount)}</td></tr>` : ""}
         </tbody>
       </table>
     </div>
@@ -3520,7 +3679,8 @@ function renderSimulationTaxBreakdown(row: SimulationDetailYearRow): string {
 }
 
 function renderSimulationAssetSales(saleEntries: readonly [string, number][]): string {
-  if (saleEntries.length === 0) {
+  const saleSummaries = summarizeSimulationAssetSales(saleEntries);
+  if (saleSummaries.length === 0) {
     return `<p class="helper-copy">No asset sales were needed for this example year.</p>`;
   }
 
@@ -3529,16 +3689,64 @@ function renderSimulationAssetSales(saleEntries: readonly [string, number][]): s
       <table class="flow-table simulation-flow-detail-table">
         <thead>
           <tr>
-            <th>Sale activity</th>
-            <th>Amount</th>
+            <th>Asset</th>
+            <th>Sale proceeds</th>
+            <th>Realized gain</th>
           </tr>
         </thead>
         <tbody>
-          ${renderSimulationDetailRows(saleEntries)}
+          ${saleSummaries
+            .map(
+              (saleSummary) => `
+                <tr>
+                  <th>${escapeHtml(saleSummary.assetName)}</th>
+                  <td>${formatCurrency(saleSummary.proceeds)}</td>
+                  <td>${formatSignedCurrency(saleSummary.realizedGain)}</td>
+                </tr>
+              `
+            )
+            .join("")}
         </tbody>
       </table>
     </div>
   `;
+}
+
+interface SimulationAssetSaleSummary {
+  assetName: string;
+  proceeds: number;
+  realizedGain: number;
+}
+
+function summarizeSimulationAssetSales(saleEntries: readonly [string, number][]): SimulationAssetSaleSummary[] {
+  const saleSummariesByAsset = new Map<string, SimulationAssetSaleSummary>();
+
+  for (const [entryName, amount] of saleEntries) {
+    const saleProceedsSuffix = " sale proceeds";
+    const realizedGainSuffix = " realized gain";
+    const assetName = entryName.endsWith(saleProceedsSuffix)
+      ? entryName.slice(0, -saleProceedsSuffix.length)
+      : entryName.endsWith(realizedGainSuffix)
+        ? entryName.slice(0, -realizedGainSuffix.length)
+        : "";
+    if (!assetName) {
+      continue;
+    }
+
+    const saleSummary = saleSummariesByAsset.get(assetName) ?? {
+      assetName,
+      proceeds: 0,
+      realizedGain: 0,
+    };
+    if (entryName.endsWith(saleProceedsSuffix)) {
+      saleSummary.proceeds += amount;
+    } else {
+      saleSummary.realizedGain += amount;
+    }
+    saleSummariesByAsset.set(assetName, saleSummary);
+  }
+
+  return [...saleSummariesByAsset.values()].sort((left, right) => right.proceeds - left.proceeds);
 }
 
 function buildSimulationExampleExport(
@@ -3821,6 +4029,8 @@ async function clearScenario(user: UserIdentity): Promise<void> {
   try {
     await storage.deletePlannerState(user.id);
     removeVariableSweepDraftFromLocalStorage(user.id);
+    removeSimulationTaxPresetFromLocalStorage(user.id);
+    removeSimulationSettingsDraftFromLocalStorage(user.id);
     resetPlannerWorkspaceState();
     renderPlanner(user);
   } catch (error) {
@@ -3845,9 +4055,10 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
     ([entryName]) => entryName.endsWith(" sale proceeds") || entryName.endsWith(" realized gain")
   );
   const cashFlowEntries = getSimulationCashFlowEntries(row);
-  const assetReturnEntries = getSimulationAssetReturnEntries(row);
   const assetValueEntries = getSimulationAssetValueEntries(row);
   const expensesWithoutTaxes = Math.max(0, row.totalExpenses - row.taxAmount);
+  const liquidAssets = row.liquidAssets ?? 0;
+  const startingLiquidAssets = row.startingLiquidAssets ?? row.startingAssets;
 
   return `
     <div class="simulation-detail-panel">
@@ -3855,7 +4066,7 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
       <p class="helper-copy">This is one actual simulated attempt chosen to stay consistent across the selected percentile path. It is illustrative, not the percentile itself.</p>
       <div class="stack-list">
         <section>
-          <strong>Portfolio</strong>
+          <strong>Summary</strong>
           <div class="board-scroll">
             <table class="flow-table simulation-flow-detail-table">
               <tbody>
@@ -3865,49 +4076,31 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
                 </tr>
                 <tr>
                   <th>Ending assets</th>
-                  <td>${formatCurrency(row.endingAssets)}</td>
+                  <td>${formatCurrencyWithDelta(row.endingAssets, row.endingAssets - row.startingAssets)}</td>
                 </tr>
                 <tr>
                   <th>Liquid assets</th>
-                  <td>${formatCurrency(row.liquidAssets ?? 0)}</td>
+                  <td>${formatCurrencyWithDelta(liquidAssets, liquidAssets - startingLiquidAssets)}</td>
                 </tr>
                 <tr>
-                  <th>Inflation mode</th>
-                  <td>${escapeHtml(row.inflationMode === "regime-switching" ? "Regime switching" : "Fixed")}</td>
+                  <th>Gains</th>
+                  <td>${formatCurrency(row.totalGains)}</td>
                 </tr>
-                <tr>
-                  <th>Inflation regime</th>
-                  <td>${escapeHtml(row.inflationRegime === "fixed" ? "Fixed" : row.inflationRegime)}</td>
-                </tr>
-                <tr>
-                  <th>Inflation rate applied</th>
-                  <td>${formatPercentage(row.inflationRateApplied * 100)}</td>
-                </tr>
-                ${assetValueEntries
-                  .map(
-                    (entry) => `
-                <tr>
-                  <th>${escapeHtml(entry.label)}</th>
-                  <td>${formatCurrency(entry.amount)}</td>
-                </tr>
-                `
-                  )
-                  .join("")}
                 <tr>
                   <th>Expenses</th>
                   <td>${formatCurrency(expensesWithoutTaxes)}</td>
                 </tr>
                 <tr>
-                  <th>Total gains</th>
-                  <td>${formatCurrency(row.totalGains)}</td>
+                  <th>Tax paid</th>
+                  <td>${formatCurrency(row.taxAmount)}</td>
                 </tr>
                 <tr>
                   <th>Taxable gains</th>
                   <td>${formatCurrency(row.taxableGains)}</td>
                 </tr>
                 <tr>
-                  <th>Tax paid</th>
-                  <td>${formatCurrency(row.taxAmount)}</td>
+                  <th>Inflation rate applied</th>
+                  <td>${formatPercentage(row.inflationRateApplied * 100)}</td>
                 </tr>
               </tbody>
             </table>
@@ -3945,26 +4138,26 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
           }
         </section>
         <section>
-          <strong>Asset returns</strong>
+          <strong>Assets</strong>
           ${
-            assetReturnEntries.length === 0
-              ? `<p class="helper-copy">No unrealized asset returns were recorded for this example year.</p>`
+            assetValueEntries.length === 0
+              ? `<p class="helper-copy">No asset values were recorded for this example year.</p>`
               : `
           <div class="board-scroll">
             <table class="flow-table simulation-flow-detail-table">
               <thead>
                 <tr>
-                  <th>Entry</th>
-                  <th>Year total</th>
+                  <th>Asset</th>
+                  <th>Current value</th>
                 </tr>
               </thead>
               <tbody>
-                ${assetReturnEntries
+                ${assetValueEntries
                   .map(
                     (entry) => `
                       <tr>
                         <th>${escapeHtml(entry.label)}</th>
-                        <td>${formatSignedCurrency(entry.amount)}${entry.detail}</td>
+                        <td>${formatCurrency(entry.amount)}${entry.detail}</td>
                       </tr>
                     `
                   )
@@ -3977,19 +4170,18 @@ function renderSimulationExampleYear(row: SimulationDetailYearRow): string {
         </section>
         <section>
           <details>
-            <summary><strong>Tax inputs</strong></summary>
-            ${renderSimulationTaxInputs(row)}
+            <summary><strong>Asset sales</strong></summary>
+            ${renderSimulationAssetSales(saleEntries)}
           </details>
         </section>
         <section>
           <details>
-            <summary><strong>Tax paid</strong></summary>
-            ${renderSimulationTaxBreakdown(row)}
+            <summary><strong>Tax</strong></summary>
+            <div class="simulation-tax-detail">
+              ${renderSimulationTaxInputs(row)}
+              ${renderSimulationTaxBreakdown(row)}
+            </div>
           </details>
-        </section>
-        <section>
-          <strong>Asset sales</strong>
-          ${renderSimulationAssetSales(saleEntries)}
         </section>
       </div>
     </div>
@@ -4321,7 +4513,7 @@ function renderSimulationResultsBody(): string {
             </button>
           </div>
         </div>
-        <p class="helper-copy">Depletion is cumulative by year and means the plan ran out of non-home assets or cash. Home equity still remains in total assets because homes are not sold in the simulation.</p>
+        <p class="helper-copy">See an example scenario from each percentile. For illustrative purposes only.</p>
         <div class="board-scroll simulation-results">
           <table class="flow-table">
             <thead>
@@ -5868,12 +6060,13 @@ function renderFlowComposer(): string {
             </select>
           </label>
           <label>
-            Formula
+            Amount
             ${renderFormulaEditor({
               inputName: "formula",
               value: flowDraft.formula,
               placeholder: "1,000",
               variablesScope: "planner",
+              requiredLabel: "Amount",
             })}
           </label>
           ${
@@ -5959,7 +6152,7 @@ function renderEventComposer(): string {
                                 Type
                                 <select data-action-kind="${entry.id}:${action.id}">
                                   <option value="adjust-variable" ${action.kind === "adjust-variable" ? "selected" : ""}>Adjust variable</option>
-                                  <option value="set-flow-formula" ${action.kind === "set-flow-formula" ? "selected" : ""}>Set flow formula</option>
+                                  <option value="set-flow-formula" ${action.kind === "set-flow-formula" ? "selected" : ""}>Set flow amount</option>
                                   <option value="add-variable" ${action.kind === "add-variable" ? "selected" : ""}>Add variable</option>
                                   <option value="add-flow" ${action.kind === "add-flow" ? "selected" : ""}>Add flow</option>
                                   <option value="one-time-expense" ${action.kind === "one-time-expense" ? "selected" : ""}>One-time expense</option>
@@ -6009,7 +6202,7 @@ function renderFlowEvents(flowName: string): string {
         <thead>
           <tr>
             <th>Year</th>
-            <th>Formula</th>
+            <th>Amount</th>
             <th></th>
           </tr>
         </thead>
@@ -6053,11 +6246,12 @@ function renderFlowEvents(flowName: string): string {
                             value: formulaValue,
                             placeholder: "1,000",
                             variablesScope: "planner",
+                            requiredLabel: "Amount",
                           })}
                         </div>`
                       : `<button type="button" class="link-button flow-event-inline-button flow-event-inline-formula" data-start-edit-flow-event-formula="${escapeAttribute(
                           eventName ?? "__new__"
-                        )}"><code>${escapeHtml(formulaValue ? formatFormulaText(formulaValue) : "Formula")}</code></button>`
+                        )}"><code>${escapeHtml(formulaValue ? formatFormulaText(formulaValue) : "Amount")}</code></button>`
                   }
                 </td>
                 <td>
@@ -6092,7 +6286,7 @@ function renderFlowDraftEvents(draft: FlowDraft): string {
         <thead>
           <tr>
             <th>Year</th>
-            <th>Formula</th>
+            <th>Amount</th>
             <th></th>
           </tr>
         </thead>
@@ -6129,11 +6323,12 @@ function renderFlowDraftEvents(draft: FlowDraft): string {
                               value: formulaValue,
                               placeholder: "1,000",
                               variablesScope: "planner",
+                              requiredLabel: "Amount",
                             })}
                           </div>`
                         : `<button type="button" class="link-button flow-event-inline-button flow-event-inline-formula" data-start-edit-flow-draft-event-formula="${escapeAttribute(
                             changeId ?? "__new__"
-                          )}"><code>${escapeHtml(formulaValue ? formatFormulaText(formulaValue) : "Formula")}</code></button>`
+                          )}"><code>${escapeHtml(formulaValue ? formatFormulaText(formulaValue) : "Amount")}</code></button>`
                     }
                   </td>
                   <td>
@@ -6218,12 +6413,13 @@ function renderFlowEditor(): string {
             </select>
           </label>
           <label>
-            Formula
+            Amount
             ${renderFormulaEditor({
               inputName: "formula",
               value: flowEditDraft.formula,
               placeholder: "1,000",
               variablesScope: "planner",
+              requiredLabel: "Amount",
             })}
           </label>
           ${
@@ -6274,14 +6470,15 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
       `;
     case "set-flow-formula":
       return `
-        <p class="helper-copy">This event updates the formula for ${escapeHtml(eventDraft.flowName || action.flowName || "the selected flow")}.</p>
+        <p class="helper-copy">This event updates the amount for ${escapeHtml(eventDraft.flowName || action.flowName || "the selected flow")}.</p>
         <label>
-          New formula
+          New amount
           ${renderFormulaEditor({
             value: action.formula,
             placeholder: "1,000",
             variablesScope: "event-draft",
             fieldToken: `${entryId}:${action.id}:formula`,
+            requiredLabel: "Amount",
           })}
         </label>
       `;
@@ -6314,12 +6511,13 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
           </select>
         </label>
         <label>
-          Formula
+          Amount
           ${renderFormulaEditor({
             value: action.flowDefinitionFormula,
             placeholder: "sideGig",
             variablesScope: "event-draft",
             fieldToken: `${entryId}:${action.id}:flowDefinitionFormula`,
+            requiredLabel: "Amount",
           })}
         </label>
       `;
@@ -6330,12 +6528,13 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
           <input type="text" data-field="${entryId}:${action.id}:oneTimeExpenseName" value="${escapeHtml(action.oneTimeExpenseName)}" placeholder="Laptop purchase" />
         </label>
         <label>
-          Formula
+          Amount
           ${renderFormulaEditor({
             value: action.oneTimeExpenseFormula,
             placeholder: "taxBillAmount * 0.5",
             variablesScope: "event-draft",
             fieldToken: `${entryId}:${action.id}:oneTimeExpenseFormula`,
+            requiredLabel: "Amount",
           })}
         </label>
       `;
@@ -6444,6 +6643,64 @@ function bindHandlers(user: UserIdentity): void {
   }
 
   const simulationForm = document.querySelector<HTMLFormElement>("#simulation-form");
+
+  const applySimulationInflationPresetChange = (target: HTMLSelectElement): boolean => {
+    if (target.name !== "simulationInflationPreset") {
+      return false;
+    }
+
+    const nextInflationPreset = isSimulationInflationPreset(target.value) ? target.value : simulationDraft.inflationPreset;
+    if (nextInflationPreset === simulationDraft.inflationPreset) {
+      return true;
+    }
+
+    simulationDraft.inflationPreset = nextInflationPreset;
+    simulationInflationSectionExpanded = isSimulationInflationCustomPreset(simulationDraft.inflationPreset);
+    invalidateSimulationState();
+    renderPlanner(user);
+    void persistPlannerState(user);
+    return true;
+  };
+
+  const applySimulationTaxPresetChange = (target: HTMLSelectElement): boolean => {
+    if (target.name !== "simulationTaxPreset") {
+      return false;
+    }
+
+    const previousTaxPreset = simulationDraft.taxPreset;
+    const nextTaxPreset = normalizeSimulationTaxPreset(target.value, simulationDraft.taxPreset);
+    if (nextTaxPreset === simulationDraft.taxPreset) {
+      return true;
+    }
+
+    simulationDraft.taxPreset = nextTaxPreset;
+    if (simulationDraft.taxPreset === "custom") {
+      seedCustomTaxProfileFromPreset(previousTaxPreset);
+      simulationTaxesSectionExpanded = true;
+    } else {
+      simulationTaxesSectionExpanded = false;
+    }
+    persistSimulationSettingsDraftToLocalStorage(user.id);
+    persistSimulationTaxPresetToLocalStorage(user.id);
+    invalidateSimulationState();
+    syncSimulationSubmitState();
+    renderPlanner(user);
+    void persistPlannerState(user);
+    return true;
+  };
+
+  const applySimulationVariableSweepVariableChange = (target: HTMLSelectElement): boolean => {
+    if (target.name !== "simulationVariableSweepVariableName") {
+      return false;
+    }
+
+    simulationDraft.variableSweep.variableName = target.value;
+    invalidateSimulationState();
+    syncSimulationSubmitState();
+    void persistPlannerState(user);
+    return true;
+  };
+
   simulationForm?.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) {
@@ -6513,12 +6770,7 @@ function bindHandlers(user: UserIdentity): void {
       plannerState.startYear = normalizedYear;
     } else if (target.name === "simulationHorizonYears") {
       simulationDraft.horizonYears = Math.max(1, Math.min(50, Number(target.value) || 1));
-    } else if (target.name === "simulationInflationPreset" && target instanceof HTMLSelectElement) {
-      simulationDraft.inflationPreset = target.value as SimulationInflationPreset;
-      simulationInflationSectionExpanded = isSimulationInflationCustomPreset(simulationDraft.inflationPreset);
-      invalidateSimulationState();
-      renderPlanner(user);
-      void persistPlannerState(user);
+    } else if (target instanceof HTMLSelectElement && applySimulationInflationPresetChange(target)) {
       return;
     } else if (target.name === "simulationFixedInflationRate") {
       simulationDraft.fixedInflationRate = target.value;
@@ -6538,20 +6790,9 @@ function bindHandlers(user: UserIdentity): void {
       simulationDraft.attempts = Math.max(1000, Math.min(50000, Number(target.value) || 10000));
       invalidateSimulationState();
       syncSimulationAttemptsLabel(simulationForm);
+      persistSimulationSettingsDraftToLocalStorage(user.id);
       return;
-    } else if (target.name === "simulationTaxPreset") {
-      const previousTaxPreset = simulationDraft.taxPreset;
-      simulationDraft.taxPreset = normalizeSimulationTaxPreset(target.value, simulationDraft.taxPreset);
-      if (simulationDraft.taxPreset === "custom") {
-        seedCustomTaxProfileFromPreset(previousTaxPreset);
-        simulationTaxesSectionExpanded = true;
-      } else {
-        simulationTaxesSectionExpanded = false;
-      }
-      invalidateSimulationState();
-      syncSimulationSubmitState();
-      renderPlanner(user);
-      void persistPlannerState(user);
+    } else if (target instanceof HTMLSelectElement && applySimulationTaxPresetChange(target)) {
       return;
     } else if (target.name === "simulationVariableSweepEnabled" && target instanceof HTMLInputElement) {
       simulationDraft.variableSweep.enabled = target.checked;
@@ -6569,8 +6810,8 @@ function bindHandlers(user: UserIdentity): void {
       renderPlanner(user);
       void persistPlannerState(user);
       return;
-    } else if (target.name === "simulationVariableSweepVariableName") {
-      simulationDraft.variableSweep.variableName = target.value;
+    } else if (target instanceof HTMLSelectElement && applySimulationVariableSweepVariableChange(target)) {
+      return;
     } else if (target.name === "simulationVariableSweepMinValue") {
       simulationDraft.variableSweep.minValue = target.value;
     } else if (target.name === "simulationVariableSweepMaxValue") {
@@ -6584,15 +6825,45 @@ function bindHandlers(user: UserIdentity): void {
 
   simulationForm?.addEventListener("change", (event) => {
     const target = event.target;
+    if (
+      target instanceof HTMLSelectElement &&
+      (applySimulationInflationPresetChange(target) ||
+        applySimulationTaxPresetChange(target) ||
+        applySimulationVariableSweepVariableChange(target))
+    ) {
+      return;
+    }
+
     if (!(target instanceof HTMLInputElement)) {
       return;
     }
 
-    if (target.name !== "simulationAttempts") {
+    if (target.name === "simulationAttempts") {
+      simulationDraft.attempts = Math.max(1000, Math.min(50000, Number(target.value) || 10000));
+      invalidateSimulationState();
+      syncSimulationAttemptsLabel(simulationForm);
+      void persistPlannerState(user);
       return;
     }
 
-    void persistPlannerState(user);
+    if (target.name === "simulationVariableSweepEnabled") {
+      simulationDraft.variableSweep.enabled = target.checked;
+      if (target.checked) {
+        syncSimulationVariableSweepDraft();
+      }
+      invalidateSimulationState();
+      renderPlanner(user);
+      void persistPlannerState(user);
+      return;
+    }
+
+    if (target.name === "simulationCustomAssetLiquidation") {
+      simulationDraft.customAssetLiquidation = target.checked;
+      invalidateSimulationState();
+      syncSimulationSubmitState();
+      renderPlanner(user);
+      void persistPlannerState(user);
+    }
   });
 
   simulationForm?.addEventListener("submit", async (event) => {
@@ -7601,11 +7872,15 @@ function getEventDraftFormulas(draft: EventDraft): string[] {
   );
 }
 
-function validateFormula(formula: string, availableVariables: readonly string[]): FormulaValidationResult {
+function validateFormula(
+  formula: string,
+  availableVariables: readonly string[],
+  requiredLabel = "Formula"
+): FormulaValidationResult {
   if (!formula.trim()) {
     return {
       valid: false,
-      message: "Formula is required.",
+      message: `${requiredLabel} is required.`,
       unknownVariables: [],
     };
   }
@@ -7649,7 +7924,7 @@ function updateFormulaEditorValidation(binding: FormulaEditorBinding): void {
         message: "",
         unknownVariables: [],
       }
-    : validateFormula(binding.hiddenInput.value, binding.getVariables());
+    : validateFormula(binding.hiddenInput.value, binding.getVariables(), binding.wrapper.dataset.requiredLabel ?? "Formula");
 
   binding.wrapper.dataset.invalid = result.valid ? "false" : "true";
   binding.status.textContent = result.message;
@@ -10037,7 +10312,7 @@ async function saveInlineExpenseValue(flowName: string, formula: string, user: U
   const previousFormulas = [existingFlow.formula];
 
   try {
-    const validation = validateFormula(trimmedFormula, plannerState.variables.map((variable) => variable.name));
+    const validation = validateFormula(trimmedFormula, plannerState.variables.map((variable) => variable.name), "Amount");
     if (!validation.valid) {
       throw new Error(validation.message);
     }
@@ -10312,7 +10587,9 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
 }
 
 async function persistPlannerState(user: UserIdentity): Promise<void> {
+  persistSimulationSettingsDraftToLocalStorage(user.id);
   persistVariableSweepDraftToLocalStorage(user.id);
+  persistSimulationTaxPresetToLocalStorage(user.id);
   await storage.savePlannerState(buildPersistedPlannerStateRecord(user));
 }
 
@@ -10469,6 +10746,8 @@ async function bootstrap(): Promise<void> {
   } else {
     await persistPlannerState(user);
   }
+  applySimulationSettingsDraftFromLocalStorage(user.id);
+  applySimulationTaxPresetFromLocalStorage(user.id);
   applyVariableSweepDraftFromLocalStorage(user.id);
   syncSimulationVariableSweepDraft();
   bindModalDismissHandlers(user);

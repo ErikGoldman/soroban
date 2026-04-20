@@ -1,4 +1,5 @@
 import type { SimulationDetailYearRow } from "./simulation.js";
+import { formatCurrency } from "./calculator.js";
 
 export interface SimulationDisplayEntry {
   label: string;
@@ -16,6 +17,10 @@ export function isSimulationSaleFlowEntry(entryName: string): boolean {
   return entryName.endsWith(" sale proceeds") || entryName.endsWith(" realized gain");
 }
 
+export function isSimulationTaxFlowEntry(entryName: string): boolean {
+  return entryName === "Taxes paid";
+}
+
 export function getSimulationSaleEntries(row: SimulationDetailYearRow): SimulationDisplayEntry[] {
   return getVisibleSimulationFlowEntries(row)
     .filter(([entryName]) => isSimulationSaleFlowEntry(entryName))
@@ -28,7 +33,7 @@ export function getSimulationSaleEntries(row: SimulationDetailYearRow): Simulati
 
 export function getSimulationCashFlowEntries(row: SimulationDetailYearRow): SimulationDisplayEntry[] {
   return getVisibleSimulationFlowEntries(row)
-    .filter(([entryName]) => !isSimulationSaleFlowEntry(entryName))
+    .filter(([entryName]) => !isSimulationSaleFlowEntry(entryName) && !isSimulationTaxFlowEntry(entryName))
     .map(([label, amount]) => ({
       label,
       amount,
@@ -51,12 +56,14 @@ export function getSimulationAssetValueEntries(row: SimulationDetailYearRow): Si
   return [...row.assetValues.entries()]
     .flatMap(([assetName, amount]) => {
       const marketValue = row.assetMarketValues?.get(assetName) ?? amount;
+      const startingAmount = row.startingAssetValues?.get(assetName);
+      const startingMarketValue = row.startingAssetMarketValues?.get(assetName) ?? startingAmount;
       if (Math.abs(marketValue - amount) <= 0.000001) {
         return [
           {
             label: assetName,
             amount,
-            detail: "",
+            detail: formatCurrencyDeltaDetail(amount, startingAmount),
           },
         ];
       }
@@ -65,12 +72,12 @@ export function getSimulationAssetValueEntries(row: SimulationDetailYearRow): Si
         {
           label: `${assetName} equity`,
           amount,
-          detail: "",
+          detail: formatCurrencyDeltaDetail(amount, startingAmount),
         },
         {
           label: `${assetName} market value`,
           amount: marketValue,
-          detail: "",
+          detail: formatCurrencyDeltaDetail(marketValue, startingMarketValue),
         },
       ];
     })
@@ -94,6 +101,18 @@ function compareSignedAmounts(leftAmount: number, rightAmount: number): number {
 
 function formatPercentage(value: number): string {
   return `${value.toFixed(2)}%`;
+}
+
+function formatCurrencyDeltaDetail(currentValue: number, startingValue: number | undefined): string {
+  if (startingValue === undefined) {
+    return "";
+  }
+
+  return ` (${formatSignedCurrency(currentValue - startingValue)})`;
+}
+
+function formatSignedCurrency(value: number): string {
+  return `${value >= 0 ? "+" : "-"}${formatCurrency(Math.abs(value))}`;
 }
 
 function formatFlowPercentageDetail(value: number | undefined): string {

@@ -351,6 +351,12 @@ label {
   display: inline-flex;
   align-items: center;
   min-height: 46px;
+  background: #ece6dd;
+}
+
+.planner-board-controls .tab-button:not(:disabled):not(.is-active):hover,
+.planner-board-controls .tab-button:not(:disabled):not(.is-active):focus-visible {
+  background: #ded9d0;
 }
 
 .planner-main {
@@ -1251,6 +1257,12 @@ label {
   display: grid;
   gap: 12px;
   padding: 8px 0;
+}
+
+.simulation-tax-detail {
+  display: grid;
+  gap: 18px;
+  padding-top: 8px;
 }
 
 .board-scroll {

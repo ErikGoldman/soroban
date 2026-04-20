@@ -40,6 +40,8 @@ function createRow(overrides: Partial<SimulationDetailYearRow> = {}): Simulation
     },
     flowTotals: new Map([["Home property tax", -1.2]]),
     flowPercentages: new Map(),
+    startingAssetValues: new Map([["Home", 20]]),
+    startingAssetMarketValues: new Map([["Home", 100]]),
     assetValues: new Map([["Home", 32.666666666666664]]),
     assetMarketValues: new Map([["Home", 110]]),
     assetReturns: new Map([["Home", { amount: 10, percentage: 10 }]]),
@@ -66,7 +68,12 @@ function createRow(overrides: Partial<SimulationDetailYearRow> = {}): Simulation
 
 describe("simulation detail helpers", () => {
   it("keeps asset returns out of cash flow entries", () => {
-    const row = createRow();
+    const row = createRow({
+      flowTotals: new Map([
+        ["Home property tax", -1.2],
+        ["Taxes paid", -0.4],
+      ]),
+    });
 
     expect(getSimulationCashFlowEntries(row)).toEqual([
       {
@@ -114,12 +121,12 @@ describe("simulation detail helpers", () => {
       {
         label: "Home market value",
         amount: 110,
-        detail: "",
+        detail: " (+$10.00)",
       },
       {
         label: "Home equity",
         amount: 32.666666666666664,
-        detail: "",
+        detail: " (+$12.67)",
       },
     ]);
   });

@@ -116,6 +116,7 @@ export interface SimulationDetailYearRow {
   inflationRegime: "fixed" | "low" | "high";
   startingAssets: number;
   endingAssets: number;
+  startingLiquidAssets?: number;
   liquidAssets?: number;
   totalExpenses: number;
   totalGains: number;
@@ -126,6 +127,8 @@ export interface SimulationDetailYearRow {
   householdTaxInput: HouseholdTaxInput;
   flowTotals: Map<string, number>;
   flowPercentages?: Map<string, number>;
+  startingAssetValues?: Map<string, number>;
+  startingAssetMarketValues?: Map<string, number>;
   assetValues: Map<string, number>;
   assetMarketValues?: Map<string, number>;
   assetReturns: Map<string, SimulationAssetReturn>;
@@ -755,6 +758,13 @@ function runSimulationAttempts({
         (total, assetName) => total + (assetValues.get(assetName) ?? 0),
         0
       );
+      const startingAssetValues = new Map(normalizedAssets.map((asset) => [asset.name, assetValues.get(asset.name) ?? 0]));
+      const startingAssetMarketValues = new Map(
+        normalizedAssets.map((asset) => [
+          asset.name,
+          asset.kind === "home" ? homeState.marketValues.get(asset.name) ?? 0 : assetValues.get(asset.name) ?? 0,
+        ])
+      );
       const flowTotals = new Map(yearlyPlan.flowAmounts);
       const annualCorrelatedNormals = createCorrelatedNormals(assetNames, assetCorrelations, nextStandardNormal);
       const annualPriceReturns = new Map(
@@ -965,6 +975,7 @@ function runSimulationAttempts({
           inflationRegime: yearlyPlan.inflationRegime,
           startingAssets: startingTotalAssets,
           endingAssets: finalTotalAssets,
+          startingLiquidAssets: startingInvestmentAssets,
           liquidAssets: endingInvestmentAssets,
           totalExpenses,
           totalGains,
@@ -975,6 +986,8 @@ function runSimulationAttempts({
           householdTaxInput: effectiveTaxInput,
           flowTotals: flowTotalsWithTaxes,
           flowPercentages,
+          startingAssetValues,
+          startingAssetMarketValues,
           assetValues: yearAssetValues,
           assetMarketValues: yearAssetMarketValues,
           assetReturns,
