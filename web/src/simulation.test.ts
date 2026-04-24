@@ -4,6 +4,7 @@ import {
   buildVariableSweepValues,
   buildSimulationDetails,
   buildSimulationScenarios,
+  buildSimulationScenariosFromAggregates,
   selectRepresentativeSimulationScenario,
   type SimulationDetailScenario,
   type SimulationYearRow,
@@ -1065,12 +1066,14 @@ describe("buildSimulationScenarios", () => {
       {
         yearNumber: 1,
         label: "2026",
+        bankruptcyProbability: 0,
         depletionProbability: 0,
         totalAssets: 100,
       },
       {
         yearNumber: 2,
         label: "2027",
+        bankruptcyProbability: 0,
         depletionProbability: 0,
         totalAssets: 90,
       },
@@ -1091,6 +1094,7 @@ describe("buildSimulationScenarios", () => {
             taxableGains: 0,
             taxAmount: 0,
             depleted: false,
+            bankruptcyProbability: 0,
             depletionProbability: 0,
             householdTaxInput: createEmptyHouseholdTaxInput(),
             flowTotals: new Map(),
@@ -1127,6 +1131,7 @@ describe("buildSimulationScenarios", () => {
             taxableGains: 0,
             taxAmount: 0,
             depleted: false,
+            bankruptcyProbability: 0,
             depletionProbability: 0,
             householdTaxInput: createEmptyHouseholdTaxInput(),
             flowTotals: new Map(),
@@ -1168,6 +1173,7 @@ describe("buildSimulationScenarios", () => {
             taxableGains: 0,
             taxAmount: 0,
             depleted: false,
+            bankruptcyProbability: 0,
             depletionProbability: 0,
             householdTaxInput: createEmptyHouseholdTaxInput(),
             flowTotals: new Map(),
@@ -1204,6 +1210,7 @@ describe("buildSimulationScenarios", () => {
             taxableGains: 0,
             taxAmount: 0,
             depleted: false,
+            bankruptcyProbability: 0,
             depletionProbability: 0,
             householdTaxInput: createEmptyHouseholdTaxInput(),
             flowTotals: new Map(),
@@ -2773,6 +2780,22 @@ describe("buildSimulationScenarios", () => {
     const medianRow = scenarios.get(50)?.rows[0];
     expect(medianRow?.totalAssets).toBeCloseTo(200, 6);
     expect(medianRow?.liquidAssets).toBeCloseTo(100, 6);
+  });
+
+  it("reports bankruptcy probability from yearly zero liquid asset counts", () => {
+    const scenarios = buildSimulationScenariosFromAggregates({
+      attempts: 4,
+      horizonYears: 1,
+      yearlyPlans: [{ label: "2027", flows: [] }],
+      yearlyTotals: [[0, 10, 20, 30]],
+      yearlyLiquidTotals: [[0, 0, 10, 20]],
+      bankruptcyCountsByYear: [2],
+      depletionCountsByYear: [3],
+    });
+
+    const row = scenarios.get(50)?.rows[0];
+    expect(row?.bankruptcyProbability).toBe(50);
+    expect(row?.depletionProbability).toBe(75);
   });
 
   it("rejects invalid correlation matrices instead of coercing them", () => {

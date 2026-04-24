@@ -99,6 +99,7 @@ export interface SimulationYearRow {
   yearNumber: number;
   label: string;
   depletionProbability: number;
+  bankruptcyProbability: number;
   totalAssets: number;
   liquidAssets?: number;
 }
@@ -124,6 +125,7 @@ export interface SimulationDetailYearRow {
   taxableGains: number;
   taxAmount: number;
   depleted: boolean;
+  bankruptcyProbability: number;
   depletionProbability: number;
   householdTaxInput: HouseholdTaxInput;
   flowTotals: Map<string, number>;
@@ -250,6 +252,7 @@ interface SimulationExecutionResult {
   scenarios: SimulationDetailScenario[];
   yearlyTotals: number[][];
   yearlyLiquidTotals: number[][];
+  bankruptcyCountsByYear: number[];
   depletionCountsByYear: number[];
 }
 
@@ -270,6 +273,7 @@ export interface BuildSimulationExecutionResult {
   details: SimulationDetailScenario[];
   yearlyTotals?: number[][];
   yearlyLiquidTotals?: number[][];
+  bankruptcyCountsByYear?: number[];
   depletionCountsByYear?: number[];
 }
 
@@ -485,7 +489,7 @@ export function buildSimulationExecution(
 ): BuildSimulationExecutionResult {
   const normalizedYearlyPlans = normalizeSimulationYearlyPlans(yearlyPlans, yearlySnapshots);
   const normalizedInflation = inflation ?? { mode: "fixed", fixedRate: 0 };
-  const { scenarios, yearlyTotals, yearlyLiquidTotals, depletionCountsByYear } = runSimulationAttempts(
+  const { scenarios, yearlyTotals, yearlyLiquidTotals, bankruptcyCountsByYear, depletionCountsByYear } = runSimulationAttempts(
     {
       attempts,
       horizonYears,
@@ -512,6 +516,7 @@ export function buildSimulationExecution(
       yearlyPlans: normalizedYearlyPlans,
       yearlyTotals,
       yearlyLiquidTotals,
+      bankruptcyCountsByYear,
       depletionCountsByYear,
     }),
     details: scenarios,
@@ -519,6 +524,7 @@ export function buildSimulationExecution(
       ? {
           yearlyTotals,
           yearlyLiquidTotals,
+          bankruptcyCountsByYear,
           depletionCountsByYear,
         }
       : {}),
@@ -538,6 +544,7 @@ export function buildSimulationScenariosFromDetails({
 }): Map<SimulationPercentile, SimulationScenario> {
   const yearlyTotals = Array.from({ length: horizonYears }, () => [] as number[]);
   const yearlyLiquidTotals = Array.from({ length: horizonYears }, () => [] as number[]);
+  const bankruptcyCountsByYear = Array.from({ length: horizonYears }, () => 0);
   const depletionCountsByYear = Array.from({ length: horizonYears }, () => 0);
 
   for (const scenario of details) {
@@ -549,6 +556,9 @@ export function buildSimulationScenariosFromDetails({
 
       yearlyTotals[rowIndex]?.push(row.totalAssets);
       yearlyLiquidTotals[rowIndex]?.push(row.liquidAssets ?? 0);
+      if ((row.liquidAssets ?? 0) <= 0.000001) {
+        bankruptcyCountsByYear[rowIndex] += 1;
+      }
       if (row.depleted) {
         depletionCountsByYear[rowIndex] += 1;
       }
@@ -561,6 +571,7 @@ export function buildSimulationScenariosFromDetails({
     yearlyPlans,
     yearlyTotals,
     yearlyLiquidTotals,
+    bankruptcyCountsByYear,
     depletionCountsByYear,
   });
 }
@@ -571,6 +582,7 @@ export function buildSimulationScenariosFromAggregates({
   yearlyPlans,
   yearlyTotals,
   yearlyLiquidTotals,
+  bankruptcyCountsByYear,
   depletionCountsByYear,
 }: {
   attempts: number;
@@ -578,6 +590,7 @@ export function buildSimulationScenariosFromAggregates({
   yearlyPlans: readonly SimulationYearlyPlan[];
   yearlyTotals: readonly (readonly number[])[];
   yearlyLiquidTotals: readonly (readonly number[])[];
+  bankruptcyCountsByYear: readonly number[];
   depletionCountsByYear: readonly number[];
 }): Map<SimulationPercentile, SimulationScenario> {
   return buildSimulationScenarioSummaries({
@@ -586,6 +599,7 @@ export function buildSimulationScenariosFromAggregates({
     yearlyPlans,
     yearlyTotals,
     yearlyLiquidTotals,
+    bankruptcyCountsByYear,
     depletionCountsByYear,
   });
 }
@@ -596,6 +610,7 @@ function buildSimulationScenarioSummaries({
   yearlyPlans,
   yearlyTotals,
   yearlyLiquidTotals,
+  bankruptcyCountsByYear,
   depletionCountsByYear,
 }: {
   attempts: number;
@@ -603,6 +618,7 @@ function buildSimulationScenarioSummaries({
   yearlyPlans: readonly SimulationYearlyPlan[];
   yearlyTotals: readonly (readonly number[])[];
   yearlyLiquidTotals: readonly (readonly number[])[];
+  bankruptcyCountsByYear: readonly number[];
   depletionCountsByYear: readonly number[];
 }): Map<SimulationPercentile, SimulationScenario> {
   const rowCount = Math.min(horizonYears, yearlyPlans.length);
@@ -620,6 +636,7 @@ function buildSimulationScenarioSummaries({
       rows.push({
         yearNumber: rowIndex + 1,
         label: yearlyPlan.label,
+        bankruptcyProbability: ((bankruptcyCountsByYear[rowIndex] ?? 0) / attempts) * 100,
         depletionProbability: ((depletionCountsByYear[rowIndex] ?? 0) / attempts) * 100,
         totalAssets: yearlyPercentileTotalAssets,
         liquidAssets: yearlyPercentileLiquidAssets ?? 0,
@@ -742,6 +759,7 @@ function runSimulationAttempts({
   const scenarios: SimulationDetailScenario[] = [];
   const yearlyTotals = Array.from({ length: horizonYears }, () => [] as number[]);
   const yearlyLiquidTotals = Array.from({ length: horizonYears }, () => [] as number[]);
+  const bankruptcyCountsByYear = Array.from({ length: horizonYears }, () => 0);
   const depletionCountsByYear = Array.from({ length: horizonYears }, () => 0);
   const normalizedInputAssets = assets.map(normalizeSimulationAsset);
   assertUniqueSimulationAssetNames(normalizedInputAssets);
@@ -1001,6 +1019,9 @@ function runSimulationAttempts({
       capitalLossCarryforward = endingCapitalLossCarryforward;
       yearlyTotals[yearIndex]?.push(finalTotalAssets);
       yearlyLiquidTotals[yearIndex]?.push(endingInvestmentAssets);
+      if (endingInvestmentAssets <= 0.000001) {
+        bankruptcyCountsByYear[yearIndex] += 1;
+      }
       if (hasDepleted) {
         depletionCountsByYear[yearIndex] += 1;
       }
@@ -1021,6 +1042,7 @@ function runSimulationAttempts({
           taxableGains: totalTaxableGains,
           taxAmount: taxBreakdown.totalTax,
           depleted: hasDepleted,
+          bankruptcyProbability: ((bankruptcyCountsByYear[yearIndex] ?? 0) / Math.max(1, attempt + 1)) * 100,
           depletionProbability: ((depletionCountsByYear[yearIndex] ?? 0) / Math.max(1, attempt + 1)) * 100,
           householdTaxInput: effectiveTaxInput,
           flowTotals: flowTotalsWithTaxes,
@@ -1055,6 +1077,7 @@ function runSimulationAttempts({
     scenarios,
     yearlyTotals,
     yearlyLiquidTotals,
+    bankruptcyCountsByYear,
     depletionCountsByYear,
   };
 }

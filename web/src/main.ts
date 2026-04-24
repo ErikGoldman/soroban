@@ -466,7 +466,7 @@ interface FormulaEditorBinding {
 type FormulaEditorType = "number" | "money" | "percent";
 
 type SummaryTab = "variables" | "assets" | "taxes";
-type SimulationChartMetric = "totalAssets" | "liquidAssets";
+type SimulationChartMetric = "totalAssets" | "liquidAssets" | "bankruptcyProbability";
 type SimulationInflationPreset = "fixed" | "fixed-custom" | "regime" | "regime-custom";
 type TaxPreset = "nyc" | `state:${string}` | "custom";
 const STATE_TAX_PRESET_PREFIX = "state:";
@@ -4623,6 +4623,10 @@ function getSimulationChartYAxis(maxValue: number): { yMax: number; yStep: numbe
   return { yMax, yStep, yTicks };
 }
 
+function getSimulationChartPercentageYAxis(): { yMax: number; yStep: number; yTicks: number[] } {
+  return { yMax: 100, yStep: 25, yTicks: [0, 25, 50, 75, 100] };
+}
+
 function renderSimulationChart(
   results: Map<SimulationPercentile, SimulationScenario>,
   {
@@ -4631,17 +4635,25 @@ function renderSimulationChart(
     ariaLabel,
     valueKey,
     valueLabel,
+    formatValue,
   }: {
     title: string;
     description: string;
     ariaLabel: string;
-    valueKey: "totalAssets" | "liquidAssets";
+    valueKey: SimulationChartMetric;
     valueLabel: string;
+    formatValue: (value: number) => string;
   }
 ): string {
-  const scenarios = simulationPercentiles
+  const allScenarios = simulationPercentiles
     .map((percentile) => results.get(percentile))
     .filter((scenario): scenario is SimulationScenario => Boolean(scenario));
+  const scenarios =
+    valueKey === "bankruptcyProbability"
+      ? [results.get(selectedSimulationPercentile) ?? allScenarios[0]].filter(
+          (scenario): scenario is SimulationScenario => Boolean(scenario)
+        )
+      : allScenarios;
   if (scenarios.length === 0) {
     return "";
   }
@@ -4658,7 +4670,8 @@ function renderSimulationChart(
   const values = getSimulationChartAxisValues(results, valueKey);
   const maxValue = Math.max(...values, 0);
   const yMin = 0;
-  const { yMax, yStep, yTicks } = getSimulationChartYAxis(maxValue);
+  const { yMax, yStep, yTicks } =
+    valueKey === "bankruptcyProbability" ? getSimulationChartPercentageYAxis() : getSimulationChartYAxis(maxValue);
   const yRange = Math.max(yStep, yMax - yMin);
   const xTicks = Array.from(
     new Set([1, Math.max(1, Math.ceil(yearCount / 2)), yearCount].filter((value) => value <= yearCount))
@@ -4692,6 +4705,13 @@ function renderSimulationChart(
         >
           Total assets
         </button>
+        <button
+          type="button"
+          class="${selectedSimulationChartMetric === "bankruptcyProbability" ? "tab-button is-active" : "tab-button"}"
+          data-simulation-chart-metric="bankruptcyProbability"
+        >
+          Chance of bankruptcy
+        </button>
       </div>
       <div class="board-scroll">
         <svg class="simulation-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttribute(ariaLabel)}">
@@ -4700,7 +4720,7 @@ function renderSimulationChart(
             return `
               <g>
                 <line class="simulation-chart-grid-line" x1="${marginLeft}" y1="${y}" x2="${width - marginRight}" y2="${y}"></line>
-                <text class="simulation-chart-axis-label simulation-chart-axis-label-y" x="${marginLeft - 12}" y="${y + 4}">${escapeHtml(formatCompactCurrency(tickValue))}</text>
+                <text class="simulation-chart-axis-label simulation-chart-axis-label-y" x="${marginLeft - 12}" y="${y + 4}">${escapeHtml(formatValue(tickValue))}</text>
               </g>
             `;
           }).join("")}
@@ -4718,6 +4738,8 @@ function renderSimulationChart(
           ${scenarios
             .map((scenario) => {
               const color = getSimulationPercentileColor(scenario.percentile);
+              const seriesLabel =
+                valueKey === "bankruptcyProbability" ? "Chance" : `${scenario.percentile}th percentile`;
               const path = scenario.rows
                 .map((row, index) => {
                   const value = row[valueKey] ?? 0;
@@ -4747,9 +4769,10 @@ function renderSimulationChart(
                         data-simulation-chart-percentile-select="${scenario.percentile}"
                         data-simulation-chart-year="${row.yearNumber}"
                         data-simulation-chart-label="${escapeAttribute(row.label)}"
-                        data-simulation-chart-value="${escapeAttribute(formatCompactCurrency(value))}"
+                        data-simulation-chart-value="${escapeAttribute(formatValue(value))}"
                         data-simulation-chart-value-label="${escapeAttribute(valueLabel)}"
                         data-simulation-chart-percentile="${scenario.percentile}"
+                        data-simulation-chart-series-label="${escapeAttribute(seriesLabel)}"
                       ></circle>
                     `
                   })
@@ -4791,7 +4814,7 @@ function getDisplayedSimulationRunOutProbability(): number {
 }
 
 function isSimulationChartMetric(value: string | undefined): value is SimulationChartMetric {
-  return value === "totalAssets" || value === "liquidAssets";
+  return value === "totalAssets" || value === "liquidAssets" || value === "bankruptcyProbability";
 }
 
 function renderSimulationSweepResults(): string {
@@ -4983,14 +5006,25 @@ function renderSimulationResultsBody(): string {
           ariaLabel: "Simulation liquid assets by year and percentile",
           valueKey: "liquidAssets" as const,
           valueLabel: "Liquid assets",
+          formatValue: formatCompactCurrency,
         }
-      : {
-          title: "Total assets by year",
-          description: "Total value of all assets, including your home",
-          ariaLabel: "Simulation total assets by year and percentile",
-          valueKey: "totalAssets" as const,
-          valueLabel: "Total assets",
-        };
+      : selectedSimulationChartMetric === "bankruptcyProbability"
+        ? {
+            title: "Chance of bankruptcy by year",
+            description: "Share of simulated runs where liquid assets are zero at year end",
+            ariaLabel: "Simulation chance of bankruptcy by year",
+            valueKey: "bankruptcyProbability" as const,
+            valueLabel: "Chance of bankruptcy",
+            formatValue: formatPercentage,
+          }
+        : {
+            title: "Total assets by year",
+            description: "Total value of all assets, including your home",
+            ariaLabel: "Simulation total assets by year and percentile",
+            valueKey: "totalAssets" as const,
+            valueLabel: "Total assets",
+            formatValue: formatCompactCurrency,
+          };
 
   return `
       ${renderSimulationChart(displayedSimulationResults, selectedSimulationChart)}
@@ -5458,7 +5492,7 @@ function bindSimulationChartTooltip(): void {
     for (const point of panel.querySelectorAll<SVGCircleElement>("[data-simulation-chart-point]")) {
       point.addEventListener("mouseenter", (event) => {
         setSeriesHover(point.dataset.simulationChartPercentile, true);
-        tooltip.textContent = `${point.dataset.simulationChartLabel} | ${point.dataset.simulationChartValueLabel}: ${point.dataset.simulationChartValue} | ${point.dataset.simulationChartPercentile}th percentile`;
+        tooltip.textContent = `${point.dataset.simulationChartLabel} | ${point.dataset.simulationChartValueLabel}: ${point.dataset.simulationChartValue} | ${point.dataset.simulationChartSeriesLabel}`;
         tooltip.hidden = false;
         updateTooltipPosition(event);
       });
@@ -7180,6 +7214,7 @@ function bindHandlers(user: UserIdentity): void {
     const detailResultsByTask = new Map<number, SimulationDetailScenario[]>();
     const yearlyTotalsByTask = new Map<number, number[][]>();
     const yearlyLiquidTotalsByTask = new Map<number, number[][]>();
+    const bankruptcyCountsByTask = new Map<number, number[]>();
     const depletionCountsByTask = new Map<number, number[]>();
     const completedTaskCountsByRun = simulationRuns.map(() => 0);
     let pendingTasks = taskDefinitions.length;
@@ -7260,6 +7295,12 @@ function bindHandlers(user: UserIdentity): void {
                 ),
                 yearlyLiquidTotals: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
                   run.taskIds.flatMap((taskId) => yearlyLiquidTotalsByTask.get(taskId)?.[rowIndex] ?? [])
+                ),
+                bankruptcyCountsByYear: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
+                  run.taskIds.reduce(
+                    (total, taskId) => total + (bankruptcyCountsByTask.get(taskId)?.[rowIndex] ?? 0),
+                    0
+                  )
                 ),
                 depletionCountsByYear: Array.from({ length: run.input.horizonYears }, (_, rowIndex) =>
                   run.taskIds.reduce((total, taskId) => total + (depletionCountsByTask.get(taskId)?.[rowIndex] ?? 0), 0)
@@ -7359,6 +7400,9 @@ function bindHandlers(user: UserIdentity): void {
         if (message.yearlyLiquidTotals) {
           yearlyLiquidTotalsByTask.set(task.id, message.yearlyLiquidTotals);
         }
+        if (message.bankruptcyCountsByYear) {
+          bankruptcyCountsByTask.set(task.id, message.bankruptcyCountsByYear);
+        }
         if (message.depletionCountsByYear) {
           depletionCountsByTask.set(task.id, message.depletionCountsByYear);
         }
@@ -7393,8 +7437,8 @@ function bindHandlers(user: UserIdentity): void {
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-simulation-chart-metric]")) {
     button.addEventListener("click", () => {
-      const metric = button.dataset.simulationChartMetric as SimulationChartMetric | undefined;
-      if (!metric) {
+      const metric = button.dataset.simulationChartMetric;
+      if (!isSimulationChartMetric(metric)) {
         return;
       }
 

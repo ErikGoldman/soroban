@@ -22,6 +22,7 @@ export interface SimulationWorkerCompleteMessage {
   details: ReturnType<typeof buildSimulationExecution>["details"];
   yearlyTotals?: ReturnType<typeof buildSimulationExecution>["yearlyTotals"];
   yearlyLiquidTotals?: ReturnType<typeof buildSimulationExecution>["yearlyLiquidTotals"];
+  bankruptcyCountsByYear?: ReturnType<typeof buildSimulationExecution>["bankruptcyCountsByYear"];
   depletionCountsByYear?: ReturnType<typeof buildSimulationExecution>["depletionCountsByYear"];
 }
 
@@ -84,6 +85,7 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
       details: result.details,
       ...(result.yearlyTotals ? { yearlyTotals: result.yearlyTotals } : {}),
       ...(result.yearlyLiquidTotals ? { yearlyLiquidTotals: result.yearlyLiquidTotals } : {}),
+      ...(result.bankruptcyCountsByYear ? { bankruptcyCountsByYear: result.bankruptcyCountsByYear } : {}),
       ...(result.depletionCountsByYear ? { depletionCountsByYear: result.depletionCountsByYear } : {}),
     };
     self.postMessage(completeMessage);

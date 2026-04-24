@@ -21,6 +21,7 @@ function createRow(overrides: Partial<SimulationDetailYearRow> = {}): Simulation
     taxableGains: 0,
     taxAmount: 0,
     depleted: false,
+    bankruptcyProbability: 0,
     depletionProbability: 0,
     householdTaxInput: {
       wages: 0,
