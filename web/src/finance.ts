@@ -32,6 +32,7 @@ export interface InvestmentAssetDefinition extends AssetDefinitionBase {
   startingValue: number;
   startingValueFormula?: string;
   desiredAnnualContribution?: number;
+  desiredAnnualContributionFormula?: string;
   sellProportion: number;
   cashGeneration?: AssetCashGenerationDefinition;
   cashGenerations?: readonly AssetCashGenerationDefinition[];
@@ -145,6 +146,7 @@ export class Asset {
   readonly startingValue: number;
   readonly startingValueFormula?: string;
   readonly desiredAnnualContribution: number;
+  readonly desiredAnnualContributionFormula?: string;
   readonly sellProportion: number;
   readonly cashGenerations: readonly AssetCashGenerationDefinition[];
   readonly saleTax: AssetSaleTaxDefinition | null;
@@ -182,6 +184,7 @@ export class Asset {
       this.startingValue = 0;
       this.startingValueFormula = undefined;
       this.desiredAnnualContribution = 0;
+      this.desiredAnnualContributionFormula = undefined;
       this.sellProportion = 0;
       this.cashGenerations = [];
       this.saleTax = null;
@@ -229,6 +232,7 @@ export class Asset {
     this.startingValue = definition.startingValue;
     this.startingValueFormula = definition.startingValueFormula?.trim() || undefined;
     this.desiredAnnualContribution = definition.desiredAnnualContribution ?? 0;
+    this.desiredAnnualContributionFormula = definition.desiredAnnualContributionFormula?.trim() || undefined;
     this.expectedReturn = definition.expectedReturn;
     this.volatility = definition.volatility;
     this.sellProportion = definition.sellProportion;
@@ -280,6 +284,9 @@ export class Asset {
       startingValue: this.startingValue,
       ...(this.startingValueFormula ? { startingValueFormula: this.startingValueFormula } : {}),
       ...(this.desiredAnnualContribution > 0 ? { desiredAnnualContribution: this.desiredAnnualContribution } : {}),
+      ...(this.desiredAnnualContributionFormula
+        ? { desiredAnnualContributionFormula: this.desiredAnnualContributionFormula }
+        : {}),
       expectedReturn: this.expectedReturn,
       volatility: this.volatility,
       sellProportion: this.sellProportion,
@@ -471,18 +478,36 @@ export function resolveAssetValueFormula(
     };
   }
 
+  let resolvedDefinition = definition;
   const formula = definition.startingValueFormula?.trim();
-  if (!formula) {
-    return definition;
+  if (formula) {
+    const startingValue = evaluateFormula(formula, context);
+    assertFiniteNumber(startingValue, `Starting value for asset "${definition.name}" must resolve to a finite number.`);
+    resolvedDefinition = {
+      ...resolvedDefinition,
+      startingValue,
+      startingValueFormula: formula,
+    };
   }
 
-  const startingValue = evaluateFormula(formula, context);
-  assertFiniteNumber(startingValue, `Starting value for asset "${definition.name}" must resolve to a finite number.`);
-  return {
-    ...definition,
-    startingValue,
-    startingValueFormula: formula,
-  };
+  const contributionFormula = definition.desiredAnnualContributionFormula?.trim();
+  if (contributionFormula) {
+    const desiredAnnualContribution = evaluateFormula(contributionFormula, context);
+    assertFiniteNumber(
+      desiredAnnualContribution,
+      `Desired annual contribution for asset "${definition.name}" must resolve to a finite number.`
+    );
+    if (desiredAnnualContribution < 0) {
+      throw new Error(`Desired annual contribution for asset "${definition.name}" cannot resolve to a negative number.`);
+    }
+    resolvedDefinition = {
+      ...resolvedDefinition,
+      desiredAnnualContribution,
+      desiredAnnualContributionFormula: contributionFormula,
+    };
+  }
+
+  return resolvedDefinition;
 }
 
 export function sumSignedYearlyFlows(flows: readonly Flow[], context: FormulaContext, year?: EventYear | number): number {

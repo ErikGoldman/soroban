@@ -320,6 +320,7 @@ describe("Asset", () => {
         assetType,
         startingValue: 12000,
         desiredAnnualContribution: 7500,
+        desiredAnnualContributionFormula: "salary * 0.03",
         expectedReturn: 4,
         volatility: 16,
         sellProportion: 1,
@@ -330,6 +331,7 @@ describe("Asset", () => {
         assetType,
         startingValue: 12000,
         desiredAnnualContribution: 7500,
+        desiredAnnualContributionFormula: "salary * 0.03",
         expectedReturn: 4,
         volatility: 16,
         sellProportion: 1,
@@ -786,6 +788,33 @@ describe("resolveAssetValueFormula", () => {
       name: "Brokerage",
       startingValue: 500000,
       startingValueFormula: "salary * 2",
+      expectedReturn: 7,
+      volatility: 15,
+      sellProportion: 1,
+    });
+  });
+
+  it("resolves retirement contribution formulas from the provided context", () => {
+    expect(
+      resolveAssetValueFormula(
+        {
+          name: "IRA",
+          assetType: "ira",
+          startingValue: 0,
+          desiredAnnualContribution: 0,
+          desiredAnnualContributionFormula: "salary * 0.05",
+          expectedReturn: 7,
+          volatility: 15,
+          sellProportion: 1,
+        },
+        { salary: 200000 }
+      )
+    ).toEqual({
+      name: "IRA",
+      assetType: "ira",
+      startingValue: 0,
+      desiredAnnualContribution: 10000,
+      desiredAnnualContributionFormula: "salary * 0.05",
       expectedReturn: 7,
       volatility: 15,
       sellProportion: 1,

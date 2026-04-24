@@ -42,6 +42,7 @@ export interface PersistedAssetDefinition {
   startingValue?: number;
   startingValueFormula?: string;
   desiredAnnualContribution?: number;
+  desiredAnnualContributionFormula?: string;
   expectedReturn: number;
   volatility: number;
   sellProportion?: number;

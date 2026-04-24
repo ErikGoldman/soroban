@@ -1108,7 +1108,9 @@ function getAssetDefinitionFormulas(asset: AssetDefinition): string[] {
     return asset.initialCostFormula ? [asset.initialCostFormula] : [];
   }
 
-  return asset.startingValueFormula ? [asset.startingValueFormula] : [];
+  return [asset.startingValueFormula, asset.desiredAnnualContributionFormula].filter(
+    (formula): formula is string => Boolean(formula)
+  );
 }
 
 function getEventFormulas(event: Pick<Event, "schedule">): string[] {
@@ -1192,6 +1194,18 @@ function getAssetValueFormulaInput(asset: AssetDefinition): string {
   return resolvedAsset.startingValueFormula ?? formatFormulaText(String(resolvedAsset.startingValue));
 }
 
+function getAssetContributionFormulaInput(asset: AssetDefinition): string {
+  const resolvedAsset = resolvePlannerAssetDefinition(asset);
+  if (!isInvestmentAsset(resolvedAsset)) {
+    return "0";
+  }
+
+  return (
+    resolvedAsset.desiredAnnualContributionFormula ??
+    formatFormulaText(String(resolvedAsset.desiredAnnualContribution ?? 0))
+  );
+}
+
 function getAssetSummaryValue(asset: AssetDefinition): number {
   const resolvedAsset = resolvePlannerAssetDefinition(asset);
   return isHomeAsset(resolvedAsset) ? resolvedAsset.initialCost : resolvedAsset.startingValue;
@@ -1215,7 +1229,11 @@ function buildAssetDraftFromDefinition(
         ? getAssetValueFormulaInput(asset)
         : String(isInvestmentAsset(resolvedAsset) ? resolvedAsset.startingValue : 0),
     desiredAnnualContribution: String(
-      isInvestmentAsset(resolvedAsset) ? resolvedAsset.desiredAnnualContribution ?? 0 : 0
+      options.preserveFormulaSource && isInvestmentAsset(asset)
+        ? getAssetContributionFormulaInput(asset)
+        : isInvestmentAsset(resolvedAsset)
+          ? resolvedAsset.desiredAnnualContribution ?? 0
+          : 0
     ),
     expectedReturn: String(asset.expectedReturn),
     volatility: String(asset.volatility),
@@ -1310,6 +1328,9 @@ function migratePersistedAsset(
       ...(asset.startingValueFormula ? { startingValueFormula: asset.startingValueFormula } : {}),
       ...(typeof asset.desiredAnnualContribution === "number" && Number.isFinite(asset.desiredAnnualContribution)
         ? { desiredAnnualContribution: asset.desiredAnnualContribution }
+        : {}),
+      ...(asset.desiredAnnualContributionFormula
+        ? { desiredAnnualContributionFormula: asset.desiredAnnualContributionFormula }
         : {}),
       expectedReturn: asset.expectedReturn,
       volatility: asset.volatility,
@@ -2419,6 +2440,9 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
             startingValue: resolvedAsset.startingValue,
             ...((resolvedAsset.desiredAnnualContribution ?? 0) > 0
               ? { desiredAnnualContribution: resolvedAsset.desiredAnnualContribution }
+              : {}),
+            ...(resolvedAsset.desiredAnnualContributionFormula
+              ? { desiredAnnualContributionFormula: resolvedAsset.desiredAnnualContributionFormula }
               : {}),
             expectedReturn: resolvedAsset.expectedReturn,
             volatility: resolvedAsset.volatility,
@@ -4278,6 +4302,9 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
             ...((resolvedAsset.desiredAnnualContribution ?? 0) > 0
               ? { desiredAnnualContribution: resolvedAsset.desiredAnnualContribution }
               : {}),
+            ...(resolvedAsset.desiredAnnualContributionFormula
+              ? { desiredAnnualContributionFormula: resolvedAsset.desiredAnnualContributionFormula }
+              : {}),
             expectedReturn: resolvedAsset.expectedReturn,
             volatility: resolvedAsset.volatility,
             sellProportion: resolvedAsset.sellProportion,
@@ -5757,12 +5784,14 @@ function renderAssetCoreFields(draft: AssetDraft): string {
         ? `
     <label>
       Annual contribution
-      <input
-        name="desiredAnnualContribution"
-        ${renderEditableNumberInputAttributes()}
-        value="${escapeHtml(formatEditableNumberInput(draft.desiredAnnualContribution))}"
-        required
-      />
+      ${renderFormulaEditor({
+        inputName: "desiredAnnualContribution",
+        value: draft.desiredAnnualContribution,
+        placeholder: "$0",
+        variablesScope: "planner",
+        type: "money",
+        requiredLabel: "Annual contribution",
+      })}
     </label>
         `
         : ""
@@ -7997,12 +8026,14 @@ function syncFormulaDraftField(wrapper: HTMLElement, formula: string): void {
   }
 
   const inputName = wrapper.querySelector<HTMLInputElement>(".formula-editor-hidden-input")?.name;
-  if (inputName === "startingValue" || inputName === "initialCost") {
+  if (inputName === "startingValue" || inputName === "initialCost" || inputName === "desiredAnnualContribution") {
     if (wrapper.closest("#asset-form")) {
       if (inputName === "startingValue") {
         assetDraft.startingValue = formula;
-      } else {
+      } else if (inputName === "initialCost") {
         assetDraft.initialCost = formula;
+      } else {
+        assetDraft.desiredAnnualContribution = formula;
       }
       return;
     }
@@ -8010,8 +8041,10 @@ function syncFormulaDraftField(wrapper: HTMLElement, formula: string): void {
     if (wrapper.closest("#asset-edit-form")) {
       if (inputName === "startingValue") {
         assetEditDraft.startingValue = formula;
-      } else {
+      } else if (inputName === "initialCost") {
         assetEditDraft.initialCost = formula;
+      } else {
+        assetEditDraft.desiredAnnualContribution = formula;
       }
       return;
     }
@@ -8049,7 +8082,7 @@ function syncFormulaEditorDisplayType(wrapper: HTMLElement, formula: string): vo
 
 function resolveAssetValueInput(
   input: string,
-  fieldLabel: "Value" | "Home price"
+  fieldLabel: "Value" | "Home price" | "Annual contribution"
 ): {
   value: number;
   formula?: string;
@@ -8741,7 +8774,10 @@ function bindAssetComposer(user: UserIdentity): void {
 
     try {
       ensurePlannerVariablesExist(
-        collectMissingFormulaVariables([assetDraft.kind === "home" ? assetDraft.initialCost : assetDraft.startingValue])
+        collectMissingFormulaVariables([
+          assetDraft.kind === "home" ? assetDraft.initialCost : assetDraft.startingValue,
+          ...(isRetirementAssetDraftKind(assetDraft.kind) ? [assetDraft.desiredAnnualContribution] : []),
+        ])
       );
       const nextAsset = buildAssetDefinition(assetDraft);
       assertAssetNameAvailable(nextAsset.name, null);
@@ -8936,7 +8972,10 @@ function bindAssetEditor(user: UserIdentity): void {
     const previousFormulas = previousAsset ? getAssetDefinitionFormulas(previousAsset) : [];
     try {
       ensurePlannerVariablesExist(
-        collectMissingFormulaVariables([assetEditDraft.kind === "home" ? assetEditDraft.initialCost : assetEditDraft.startingValue])
+        collectMissingFormulaVariables([
+          assetEditDraft.kind === "home" ? assetEditDraft.initialCost : assetEditDraft.startingValue,
+          ...(isRetirementAssetDraftKind(assetEditDraft.kind) ? [assetEditDraft.desiredAnnualContribution] : []),
+        ])
       );
       const nextAsset = buildAssetDefinition(assetEditDraft);
       assertAssetNameAvailable(nextAsset.name, assetEditDraft.originalName);
@@ -10134,14 +10173,19 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
   const assetType = getInvestmentAssetTypeFromDraftKind(draft.kind);
   const startingValue = resolveAssetValueInput(draft.startingValue, "Value");
   const desiredAnnualContribution = isRetirementAssetDraftKind(draft.kind)
-    ? parseEditableNumber(draft.desiredAnnualContribution)
-    : 0;
+    ? resolveAssetValueInput(draft.desiredAnnualContribution, "Annual contribution")
+    : null;
   return new Asset({
     name: draft.name,
     ...(assetType ? { assetType } : {}),
     startingValue: startingValue.value,
     ...(startingValue.formula ? { startingValueFormula: startingValue.formula } : {}),
-    ...(desiredAnnualContribution > 0 ? { desiredAnnualContribution } : {}),
+    ...(desiredAnnualContribution && desiredAnnualContribution.value > 0
+      ? { desiredAnnualContribution: desiredAnnualContribution.value }
+      : {}),
+    ...(desiredAnnualContribution?.formula
+      ? { desiredAnnualContributionFormula: desiredAnnualContribution.formula }
+      : {}),
     expectedReturn: Number(draft.expectedReturn),
     volatility: Number(draft.volatility),
     sellProportion: 1,
