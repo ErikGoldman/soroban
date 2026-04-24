@@ -38,9 +38,10 @@ export interface PersistedVariableDefinition {
 export interface PersistedAssetDefinition {
   name: string;
   kind?: "investment" | "home";
-  assetType?: "us-stocks" | "federal-bonds" | "local-bonds";
+  assetType?: "us-stocks" | "federal-bonds" | "local-bonds" | "ira" | "roth-ira" | "401k";
   startingValue?: number;
   startingValueFormula?: string;
+  desiredAnnualContribution?: number;
   expectedReturn: number;
   volatility: number;
   sellProportion?: number;

@@ -313,6 +313,60 @@ describe("Asset", () => {
     });
   });
 
+  it("captures retirement asset desired contributions", () => {
+    for (const assetType of ["ira", "roth-ira", "401k"] as const) {
+      const asset = new Asset({
+        name: assetType,
+        assetType,
+        startingValue: 12000,
+        desiredAnnualContribution: 7500,
+        expectedReturn: 4,
+        volatility: 16,
+        sellProportion: 1,
+      });
+
+      expect(asset.toDefinition()).toEqual({
+        name: assetType,
+        assetType,
+        startingValue: 12000,
+        desiredAnnualContribution: 7500,
+        expectedReturn: 4,
+        volatility: 16,
+        sellProportion: 1,
+      });
+    }
+  });
+
+  it("rejects negative desired retirement contributions", () => {
+    expect(
+      () =>
+        new Asset({
+          name: "IRA",
+          assetType: "ira",
+          startingValue: 0,
+          desiredAnnualContribution: -1,
+          expectedReturn: 4,
+          volatility: 16,
+          sellProportion: 1,
+        })
+    ).toThrow('Desired annual contribution for asset "IRA" cannot be negative.');
+  });
+
+  it("rejects non-finite desired retirement contributions", () => {
+    expect(
+      () =>
+        new Asset({
+          name: "IRA",
+          assetType: "ira",
+          startingValue: 0,
+          desiredAnnualContribution: Number.NaN,
+          expectedReturn: 4,
+          volatility: 16,
+          sellProportion: 1,
+        })
+    ).toThrow('Desired annual contribution for asset "IRA" must be finite.');
+  });
+
   it("allows sale tax without an explicit starting cost basis", () => {
     const asset = new Asset({
       name: "Index fund",

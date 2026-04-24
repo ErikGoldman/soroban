@@ -13,8 +13,10 @@ function createScenarioPlannerState(): ScenarioPlannerState {
       {
         name: "Brokerage",
         kind: "investment",
+        assetType: "401k",
         startingValue: 1500000,
         startingValueFormula: "salary * 6",
+        desiredAnnualContribution: 24500,
         expectedReturn: 7,
         volatility: 15,
         sellProportion: 0.4,
@@ -167,6 +169,7 @@ describe("scenario save and load", () => {
     expect(parsedFile.exportedAt).toBe("2026-04-10T12:00:00.000Z");
     expect(parsedFile.plannerState.assets[0]?.saleTax?.costBasis).toBe(900000);
     expect(parsedFile.plannerState.assets[0]?.startingValueFormula).toBe("salary * 6");
+    expect(parsedFile.plannerState.assets[0]?.desiredAnnualContribution).toBe(24500);
     expect(parsedFile.plannerState.assets[1]?.initialCostFormula).toBe("salary * 4.8");
     expect(parsedFile.plannerState.assets[1]?.purchaseYear).toBe(2028);
     expect(parsedFile.plannerState.flows[1]?.formula).toBe("rent");

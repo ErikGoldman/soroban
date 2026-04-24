@@ -8,7 +8,7 @@ import {
   type SimulationDetailScenario,
   type SimulationYearRow,
 } from "./simulation.js";
-import { getSimulationSellProportion } from "./simulation-input.js";
+import { getSimulationSellProportion, shouldAvoidEarlyWithdrawalPenalty } from "./simulation-input.js";
 import { createDefaultHouseholdTaxProfile, Tax } from "./tax.js";
 
 const ANNUAL_VOLATILITY_10_PERCENT = 10;
@@ -268,6 +268,501 @@ describe("buildSimulationScenarios", () => {
     expect(yearThree?.flowTotals.get("Salary")).toBeCloseTo(80, 6);
     expect(yearThree?.householdTaxInput.wages).toBeCloseTo(80, 6);
     expect(yearThree?.totalExpenses).toBeCloseTo(154.04, 6);
+  });
+
+  it("caps IRA and Roth IRA contributions to the shared 2026 limit", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [{ name: "Salary", amount: 50_000, type: "income", taxTreatment: "wages" }],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "IRA",
+          assetType: "ira",
+          startingValue: 0,
+          desiredAnnualContribution: 5_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          name: "Roth IRA",
+          assetType: "roth-ira",
+          startingValue: 0,
+          desiredAnnualContribution: 5_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.assetValues.get("IRA")).toBeCloseTo(5_000, 6);
+    expect(row?.assetValues.get("Roth IRA")).toBeCloseTo(2_500, 6);
+    expect(row?.flowTotals.get("IRA contribution")).toBeCloseTo(5_000, 6);
+    expect(row?.flowTotals.get("Roth IRA contribution")).toBeCloseTo(2_500, 6);
+  });
+
+  it("applies the 401k age 60 to 63 catch-up limit", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 60,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [{ name: "Salary", amount: 100_000, type: "income", taxTreatment: "wages" }],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Work 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 40_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.assetValues.get("Work 401k")).toBeCloseTo(35_750, 6);
+    expect(row?.flowTotals.get("Work 401k contribution")).toBeCloseTo(35_750, 6);
+  });
+
+  it("applies 401k contribution limits at age boundaries", () => {
+    const cases = [
+      { age: 49, expectedLimit: 24_500 },
+      { age: 50, expectedLimit: 32_500 },
+      { age: 59, expectedLimit: 32_500 },
+      { age: 60, expectedLimit: 35_750 },
+      { age: 63, expectedLimit: 35_750 },
+      { age: 64, expectedLimit: 32_500 },
+    ];
+
+    for (const { age, expectedLimit } of cases) {
+      const scenarios = buildSimulationDetails({
+        attempts: 1,
+        horizonYears: 1,
+        currentAge: age,
+        yearlyPlans: [
+          createYearlyPlan(
+            "2027",
+            [{ name: "Salary", amount: 100_000, type: "income", taxTreatment: "wages" }],
+            2027
+          ),
+        ],
+        assets: [
+          {
+            name: "Work 401k",
+            assetType: "401k",
+            startingValue: 0,
+            desiredAnnualContribution: 40_000,
+            expectedReturn: 0,
+            volatility: 0,
+            sellProportion: 1,
+          },
+        ],
+        assetCorrelations: [],
+        nextStandardNormal: createDeterministicNormals([0]),
+      });
+
+      expect(scenarios[0]?.rows[0]?.assetValues.get("Work 401k")).toBeCloseTo(expectedLimit, 6);
+    }
+  });
+
+  it("applies IRA and Roth IRA shared contribution limits at age boundaries", () => {
+    const cases = [
+      { age: 49, expectedRoth: 7_500 },
+      { age: 50, expectedRoth: 8_600 },
+    ];
+
+    for (const { age, expectedRoth } of cases) {
+      const scenarios = buildSimulationDetails({
+        attempts: 1,
+        horizonYears: 1,
+        currentAge: age,
+        yearlyPlans: [
+          createYearlyPlan(
+            "2027",
+            [{ name: "Salary", amount: 100_000, type: "income", taxTreatment: "wages" }],
+            2027
+          ),
+        ],
+        assets: [
+          {
+            name: "Roth IRA",
+            assetType: "roth-ira",
+            startingValue: 0,
+            desiredAnnualContribution: 10_000,
+            expectedReturn: 0,
+            volatility: 0,
+            sellProportion: 1,
+          },
+        ],
+        assetCorrelations: [],
+        nextStandardNormal: createDeterministicNormals([0]),
+      });
+
+      expect(scenarios[0]?.rows[0]?.assetValues.get("Roth IRA")).toBeCloseTo(expectedRoth, 6);
+    }
+  });
+
+  it("keeps retirement contributions below the cap when desired contribution is lower", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [{ name: "Salary", amount: 100_000, type: "income", taxTreatment: "wages" }],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Roth IRA",
+          assetType: "roth-ira",
+          startingValue: 0,
+          desiredAnnualContribution: 3_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    expect(scenarios[0]?.rows[0]?.assetValues.get("Roth IRA")).toBeCloseTo(3_000, 6);
+  });
+
+  it("ages into retirement catch-up limits across simulation years", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 2,
+      currentAge: 49,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [{ name: "Salary", amount: 100_000, type: "income", taxTreatment: "wages" }],
+          2027
+        ),
+        createYearlyPlan(
+          "2028",
+          [{ name: "Salary", amount: 100_000, type: "income", taxTreatment: "wages" }],
+          2028
+        ),
+      ],
+      assets: [
+        {
+          name: "Work 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 40_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const [yearOne, yearTwo] = scenarios[0]?.rows ?? [];
+    expect(yearOne?.assetValues.get("Work 401k")).toBeCloseTo(24_500, 6);
+    expect(yearTwo?.assetValues.get("Work 401k")).toBeCloseTo(57_000, 6);
+    expect(yearTwo?.flowTotals.get("Work 401k contribution")).toBeCloseTo(32_500, 6);
+  });
+
+  it("shares the 401k cap across multiple 401k assets in asset order", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [{ name: "Salary", amount: 100_000, type: "income", taxTreatment: "wages" }],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Primary 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 20_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          name: "Side 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 20_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.assetValues.get("Primary 401k")).toBeCloseTo(20_000, 6);
+    expect(row?.assetValues.get("Side 401k")).toBeCloseTo(4_500, 6);
+  });
+
+  it("uses one earned-compensation ceiling across IRA, Roth IRA, and 401k contributions", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [{ name: "Salary", amount: 30_000, type: "income", taxTreatment: "wages" }],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Roth IRA",
+          assetType: "roth-ira",
+          startingValue: 0,
+          desiredAnnualContribution: 5_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          name: "IRA",
+          assetType: "ira",
+          startingValue: 0,
+          desiredAnnualContribution: 5_000,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          name: "Work 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 24_500,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.assetValues.get("Roth IRA")).toBeCloseTo(5_000, 6);
+    expect(row?.assetValues.get("IRA")).toBeCloseTo(2_500, 6);
+    expect(row?.assetValues.get("Work 401k")).toBeCloseTo(22_500, 6);
+  });
+
+  it("does not fund retirement contributions without wage income", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [{ name: "Consulting", amount: 50_000, type: "income", taxTreatment: "ordinary-income" }],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Work 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 24_500,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.assetValues.get("Work 401k")).toBeCloseTo(0, 6);
+    expect(row?.flowTotals.get("Work 401k contribution")).toBeUndefined();
+  });
+
+  it("limits retirement contributions by earned compensation and available surplus", () => {
+    const compensationLimited = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [
+            { name: "Salary", amount: 10_000, type: "income", taxTreatment: "wages" },
+            { name: "Bonus", amount: 30_000, type: "income", taxTreatment: "ordinary-income" },
+          ],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Work 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 24_500,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+    expect(compensationLimited[0]?.rows[0]?.assetValues.get("Work 401k")).toBeCloseTo(10_000, 6);
+
+    const surplusLimited = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [
+            { name: "Salary", amount: 50_000, type: "income", taxTreatment: "wages" },
+            { name: "Rent", amount: -45_000, type: "expense" },
+          ],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Work 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 24_500,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+    expect(surplusLimited[0]?.rows[0]?.assetValues.get("Work 401k")).toBeCloseTo(5_000, 6);
+  });
+
+  it("limits retirement contributions by post-tax surplus", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [
+            { name: "Salary", amount: 50_000, type: "income", taxTreatment: "wages" },
+            { name: "Rent", amount: -20_000, type: "expense" },
+          ],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Work 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 24_500,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      taxes: [
+        new Tax({ name: "Federal ordinary income", taxRates: [{ rate: 0.2 }] }),
+        new Tax({ name: "Federal qualified dividends / long-term gains", taxRates: [{ rate: 0.1 }] }),
+      ],
+      householdTaxProfile: {
+        ...createDefaultHouseholdTaxProfile(),
+        federalStandardDeduction: 0,
+        federalQualifiedTaxName: "",
+        stateTaxName: "",
+        stateCapitalGainsTaxName: "",
+        localTaxName: "",
+        niitTaxName: "",
+      },
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.taxAmount).toBeCloseTo(10_000, 6);
+    expect(row?.assetValues.get("Work 401k")).toBeCloseTo(20_000, 6);
+  });
+
+  it("reinvests surplus above retirement caps into non-retirement assets", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlyPlans: [
+        createYearlyPlan(
+          "2027",
+          [{ name: "Salary", amount: 50_000, type: "income", taxTreatment: "wages" }],
+          2027
+        ),
+      ],
+      assets: [
+        {
+          name: "Work 401k",
+          assetType: "401k",
+          startingValue: 0,
+          desiredAnnualContribution: 24_500,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          name: "Brokerage",
+          assetType: "us-stocks",
+          startingValue: 0,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.assetValues.get("Work 401k")).toBeCloseTo(24_500, 6);
+    expect(row?.assetValues.get("Brokerage")).toBeCloseTo(25_500, 6);
   });
 
   it("starts from the stationary distribution when sampling the initial inflation regime", () => {
@@ -1286,6 +1781,169 @@ describe("buildSimulationScenarios", () => {
     expect(row?.assetValues.get("Bonds")).toBeCloseTo(61.17647058823529, 6);
   });
 
+  it("does not sell retirement assets by default before age 60 when taxable assets can fund cash needs", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -60,
+          totalExpenses: 60,
+          flowAmounts: new Map([["Living expenses", -60]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Brokerage",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+        },
+        {
+          name: "IRA",
+          assetType: "ira",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+          avoidEarlyWithdrawalPenalty: true,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Brokerage sale proceeds")).toBeCloseTo(60, 6);
+    expect(row?.flowTotals.get("IRA sale proceeds")).toBeUndefined();
+    expect(row?.assetValues.get("Brokerage")).toBeCloseTo(40, 6);
+    expect(row?.assetValues.get("IRA")).toBeCloseTo(100, 6);
+    expect(row?.liquidAssets).toBeCloseTo(40, 6);
+  });
+
+  it("marks depletion before age 60 when only penalty-gated retirement assets remain", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 35,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -60,
+          totalExpenses: 60,
+          flowAmounts: new Map([["Living expenses", -60]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "401k",
+          assetType: "401k",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+          avoidEarlyWithdrawalPenalty: true,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("401k sale proceeds")).toBeUndefined();
+    expect(row?.assetValues.get("401k")).toBeCloseTo(100, 6);
+    expect(row?.totalAssets).toBeCloseTo(100, 6);
+    expect(row?.liquidAssets).toBeCloseTo(0, 6);
+    expect(row?.depleted).toBe(true);
+  });
+
+  it("sells penalty-gated retirement assets once simulated age reaches 60", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 1,
+      currentAge: 60,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -60,
+          totalExpenses: 60,
+          flowAmounts: new Map([["Living expenses", -60]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "Roth IRA",
+          assetType: "roth-ira",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+          avoidEarlyWithdrawalPenalty: true,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0]),
+    });
+
+    const row = scenarios[0]?.rows[0];
+    expect(row?.flowTotals.get("Roth IRA sale proceeds")).toBeCloseTo(60, 6);
+    expect(row?.assetValues.get("Roth IRA")).toBeCloseTo(40, 6);
+    expect(row?.liquidAssets).toBeCloseTo(40, 6);
+    expect(row?.depleted).toBe(false);
+  });
+
+  it("blocks retirement sales at age 59 and permits them in the following simulation year", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 2,
+      currentAge: 59,
+      yearlySnapshots: [
+        {
+          label: "2027",
+          netAmount: -60,
+          totalExpenses: 60,
+          flowAmounts: new Map([["Living expenses", -60]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+        {
+          label: "2028",
+          netAmount: -60,
+          totalExpenses: 60,
+          flowAmounts: new Map([["Living expenses", -60]]),
+          householdTaxInput: createEmptyHouseholdTaxInput(),
+        },
+      ],
+      assets: [
+        {
+          name: "IRA",
+          assetType: "ira",
+          startingValue: 100,
+          expectedReturn: 0,
+          volatility: 0,
+          sellProportion: 1,
+          avoidEarlyWithdrawalPenalty: true,
+        },
+      ],
+      assetCorrelations: [],
+      nextStandardNormal: createDeterministicNormals([0, 0]),
+    });
+
+    const firstYear = scenarios[0]?.rows[0];
+    const secondYear = scenarios[0]?.rows[1];
+    expect(firstYear?.flowTotals.get("IRA sale proceeds")).toBeUndefined();
+    expect(firstYear?.liquidAssets).toBeCloseTo(0, 6);
+    expect(firstYear?.depleted).toBe(true);
+    expect(secondYear?.flowTotals.get("IRA sale proceeds")).toBeCloseTo(60, 6);
+    expect(secondYear?.assetValues.get("IRA")).toBeCloseTo(40, 6);
+    expect(secondYear?.liquidAssets).toBeCloseTo(40, 6);
+  });
+
   it("returns to equal-proportion liquidation after custom asset liquidation is untoggled", () => {
     let customAssetLiquidation = false;
     customAssetLiquidation = true;
@@ -1336,6 +1994,21 @@ describe("buildSimulationScenarios", () => {
     expect(row?.flowTotals.get("Bonds sale proceeds")).toBeCloseTo(20, 6);
     expect(row?.assetValues.get("Stocks")).toBeCloseTo(160, 6);
     expect(row?.assetValues.get("Bonds")).toBeCloseTo(80, 6);
+  });
+
+  it("derives early-withdrawal avoidance only for default retirement liquidation", () => {
+    const retirementAsset = {
+      assetType: "401k" as const,
+      sellProportion: 1,
+    };
+    const taxableAsset = {
+      assetType: "us-stocks" as const,
+      sellProportion: 1,
+    };
+
+    expect(shouldAvoidEarlyWithdrawalPenalty(retirementAsset, false)).toBe(true);
+    expect(shouldAvoidEarlyWithdrawalPenalty(retirementAsset, true)).toBe(false);
+    expect(shouldAvoidEarlyWithdrawalPenalty(taxableAsset, false)).toBe(false);
   });
 
   it("does not report a stock price return percentage after dividends fund a full liquidation", () => {

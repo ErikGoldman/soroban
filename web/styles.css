@@ -2017,6 +2017,19 @@ label {
   overflow: visible;
 }
 
+.modal-panel.simulation-example-details-modal {
+  display: grid;
+  gap: 16px;
+  width: min(1100px, 100%);
+}
+
+.simulation-example-details-modal .flow-table th:first-child,
+.simulation-example-details-modal .flow-table td:first-child {
+  width: 1%;
+  min-width: 5.5rem;
+  white-space: nowrap;
+}
+
 .modal-header {
   display: flex;
   align-items: start;

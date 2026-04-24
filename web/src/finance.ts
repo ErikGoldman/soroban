@@ -18,7 +18,7 @@ export interface VariableDefinition {
   value: number;
 }
 
-export type InvestmentAssetType = "us-stocks" | "federal-bonds" | "local-bonds";
+export type InvestmentAssetType = "us-stocks" | "federal-bonds" | "local-bonds" | "ira" | "roth-ira" | "401k";
 
 interface AssetDefinitionBase {
   name: string;
@@ -31,6 +31,7 @@ export interface InvestmentAssetDefinition extends AssetDefinitionBase {
   assetType?: InvestmentAssetType;
   startingValue: number;
   startingValueFormula?: string;
+  desiredAnnualContribution?: number;
   sellProportion: number;
   cashGeneration?: AssetCashGenerationDefinition;
   cashGenerations?: readonly AssetCashGenerationDefinition[];
@@ -143,6 +144,7 @@ export class Asset {
   readonly assetType: InvestmentAssetType | null;
   readonly startingValue: number;
   readonly startingValueFormula?: string;
+  readonly desiredAnnualContribution: number;
   readonly sellProportion: number;
   readonly cashGenerations: readonly AssetCashGenerationDefinition[];
   readonly saleTax: AssetSaleTaxDefinition | null;
@@ -179,6 +181,7 @@ export class Asset {
       this.volatility = definition.volatility;
       this.startingValue = 0;
       this.startingValueFormula = undefined;
+      this.desiredAnnualContribution = 0;
       this.sellProportion = 0;
       this.cashGenerations = [];
       this.saleTax = null;
@@ -198,7 +201,15 @@ export class Asset {
     }
 
     assertFiniteNumber(definition.startingValue, `Starting value for asset "${normalizedName}" must be finite.`);
+    assertFiniteNumber(
+      definition.desiredAnnualContribution ?? 0,
+      `Desired annual contribution for asset "${normalizedName}" must be finite.`
+    );
     assertFiniteNumber(definition.sellProportion, `Sell multiplier for asset "${normalizedName}" must be finite.`);
+
+    if ((definition.desiredAnnualContribution ?? 0) < 0) {
+      throw new Error(`Desired annual contribution for asset "${normalizedName}" cannot be negative.`);
+    }
 
     if (definition.sellProportion < 0) {
       throw new Error(`Sell multiplier for asset "${normalizedName}" cannot be negative.`);
@@ -217,6 +228,7 @@ export class Asset {
     this.assetType = definition.assetType ?? null;
     this.startingValue = definition.startingValue;
     this.startingValueFormula = definition.startingValueFormula?.trim() || undefined;
+    this.desiredAnnualContribution = definition.desiredAnnualContribution ?? 0;
     this.expectedReturn = definition.expectedReturn;
     this.volatility = definition.volatility;
     this.sellProportion = definition.sellProportion;
@@ -267,6 +279,7 @@ export class Asset {
       ...(this.assetType ? { assetType: this.assetType } : {}),
       startingValue: this.startingValue,
       ...(this.startingValueFormula ? { startingValueFormula: this.startingValueFormula } : {}),
+      ...(this.desiredAnnualContribution > 0 ? { desiredAnnualContribution: this.desiredAnnualContribution } : {}),
       expectedReturn: this.expectedReturn,
       volatility: this.volatility,
       sellProportion: this.sellProportion,

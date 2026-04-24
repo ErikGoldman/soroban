@@ -35,7 +35,7 @@ import {
   getSimulationSaleEntries,
   getVisibleSimulationFlowEntries,
 } from "./simulation-detail.js";
-import { getSimulationSellProportion } from "./simulation-input.js";
+import { getSimulationSellProportion, shouldAvoidEarlyWithdrawalPenalty } from "./simulation-input.js";
 import {
   Asset,
   Event,
@@ -202,6 +202,7 @@ interface AssetDraft {
   kind: AssetDraftKind;
   name: string;
   startingValue: string;
+  desiredAnnualContribution: string;
   expectedReturn: string;
   volatility: string;
   initialCost: string;
@@ -348,6 +349,24 @@ const ASSET_TYPE_PRESETS: Record<InvestmentAssetType, AssetTypePreset> = {
         taxTreatment: "triple-exempt",
       },
     ],
+  },
+  ira: {
+    label: "IRA",
+    expectedReturn: "4",
+    volatility: "16",
+    cashGenerations: [],
+  },
+  "roth-ira": {
+    label: "Roth IRA",
+    expectedReturn: "4",
+    volatility: "16",
+    cashGenerations: [],
+  },
+  "401k": {
+    label: "401(k)",
+    expectedReturn: "4",
+    volatility: "16",
+    cashGenerations: [],
   },
 };
 
@@ -529,6 +548,7 @@ let flowEditorOpen = false;
 let assetComposerOpen = false;
 let assetEditorOpen = false;
 let taxComposerOpen = false;
+let simulationExampleDetailsOpen = false;
 let simulationInflationSectionExpanded = false;
 let simulationTaxesSectionExpanded = false;
 let simulationSettingsSectionExpanded = false;
@@ -608,6 +628,7 @@ function createAssetDraft(): AssetDraft {
     kind: "us-stocks",
     name: "",
     startingValue: "",
+    desiredAnnualContribution: "0",
     expectedReturn: defaultPreset.expectedReturn,
     volatility: defaultPreset.volatility,
     initialCost: "0",
@@ -659,6 +680,12 @@ function getAssetTypeLabel(kind: AssetDraftKind): string {
       return "Federal bonds";
     case "local-bonds":
       return "Local bonds";
+    case "ira":
+      return "IRA";
+    case "roth-ira":
+      return "Roth IRA";
+    case "401k":
+      return "401(k)";
     case "investment":
     default:
       return "Other investment";
@@ -670,6 +697,9 @@ function getInvestmentAssetTypeFromDraftKind(kind: AssetDraftKind): InvestmentAs
     case "us-stocks":
     case "federal-bonds":
     case "local-bonds":
+    case "ira":
+    case "roth-ira":
+    case "401k":
       return kind;
     default:
       return null;
@@ -683,6 +713,10 @@ function getAssetTypePreset(kind: AssetDraftKind): AssetTypePreset | null {
 
 function isBondAssetDraftKind(kind: AssetDraftKind): boolean {
   return kind === "federal-bonds" || kind === "local-bonds";
+}
+
+function isRetirementAssetDraftKind(kind: AssetDraftKind): boolean {
+  return kind === "ira" || kind === "roth-ira" || kind === "401k";
 }
 
 function getDefaultAssetDetailMode(kind: AssetDraftKind): AssetDetailMode {
@@ -1180,6 +1214,9 @@ function buildAssetDraftFromDefinition(
       options.preserveFormulaSource && isInvestmentAsset(asset)
         ? getAssetValueFormulaInput(asset)
         : String(isInvestmentAsset(resolvedAsset) ? resolvedAsset.startingValue : 0),
+    desiredAnnualContribution: String(
+      isInvestmentAsset(resolvedAsset) ? resolvedAsset.desiredAnnualContribution ?? 0 : 0
+    ),
     expectedReturn: String(asset.expectedReturn),
     volatility: String(asset.volatility),
     initialCost:
@@ -1271,6 +1308,9 @@ function migratePersistedAsset(
       ...(asset.assetType ? { assetType: asset.assetType } : {}),
       startingValue: asset.startingValue ?? 0,
       ...(asset.startingValueFormula ? { startingValueFormula: asset.startingValueFormula } : {}),
+      ...(typeof asset.desiredAnnualContribution === "number" && Number.isFinite(asset.desiredAnnualContribution)
+        ? { desiredAnnualContribution: asset.desiredAnnualContribution }
+        : {}),
       expectedReturn: asset.expectedReturn,
       volatility: asset.volatility,
       sellProportion:
@@ -1628,9 +1668,12 @@ function renderAssetCashTaxTreatmentOptions(selected: AssetCashTaxTreatment): st
 function renderAssetTypeOptions(selected: AssetDraftKind): string {
   return `
     <option value="us-stocks" ${selected === "us-stocks" ? "selected" : ""}>US stocks</option>
+    <option value="401k" ${selected === "401k" ? "selected" : ""}>401(k)</option>
+    <option value="ira" ${selected === "ira" ? "selected" : ""}>IRA</option>
+    <option value="roth-ira" ${selected === "roth-ira" ? "selected" : ""}>Roth IRA</option>
+    <option value="home" ${selected === "home" ? "selected" : ""}>House</option>
     <option value="federal-bonds" ${selected === "federal-bonds" ? "selected" : ""}>Federal bonds</option>
     <option value="local-bonds" ${selected === "local-bonds" ? "selected" : ""}>Local bonds</option>
-    <option value="home" ${selected === "home" ? "selected" : ""}>House</option>
     <option value="investment" ${selected === "investment" ? "selected" : ""}>Other investment</option>
   `;
 }
@@ -2172,6 +2215,7 @@ function buildSimulationInputSignaturePayload(): Record<string, unknown> {
     simulation: {
       startYear: simulationDraft.startYear,
       attempts: simulationDraft.attempts,
+      currentAge: simulationDraft.currentAge,
       horizonYears: simulationDraft.horizonYears,
       inflationPreset: simulationDraft.inflationPreset,
       fixedInflationRate: simulationDraft.fixedInflationRate,
@@ -2270,6 +2314,7 @@ function clearSimulationOutputs(): void {
   selectedSimulationPercentile = 50;
   selectedSimulationChartMetric = "liquidAssets";
   expandedSimulationExampleKeys = new Set();
+  simulationExampleDetailsOpen = false;
 }
 
 function hasDisplayedSimulationResults(): boolean {
@@ -2343,6 +2388,7 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
   return {
     attempts: simulationDraft.attempts,
     horizonYears: simulationDraft.horizonYears,
+    currentAge: simulationDraft.currentAge,
     yearlyPlans,
     assets: plannerState.assets.map((asset) => {
       const resolvedAsset = resolveAssetValueFormula(asset, formulaContext);
@@ -2371,9 +2417,15 @@ function buildSimulationWorkerInput(variableOverride?: SimulationVariableOverrid
             name: resolvedAsset.name,
             ...(resolvedAsset.assetType ? { assetType: resolvedAsset.assetType } : {}),
             startingValue: resolvedAsset.startingValue,
+            ...((resolvedAsset.desiredAnnualContribution ?? 0) > 0
+              ? { desiredAnnualContribution: resolvedAsset.desiredAnnualContribution }
+              : {}),
             expectedReturn: resolvedAsset.expectedReturn,
             volatility: resolvedAsset.volatility,
             sellProportion: getSimulationSellProportion(resolvedAsset, simulationDraft.customAssetLiquidation),
+            ...(shouldAvoidEarlyWithdrawalPenalty(resolvedAsset, simulationDraft.customAssetLiquidation)
+              ? { avoidEarlyWithdrawalPenalty: true }
+              : {}),
             ...((resolvedAsset.cashGenerations ?? []).length > 0
               ? {
                   cashGenerations: (resolvedAsset.cashGenerations ?? []).map((cashGeneration) => ({
@@ -3376,6 +3428,7 @@ function renderPlanner(user: UserIdentity): void {
       ${renderAssetEditor()}
       ${renderFlowComposer()}
       ${renderFlowEditor()}
+      ${renderSimulationExampleDetailsModal()}
     </div>
   `;
 
@@ -4222,6 +4275,9 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
             ...(resolvedAsset.assetType ? { assetType: resolvedAsset.assetType } : {}),
             startingValue: resolvedAsset.startingValue,
             ...(resolvedAsset.startingValueFormula ? { startingValueFormula: resolvedAsset.startingValueFormula } : {}),
+            ...((resolvedAsset.desiredAnnualContribution ?? 0) > 0
+              ? { desiredAnnualContribution: resolvedAsset.desiredAnnualContribution }
+              : {}),
             expectedReturn: resolvedAsset.expectedReturn,
             volatility: resolvedAsset.volatility,
             sellProportion: resolvedAsset.sellProportion,
@@ -4592,6 +4648,7 @@ function renderSimulationChart(
           <strong>${escapeHtml(title)}</strong>
           <p class="helper-copy">${escapeHtml(description)}</p>
         </div>
+        <button type="button" class="secondary-button" data-open-simulation-example-details>see details</button>
       </div>
       <div class="tab-strip simulation-chart-metric-tabs" role="tablist" aria-label="Simulation chart metric">
         <button
@@ -4760,6 +4817,123 @@ function renderSimulationSweepResults(): string {
   `;
 }
 
+function renderSimulationExampleDetailsTable(
+  rows: readonly SimulationScenario["rows"][number][],
+  selectedDetailScenario: SimulationDetailScenario | null
+): string {
+  return `
+    <div class="board-scroll simulation-results">
+      <table class="flow-table">
+        <thead>
+          <tr>
+            <th>Year</th>
+            <th>${selectedSimulationPercentile}th percentile assets</th>
+            <th>Depleted by year</th>
+            <th>Example</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map((row) => {
+              const expandedKey = `${selectedSimulationPercentile}:${row.yearNumber}`;
+              const isExpanded = expandedSimulationExampleKeys.has(expandedKey);
+              const exampleYear = isExpanded ? getExampleSimulationYear(selectedDetailScenario, row.yearNumber) : null;
+
+              return `
+                <tr>
+                  <th>${escapeHtml(row.label)}</th>
+                  <td>${formatCurrency(row.totalAssets)}</td>
+                  <td>${formatPercentage(row.depletionProbability)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      class="link-button simulation-year-button"
+                      data-toggle-simulation-example="${expandedKey}"
+                    >
+                      ${isExpanded ? "Hide example" : "Show example"}
+                    </button>
+                  </td>
+                </tr>
+                ${
+                  isExpanded
+                    ? `
+                <tr class="simulation-detail-row">
+                  <td colspan="4">
+                    ${
+                      exampleYear
+                        ? renderSimulationExampleYear(exampleYear)
+                        : `<div class="simulation-detail-panel"><p class="helper-copy">No example year was available for this percentile row.</p></div>`
+                    }
+                  </td>
+                </tr>
+                    `
+                    : ""
+                }
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function getSelectedSimulationExampleDetails(): {
+  scenario: SimulationScenario;
+  detailScenario: SimulationDetailScenario | null;
+} | null {
+  const displayedSimulationResults = getDisplayedSimulationResults();
+  const displayedSimulationDetails = getDisplayedSimulationDetailResults();
+  const scenario = displayedSimulationResults?.get(selectedSimulationPercentile) ?? null;
+  if (!scenario) {
+    return null;
+  }
+
+  return {
+    scenario,
+    detailScenario: displayedSimulationDetails
+      ? selectRepresentativeSimulationScenario(displayedSimulationDetails, scenario.rows)
+      : null,
+  };
+}
+
+function renderSimulationExampleDetailsModal(): string {
+  if (!simulationExampleDetailsOpen) {
+    return "";
+  }
+
+  const details = getSelectedSimulationExampleDetails();
+  if (!details) {
+    return "";
+  }
+
+  return `
+    <div class="modal-shell">
+      <section class="panel modal-panel simulation-example-details-modal">
+        <div class="modal-header">
+          <div class="panel-heading">
+            <p class="kicker">Simulation Details</p>
+            <h2>${selectedSimulationPercentile}th percentile example</h2>
+          </div>
+          <button type="button" class="secondary-button" id="close-simulation-example-details">Close</button>
+        </div>
+        <div class="simulation-example-card-controls">
+          <p class="helper-copy">See an example scenario for the selected percentile. For illustrative purposes only.</p>
+          <button
+            type="button"
+            class="secondary-button"
+            data-export-simulation-example="${selectedSimulationPercentile}"
+            ${details.detailScenario ? "" : "disabled"}
+          >
+            Export example
+          </button>
+        </div>
+        ${renderSimulationExampleDetailsTable(details.scenario.rows, details.detailScenario)}
+      </section>
+    </div>
+  `;
+}
+
 function renderSimulationResultsBody(): string {
   const displayedSimulationResults = getDisplayedSimulationResults();
   const displayedSimulationDetails = getDisplayedSimulationDetailResults();
@@ -4811,62 +4985,7 @@ function renderSimulationResultsBody(): string {
           </div>
         </div>
         <p class="helper-copy">See an example scenario for the selected percentile. For illustrative purposes only.</p>
-        <div class="board-scroll simulation-results">
-          <table class="flow-table">
-            <thead>
-              <tr>
-                <th>Year</th>
-                <th>${selectedSimulationPercentile}th percentile assets</th>
-                <th>Depleted by year</th>
-                <th>Example</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rows
-                .map((row) => {
-                  const expandedKey = `${selectedSimulationPercentile}:${row.yearNumber}`;
-                  const isExpanded = expandedSimulationExampleKeys.has(expandedKey);
-                  const exampleYear =
-                    isExpanded
-                      ? getExampleSimulationYear(selectedDetailScenario, row.yearNumber)
-                      : null;
-
-                  return `
-                    <tr>
-                      <th>${escapeHtml(row.label)}</th>
-                      <td>${formatCurrency(row.totalAssets)}</td>
-                      <td>${formatPercentage(row.depletionProbability)}</td>
-                      <td>
-                        <button
-                          type="button"
-                          class="link-button simulation-year-button"
-                          data-toggle-simulation-example="${expandedKey}"
-                        >
-                          ${isExpanded ? "Hide example" : "Show example"}
-                        </button>
-                      </td>
-                    </tr>
-                    ${
-                      isExpanded
-                        ? `
-                    <tr class="simulation-detail-row">
-                      <td colspan="4">
-                        ${
-                          exampleYear
-                            ? renderSimulationExampleYear(exampleYear)
-                            : `<div class="simulation-detail-panel"><p class="helper-copy">No example year was available for this percentile row.</p></div>`
-                        }
-                      </td>
-                    </tr>
-                        `
-                        : ""
-                    }
-                  `;
-                })
-                .join("")}
-            </tbody>
-          </table>
-        </div>
+        ${renderSimulationExampleDetailsTable(rows, selectedDetailScenario)}
       </section>
       ` : ""}
   `;
@@ -5165,6 +5284,13 @@ function syncSimulationSweepSelectionDisplay(): void {
 }
 
 function bindSimulationResultsControls(user: UserIdentity): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-open-simulation-example-details]")) {
+    button.addEventListener("click", () => {
+      simulationExampleDetailsOpen = true;
+      renderPlanner(user);
+    });
+  }
+
   for (const target of document.querySelectorAll<SVGElement>("[data-simulation-chart-percentile-select]")) {
     target.addEventListener("click", () => {
       const percentile = Number(target.dataset.simulationChartPercentileSelect) as SimulationPercentile;
@@ -5345,14 +5471,14 @@ function renderAssetComposer(): string {
         </div>
         <form id="asset-form" class="stack-form">
           <label>
-            Asset name
-            <input name="assetLabel" type="text" value="${escapeHtml(assetDraft.name)}" placeholder="Brokerage account, 401k, etc." required />
-          </label>
-          <label>
             Asset type
             <select name="kind">
               ${renderAssetTypeOptions(assetDraft.kind)}
             </select>
+          </label>
+          <label>
+            Asset name
+            <input name="assetLabel" type="text" value="${escapeHtml(assetDraft.name)}" placeholder="Brokerage account, 401k, etc." required />
           </label>
           ${renderAssetDetailModeFields(assetDraft)}
           ${renderAssetAdvancedSettingsToggle(assetDraft)}
@@ -5626,6 +5752,21 @@ function renderAssetCoreFields(draft: AssetDraft): string {
         type: "money",
       })}
     </label>
+    ${
+      isRetirementAssetDraftKind(draft.kind)
+        ? `
+    <label>
+      Annual contribution
+      <input
+        name="desiredAnnualContribution"
+        ${renderEditableNumberInputAttributes()}
+        value="${escapeHtml(formatEditableNumberInput(draft.desiredAnnualContribution))}"
+        required
+      />
+    </label>
+        `
+        : ""
+    }
   `;
 }
 
@@ -6625,6 +6766,14 @@ function bindHandlers(user: UserIdentity): void {
   focusNewAssetNameInput();
 
   const openAssetButton = document.querySelector<HTMLButtonElement>("#open-asset-composer");
+  const closeSimulationExampleDetailsButton = document.querySelector<HTMLButtonElement>(
+    "#close-simulation-example-details"
+  );
+
+  closeSimulationExampleDetailsButton?.addEventListener("click", () => {
+    simulationExampleDetailsOpen = false;
+    renderPlanner(user);
+  });
 
   for (const openFlowButton of document.querySelectorAll<HTMLButtonElement>("[data-open-flow-composer]")) {
     openFlowButton.addEventListener("click", () => {
@@ -7205,6 +7354,13 @@ function bindHandlers(user: UserIdentity): void {
     }
     renderPlanner(user);
   });
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-open-simulation-example-details]")) {
+    button.addEventListener("click", () => {
+      simulationExampleDetailsOpen = true;
+      renderPlanner(user);
+    });
+  }
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-simulation-chart-metric]")) {
     button.addEventListener("click", () => {
@@ -8475,6 +8631,8 @@ function bindAssetComposer(user: UserIdentity): void {
       return;
     } else if (target.name === "startingValue") {
       assetDraft.startingValue = target.value;
+    } else if (target.name === "desiredAnnualContribution") {
+      assetDraft.desiredAnnualContribution = target.value;
     } else if (target.name === "initialCost") {
       assetDraft.initialCost = target.value;
     } else if (target.name === "cashPurchasePercent") {
@@ -8646,6 +8804,8 @@ function bindAssetEditor(user: UserIdentity): void {
       return;
     } else if (target.name === "startingValue") {
       assetEditDraft.startingValue = target.value;
+    } else if (target.name === "desiredAnnualContribution") {
+      assetEditDraft.desiredAnnualContribution = target.value;
     } else if (target.name === "initialCost") {
       assetEditDraft.initialCost = target.value;
     } else if (target.name === "cashPurchasePercent") {
@@ -9973,11 +10133,15 @@ function buildAssetDefinition(draft: AssetDraft): AssetDefinition {
 
   const assetType = getInvestmentAssetTypeFromDraftKind(draft.kind);
   const startingValue = resolveAssetValueInput(draft.startingValue, "Value");
+  const desiredAnnualContribution = isRetirementAssetDraftKind(draft.kind)
+    ? parseEditableNumber(draft.desiredAnnualContribution)
+    : 0;
   return new Asset({
     name: draft.name,
     ...(assetType ? { assetType } : {}),
     startingValue: startingValue.value,
     ...(startingValue.formula ? { startingValueFormula: startingValue.formula } : {}),
+    ...(desiredAnnualContribution > 0 ? { desiredAnnualContribution } : {}),
     expectedReturn: Number(draft.expectedReturn),
     volatility: Number(draft.volatility),
     sellProportion: 1,
@@ -10239,6 +10403,11 @@ function closeEventComposer(): void {
 }
 
 function closeTopmostModal(): boolean {
+  if (simulationExampleDetailsOpen) {
+    simulationExampleDetailsOpen = false;
+    return true;
+  }
+
   if (flowEditorOpen) {
     closeFlowEditor();
     return true;

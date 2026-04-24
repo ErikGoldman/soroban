@@ -22,6 +22,7 @@ export const VARIABLE_SWEEP_STEP_COUNT = 10;
 
 export interface SimulationInvestmentAssetInput extends InvestmentAssetDefinition {
   kind?: "investment";
+  avoidEarlyWithdrawalPenalty?: boolean;
 }
 
 export interface SimulationHomeAssetInput extends HomeAssetDefinition {
@@ -144,6 +145,7 @@ export interface SimulationDetailScenario {
 export interface BuildSimulationScenariosInput {
   attempts: number;
   horizonYears: number;
+  currentAge?: number;
   yearlyPlans?: readonly SimulationYearlyPlan[];
   yearlySnapshots?: readonly SimulationYearlySnapshot[];
   assets: readonly SimulationAssetInput[];
@@ -159,10 +161,13 @@ interface NormalizedSimulationInvestmentAsset {
   kind: "investment";
   name: string;
   startingValue: number;
+  assetType?: InvestmentAssetDefinition["assetType"];
+  desiredAnnualContribution: number;
   expectedReturn: number;
   volatility: number;
   // Stored in the historical sellProportion field, but interpreted as a sale multiplier.
   sellProportion: number;
+  avoidEarlyWithdrawalPenalty: boolean;
   cashGenerations: readonly AssetCashGenerationDefinition[];
   saleTax?: AssetSaleTaxDefinition;
 }
@@ -187,6 +192,12 @@ interface NormalizedSimulationHomeAsset {
 type NormalizedSimulationAsset = NormalizedSimulationInvestmentAsset | NormalizedSimulationHomeAsset;
 
 const SYNTHETIC_CASH_SAVINGS_ASSET_NAME = "Cash savings";
+const RETIREMENT_IRA_UNDER_50_LIMIT = 7500;
+const RETIREMENT_IRA_50_PLUS_LIMIT = 8600;
+const RETIREMENT_401K_UNDER_50_LIMIT = 24500;
+const RETIREMENT_401K_50_PLUS_LIMIT = 32500;
+const RETIREMENT_401K_60_TO_63_LIMIT = 35750;
+const EARLY_WITHDRAWAL_PENALTY_AVOIDANCE_AGE = 60;
 
 interface HomeSimulationState {
   marketValues: Map<string, number>;
@@ -428,6 +439,7 @@ function normalizeSimulationYearlyPlans(
 export function buildSimulationScenarios({
   attempts,
   horizonYears,
+  currentAge,
   yearlyPlans,
   yearlySnapshots,
   assets,
@@ -441,6 +453,7 @@ export function buildSimulationScenarios({
   return buildSimulationExecution({
     attempts,
     horizonYears,
+    currentAge,
     yearlyPlans,
     yearlySnapshots,
     assets,
@@ -457,6 +470,7 @@ export function buildSimulationExecution(
   {
     attempts,
     horizonYears,
+    currentAge,
     yearlyPlans,
     yearlySnapshots,
     assets,
@@ -475,6 +489,7 @@ export function buildSimulationExecution(
     {
       attempts,
       horizonYears,
+      currentAge,
       yearlyPlans: normalizedYearlyPlans,
       assets,
       assetCorrelations,
@@ -623,6 +638,7 @@ function buildSimulationScenarioSummaries({
 export function buildSimulationDetails({
   attempts,
   horizonYears,
+  currentAge,
   yearlyPlans,
   yearlySnapshots,
   assets,
@@ -636,6 +652,7 @@ export function buildSimulationDetails({
   return buildSimulationExecution({
     attempts,
     horizonYears,
+    currentAge,
     yearlyPlans,
     yearlySnapshots,
     assets,
@@ -707,6 +724,7 @@ export function selectRepresentativeSimulationScenario(
 function runSimulationAttempts({
   attempts,
   horizonYears,
+  currentAge = 35,
   yearlyPlans = [],
   assets,
   assetCorrelations,
@@ -756,11 +774,9 @@ function runSimulationAttempts({
         break;
       }
 
+      const simulationAge = currentAge + yearIndex;
       const startingTotalAssets = [...assetValues.values()].reduce((total, value) => total + value, 0);
-      const startingInvestmentAssets = reinvestableAssetNames.reduce(
-        (total, assetName) => total + (assetValues.get(assetName) ?? 0),
-        0
-      );
+      const startingInvestmentAssets = sumAccessibleInvestmentAssets(normalizedAssets, assetValues, simulationAge);
       const startingAssetValues = new Map(normalizedAssets.map((asset) => [asset.name, assetValues.get(asset.name) ?? 0]));
       const startingAssetMarketValues = new Map(
         normalizedAssets.map((asset) => [
@@ -854,6 +870,7 @@ function runSimulationAttempts({
           assetCostBases: saleResult.assetCostBases,
           flowTotals: saleResult.flowTotals,
           baseTaxInput: taxInputWithCashGeneration.taxInput,
+          age: simulationAge,
         });
         totalTaxableGains += saleResult.taxableGains;
         cashBalance += saleResult.preTaxCashBalance;
@@ -886,6 +903,7 @@ function runSimulationAttempts({
           assetCostBases: saleResult.assetCostBases,
           flowTotals: saleResult.flowTotals,
           baseTaxInput: saleResult.taxInput,
+          age: simulationAge,
         });
         totalTaxableGains += saleResult.taxableGains;
         cashBalance += saleResult.preTaxCashBalance;
@@ -912,12 +930,33 @@ function runSimulationAttempts({
       const totalExpenses = yearlyPlan.totalExpenses + generatedExpenseTotal + taxBreakdown.totalTax;
       const postTaxCashBalance = cashBalance - taxBreakdown.totalTax;
       const postTaxShortfall = Math.max(0, -postTaxCashBalance);
-      const postTaxSurplus = Math.max(0, postTaxCashBalance);
-      if (postTaxSurplus > 0 && reinvestableAssetNames.length > 0) {
+      let postTaxSurplus = Math.max(0, postTaxCashBalance);
+      if (postTaxSurplus > 0) {
+        const retirementContributions = buildRetirementContributionAmounts({
+          availableSurplus: postTaxSurplus,
+          assets: normalizedAssets,
+          earnedCompensation: yearlyPlan.householdTaxInput.wages,
+          age: currentAge + yearIndex,
+        });
+        for (const [assetName, contributionAmount] of retirementContributions) {
+          saleResult.assetValues.set(assetName, (saleResult.assetValues.get(assetName) ?? 0) + contributionAmount);
+          saleResult.assetCostBases.set(assetName, (saleResult.assetCostBases.get(assetName) ?? 0) + contributionAmount);
+          flowTotalsWithTaxes.set(`${assetName} contribution`, contributionAmount);
+          postTaxSurplus -= contributionAmount;
+        }
+      }
+
+      if (postTaxSurplus > 0) {
+        const surplusReinvestmentAssetNames = normalizedAssets
+          .filter(
+            (asset): asset is NormalizedSimulationInvestmentAsset =>
+              asset.kind === "investment" && !isRetirementInvestmentAsset(asset)
+          )
+          .map((asset) => asset.name);
         const reinvestmentAmounts = buildSurplusReinvestmentAmounts(
           postTaxSurplus,
           contributionAmounts,
-          reinvestableAssetNames
+          surplusReinvestmentAssetNames
         );
         for (const [assetName, reinvestmentAmount] of reinvestmentAmounts) {
           saleResult.assetValues.set(assetName, (saleResult.assetValues.get(assetName) ?? 0) + reinvestmentAmount);
@@ -950,10 +989,7 @@ function runSimulationAttempts({
             : saleResult.assetValues.get(asset.name) ?? 0,
         ])
       );
-      const endingInvestmentAssets = reinvestableAssetNames.reduce(
-        (total, assetName) => total + (yearAssetValues.get(assetName) ?? 0),
-        0
-      );
+      const endingInvestmentAssets = sumAccessibleInvestmentAssets(normalizedAssets, yearAssetValues, simulationAge);
       const finalTotalAssets = [...yearAssetValues.values()].reduce((total, value) => total + value, 0);
       const totalGains = finalTotalAssets - startingTotalAssets + totalExpenses - postTaxShortfall;
       const depletedThisYear =
@@ -1235,9 +1271,11 @@ function addSyntheticCashSavingsAssetIfNeeded(
       kind: "investment",
       name: createUniqueSyntheticAssetName(assets, SYNTHETIC_CASH_SAVINGS_ASSET_NAME),
       startingValue: 0,
+      desiredAnnualContribution: 0,
       expectedReturn: 0,
       volatility: 0,
       sellProportion: 1,
+      avoidEarlyWithdrawalPenalty: false,
       cashGenerations: [],
     },
   ];
@@ -1291,9 +1329,12 @@ function normalizeSimulationAsset(asset: SimulationAssetInput): NormalizedSimula
     kind: "investment",
     name: asset.name,
     startingValue: asset.startingValue,
+    assetType: asset.assetType,
+    desiredAnnualContribution: Math.max(0, asset.desiredAnnualContribution ?? 0),
     expectedReturn: asset.expectedReturn,
     volatility: asset.volatility,
     sellProportion: Number.isFinite(asset.sellProportion) ? Math.max(0, asset.sellProportion) : 1,
+    avoidEarlyWithdrawalPenalty: asset.avoidEarlyWithdrawalPenalty === true,
     cashGenerations: cashGenerations.map((cashGeneration, index) => ({
       name: cashGeneration.name?.trim() || `Cash generation ${index + 1}`,
       rate: Math.max(0, cashGeneration.rate),
@@ -1647,6 +1688,7 @@ function resolveSalesForCashNeed({
   assetCostBases,
   flowTotals,
   baseTaxInput,
+  age,
 }: {
   cashNeeded: number;
   assets: readonly NormalizedSimulationAsset[];
@@ -1654,6 +1696,7 @@ function resolveSalesForCashNeed({
   assetCostBases: ReadonlyMap<string, number>;
   flowTotals: Map<string, number>;
   baseTaxInput: HouseholdTaxInput;
+  age: number;
 }): SaleIterationResult {
   const nextAssetValues = new Map(assetValues);
   const nextAssetCostBases = new Map(assetCostBases);
@@ -1677,7 +1720,9 @@ function resolveSalesForCashNeed({
   while (remainingCashNeed > 0.000001) {
     const sellableAssets = assets.filter(
       (asset): asset is NormalizedSimulationInvestmentAsset =>
-        asset.kind === "investment" && (nextAssetValues.get(asset.name) ?? 0) > 0.000001
+        asset.kind === "investment" &&
+        (nextAssetValues.get(asset.name) ?? 0) > 0.000001 &&
+        isAssetAccessibleForDefaultSale(asset, age)
     );
     const totalSellWeight = sellableAssets.reduce(
       (total, asset) => total + (nextAssetValues.get(asset.name) ?? 0) * asset.sellProportion,
@@ -1737,6 +1782,94 @@ function resolveSalesForCashNeed({
     preTaxCashBalance,
     taxableGains,
   };
+}
+
+function buildRetirementContributionAmounts({
+  availableSurplus,
+  assets,
+  earnedCompensation,
+  age,
+}: {
+  availableSurplus: number;
+  assets: readonly NormalizedSimulationAsset[];
+  earnedCompensation: number;
+  age: number;
+}): Map<string, number> {
+  const contributionAmounts = new Map<string, number>();
+  let remainingSurplus = Math.max(0, availableSurplus);
+  let remainingCompensation = Math.max(0, earnedCompensation);
+  let remainingIraLimit = getIraContributionLimit(age);
+  let remaining401kLimit = get401kContributionLimit(age);
+
+  for (const asset of assets) {
+    if (asset.kind !== "investment" || asset.desiredAnnualContribution <= 0 || remainingSurplus <= 0.000001) {
+      continue;
+    }
+
+    let remainingAccountLimit = 0;
+    if (asset.assetType === "ira" || asset.assetType === "roth-ira") {
+      remainingAccountLimit = remainingIraLimit;
+    } else if (asset.assetType === "401k") {
+      remainingAccountLimit = remaining401kLimit;
+    } else {
+      continue;
+    }
+
+    const contributionAmount = Math.min(
+      asset.desiredAnnualContribution,
+      remainingAccountLimit,
+      remainingCompensation,
+      remainingSurplus
+    );
+    if (contributionAmount <= 0.000001) {
+      continue;
+    }
+
+    contributionAmounts.set(asset.name, contributionAmount);
+    remainingSurplus -= contributionAmount;
+    remainingCompensation -= contributionAmount;
+    if (asset.assetType === "ira" || asset.assetType === "roth-ira") {
+      remainingIraLimit -= contributionAmount;
+    } else {
+      remaining401kLimit -= contributionAmount;
+    }
+  }
+
+  return contributionAmounts;
+}
+
+function isRetirementInvestmentAsset(asset: NormalizedSimulationInvestmentAsset): boolean {
+  return asset.assetType === "ira" || asset.assetType === "roth-ira" || asset.assetType === "401k";
+}
+
+function isAssetAccessibleForDefaultSale(asset: NormalizedSimulationInvestmentAsset, age: number): boolean {
+  return !asset.avoidEarlyWithdrawalPenalty || age >= EARLY_WITHDRAWAL_PENALTY_AVOIDANCE_AGE;
+}
+
+function sumAccessibleInvestmentAssets(
+  assets: readonly NormalizedSimulationAsset[],
+  assetValues: ReadonlyMap<string, number>,
+  age: number
+): number {
+  return assets.reduce((total, asset) => {
+    if (asset.kind !== "investment" || !isAssetAccessibleForDefaultSale(asset, age)) {
+      return total;
+    }
+
+    return total + (assetValues.get(asset.name) ?? 0);
+  }, 0);
+}
+
+function getIraContributionLimit(age: number): number {
+  return age >= 50 ? RETIREMENT_IRA_50_PLUS_LIMIT : RETIREMENT_IRA_UNDER_50_LIMIT;
+}
+
+function get401kContributionLimit(age: number): number {
+  if (age >= 60 && age <= 63) {
+    return RETIREMENT_401K_60_TO_63_LIMIT;
+  }
+
+  return age >= 50 ? RETIREMENT_401K_50_PLUS_LIMIT : RETIREMENT_401K_UNDER_50_LIMIT;
 }
 
 function buildSurplusReinvestmentAmounts(

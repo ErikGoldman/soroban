@@ -55,6 +55,7 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
       {
         attempts: message.input.attempts,
         horizonYears: message.input.horizonYears,
+        currentAge: message.input.currentAge,
         yearlyPlans: message.input.yearlyPlans,
         assets: message.input.assets,
         assetCorrelations: message.input.assetCorrelations,
