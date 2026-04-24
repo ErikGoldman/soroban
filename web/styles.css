@@ -15,6 +15,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html {
   color-scheme: light;
 }
@@ -173,6 +177,18 @@ label {
   color: rgba(95, 100, 109, 0.72);
 }
 
+.formula-editor[data-plain-numeric="true"][data-formula-type="money"] .formula-editor-input::before {
+  content: "$";
+  color: var(--muted);
+  margin-right: 0.1rem;
+}
+
+.formula-editor[data-plain-numeric="true"][data-formula-type="percent"] .formula-editor-input::after {
+  content: "%";
+  color: var(--muted);
+  margin-left: 0.1rem;
+}
+
 .formula-token-variable {
   display: inline-block;
   padding: 0.08rem 0.58rem;
@@ -256,9 +272,13 @@ label {
 }
 
 .app-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: min(1500px, calc(100% - 32px));
+  height: 100vh;
   margin: 0 auto;
   padding: 30px 0 56px;
+  overflow: hidden;
 }
 
 .planner-header,
@@ -361,6 +381,33 @@ label {
 
 .planner-main {
   gap: 0;
+  min-height: 0;
+}
+
+.planner-workspace-split {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.72fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: stretch;
+  min-height: 0;
+  height: 100%;
+}
+
+.planner-workspace-panel {
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.planner-workspace-setup,
+.planner-workspace-simulation {
+  display: grid;
+  align-content: start;
+  gap: 18px;
 }
 
 .board-panel {
@@ -395,6 +442,7 @@ label {
 }
 
 .setup-main {
+  align-content: start;
   gap: 20px;
 }
 
@@ -564,6 +612,41 @@ label {
 .workspace-variable-name {
   font-weight: 600;
   color: var(--ink);
+}
+
+.formula-inputs-card {
+  gap: 12px;
+}
+
+.formula-inputs-card .workspace-section-header {
+  margin-bottom: 0;
+}
+
+.formula-input-list {
+  display: grid;
+  gap: 4px;
+}
+
+.formula-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16ch;
+  align-items: center;
+  gap: 14px;
+  min-height: 34px;
+}
+
+.formula-input-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.formula-input-row input {
+  width: 16ch;
+  max-width: 16ch;
+  justify-self: end;
+  text-align: right;
 }
 
 .hero {
@@ -829,6 +912,159 @@ label {
 }
 
 .simulation-panel {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.simulation-forecast-header {
+  display: grid;
+  gap: 10px;
+  padding: 22px 24px;
+  border: 1px solid rgba(22, 24, 27, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 251, 245, 0.74);
+  box-shadow: 0 14px 34px rgba(31, 27, 20, 0.08);
+}
+
+.simulation-forecast-header h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(1.45rem, 2vw, 2.35rem);
+  line-height: 1.14;
+  letter-spacing: 0;
+}
+
+.simulation-inline-select-wrap {
+  display: inline-grid;
+  vertical-align: baseline;
+}
+
+.simulation-inline-select {
+  max-width: 6.5rem;
+  padding: 0 1.25rem 0 0;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  box-shadow: none;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 800;
+  line-height: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.14em;
+  cursor: pointer;
+}
+
+.simulation-inline-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.simulation-empty-results {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  align-self: start;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 16px;
+  border: 1px dashed rgba(45, 31, 22, 0.16);
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.simulation-empty-results .helper-copy {
+  justify-self: start;
+}
+
+.simulation-empty-results > .simulation-run-control {
+  justify-self: end;
+}
+
+.simulation-depletion-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.simulation-depletion-summary strong {
+  color: var(--ink);
+}
+
+.simulation-stale-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border: 1px solid rgba(145, 65, 33, 0.22);
+  border-radius: 16px;
+  background: rgba(191, 91, 54, 0.12);
+}
+
+.simulation-stale-banner[hidden],
+.simulation-depletion-summary[hidden] {
+  display: none;
+}
+
+.simulation-stale-banner p {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.simulation-results-section.is-stale #simulation-results-panel,
+.simulation-results-section.is-stale .simulation-sweep-results {
+  opacity: 0.54;
+  filter: grayscale(0.45);
+}
+
+.simulation-run-control {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.simulation-run-control .simulation-progress {
+  flex: 1 1 100%;
+}
+
+.simulation-run-control #simulation-run-button {
+  min-height: 52px;
+  padding: 0 24px;
+  font-size: 1rem;
+}
+
+.simulation-settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  box-shadow: none;
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.simulation-settings-toggle:hover,
+.simulation-settings-toggle:focus-visible {
+  background: transparent;
+  color: var(--accent-strong);
+  box-shadow: none;
+}
+
+.simulation-settings-body {
   display: grid;
   gap: 18px;
 }
@@ -1152,31 +1388,6 @@ label {
   flex-wrap: wrap;
 }
 
-.simulation-example-percentile-tabs {
-  margin-bottom: 0;
-}
-
-.simulation-chart-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-}
-
-.simulation-chart-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-
-.simulation-chart-swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  background: var(--swatch);
-}
-
 .simulation-chart {
   width: max(100%, 760px);
   height: auto;
@@ -1204,20 +1415,56 @@ label {
 
 .simulation-chart-line {
   fill: none;
-  stroke-width: 2.25;
-  opacity: 0.55;
+  stroke-width: 2;
+  opacity: 0.32;
   stroke-linecap: round;
   stroke-linejoin: round;
+  cursor: pointer;
+  transition:
+    opacity 140ms ease,
+    stroke 140ms ease,
+    filter 140ms ease,
+    stroke-width 140ms ease;
+}
+
+.simulation-chart-line.is-muted {
+  stroke: rgba(20, 24, 27, 0.3);
+}
+
+.simulation-chart-line.is-muted:hover,
+.simulation-chart-line.is-muted:focus-visible,
+.simulation-chart-line.is-muted.is-series-hovered {
+  stroke: var(--series-color);
+  stroke-width: 3;
+  opacity: 0.58;
+  filter: saturate(0.68);
 }
 
 .simulation-chart-line.is-active {
-  stroke-width: 3.5;
+  stroke-width: 4;
   opacity: 1;
 }
 
 .simulation-chart-point {
-  opacity: 0.6;
+  opacity: 0.22;
   cursor: pointer;
+  transition:
+    opacity 140ms ease,
+    fill 140ms ease,
+    filter 140ms ease,
+    r 140ms ease;
+}
+
+.simulation-chart-point.is-muted {
+  fill: rgba(20, 24, 27, 0.34);
+}
+
+.simulation-chart-point.is-muted:hover,
+.simulation-chart-point.is-muted:focus-visible,
+.simulation-chart-point.is-muted.is-series-hovered {
+  fill: var(--series-color);
+  opacity: 0.58;
+  filter: saturate(0.68);
 }
 
 .simulation-chart-point.is-active {
@@ -1236,8 +1483,7 @@ label {
   line-height: 1.4;
   pointer-events: none;
   box-shadow: 0 14px 28px rgba(20, 24, 27, 0.22);
-  transform: translate(-50%, -100%);
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
 .simulation-year-button {
@@ -1395,12 +1641,6 @@ label {
 
 .simulation-progress-track.is-error span {
   background: linear-gradient(90deg, #b14f3d, #d6765f);
-}
-
-.simulation-actions #simulation-submit-button {
-  min-height: 56px;
-  padding: 0 28px;
-  font-size: 1.05rem;
 }
 
 .simulation-results-divider {
@@ -1790,8 +2030,26 @@ label {
 }
 
 @media (max-width: 1080px) {
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .planner-main,
+  .planner-workspace-split,
+  .planner-workspace-panel {
+    min-height: initial;
+    max-height: none;
+  }
+
+  .planner-workspace-panel {
+    overflow: visible;
+    padding-right: 0;
+  }
+
   .planner-header,
-  .setup-layout,
+  .planner-workspace-split,
   .topline,
   .layout,
   .summary-grid,

@@ -186,6 +186,8 @@ interface NormalizedSimulationHomeAsset {
 
 type NormalizedSimulationAsset = NormalizedSimulationInvestmentAsset | NormalizedSimulationHomeAsset;
 
+const SYNTHETIC_CASH_SAVINGS_ASSET_NAME = "Cash savings";
+
 interface HomeSimulationState {
   marketValues: Map<string, number>;
   mortgageBalances: Map<string, number>;
@@ -723,8 +725,9 @@ function runSimulationAttempts({
   const yearlyTotals = Array.from({ length: horizonYears }, () => [] as number[]);
   const yearlyLiquidTotals = Array.from({ length: horizonYears }, () => [] as number[]);
   const depletionCountsByYear = Array.from({ length: horizonYears }, () => 0);
-  const normalizedAssets = assets.map(normalizeSimulationAsset);
-  assertUniqueSimulationAssetNames(normalizedAssets);
+  const normalizedInputAssets = assets.map(normalizeSimulationAsset);
+  assertUniqueSimulationAssetNames(normalizedInputAssets);
+  const normalizedAssets = addSyntheticCashSavingsAssetIfNeeded(normalizedInputAssets);
   const assetNames = normalizedAssets.map((asset) => asset.name);
   const reinvestableAssetNames = normalizedAssets
     .filter((asset): asset is NormalizedSimulationInvestmentAsset => asset.kind === "investment")
@@ -1216,6 +1219,44 @@ function assertUniqueSimulationAssetNames(assets: readonly NormalizedSimulationA
       throw new Error(`Asset name "${asset.name}" is already in use.`);
     }
     seenNames.add(asset.name);
+  }
+}
+
+function addSyntheticCashSavingsAssetIfNeeded(
+  assets: readonly NormalizedSimulationAsset[]
+): readonly NormalizedSimulationAsset[] {
+  if (assets.some((asset) => asset.kind === "investment")) {
+    return assets;
+  }
+
+  return [
+    ...assets,
+    {
+      kind: "investment",
+      name: createUniqueSyntheticAssetName(assets, SYNTHETIC_CASH_SAVINGS_ASSET_NAME),
+      startingValue: 0,
+      expectedReturn: 0,
+      volatility: 0,
+      sellProportion: 1,
+      cashGenerations: [],
+    },
+  ];
+}
+
+function createUniqueSyntheticAssetName(
+  assets: readonly NormalizedSimulationAsset[],
+  baseName: string
+): string {
+  const existingNames = new Set(assets.map((asset) => asset.name));
+  if (!existingNames.has(baseName)) {
+    return baseName;
+  }
+
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${baseName} ${suffix}`;
+    if (!existingNames.has(candidate)) {
+      return candidate;
+    }
   }
 }
 

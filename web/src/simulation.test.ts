@@ -544,6 +544,27 @@ describe("buildSimulationScenarios", () => {
     expect(secondYear?.assetValues.get("Portfolio")).toBeCloseTo(16, 6);
   });
 
+  it("saves positive cash flow when there are no user-created assets", () => {
+    const scenarios = buildSimulationDetails({
+      attempts: 1,
+      horizonYears: 2,
+      yearlyPlans: [
+        createYearlyPlan("2027", [{ name: "Salary", amount: 100, type: "income", taxTreatment: "wages" }], 2027),
+        createYearlyPlan("2028", [{ name: "Salary", amount: 100, type: "income", taxTreatment: "wages" }], 2028),
+      ],
+      assets: [],
+      assetCorrelations: [],
+    });
+
+    const [firstYear, secondYear] = scenarios[0]?.rows ?? [];
+    expect(firstYear?.assetValues.get("Cash savings")).toBeCloseTo(100, 6);
+    expect(firstYear?.totalAssets).toBeCloseTo(100, 6);
+    expect(firstYear?.liquidAssets).toBeCloseTo(100, 6);
+    expect(secondYear?.assetValues.get("Cash savings")).toBeCloseTo(200, 6);
+    expect(secondYear?.totalAssets).toBeCloseTo(200, 6);
+    expect(secondYear?.liquidAssets).toBeCloseTo(200, 6);
+  });
+
   it("selects one representative run for the whole percentile path", () => {
     const targetRows: SimulationYearRow[] = [
       {

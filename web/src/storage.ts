@@ -172,6 +172,7 @@ export interface SavedPlannerState {
   startYear: string;
   yearsToShow: number;
   simulationAttempts?: number;
+  simulationCurrentAge?: number;
   simulationTaxPreset?: "nyc" | `state:${string}` | "custom";
   simulationHorizonYears?: number;
   simulationCustomAssetLiquidation?: boolean;
@@ -365,6 +366,7 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
     events,
     startYear,
     yearsToShow,
+    simulationCurrentAge,
     simulationHorizonYears,
     simulationVariableSweep,
   }: Omit<SavedPlannerState, "updatedAt">): Promise<SavedPlannerState> {
@@ -380,6 +382,7 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
       events,
       startYear,
       yearsToShow,
+      simulationCurrentAge,
       simulationHorizonYears,
       simulationVariableSweep,
       updatedAt: new Date().toISOString(),

@@ -364,6 +364,7 @@ interface VariableSweepDraft {
 interface SimulationDraft {
   startYear: string;
   attempts: number;
+  currentAge: number;
   horizonYears: number;
   inflationPreset: SimulationInflationPreset;
   fixedInflationRate: string;
@@ -384,6 +385,7 @@ interface SimulationDraft {
 interface PersistedSimulationSettingsDraft {
   startYear: string;
   attempts: number;
+  currentAge: number;
   horizonYears: number;
   inflationPreset: SimulationInflationPreset;
   fixedInflationRate: string;
@@ -442,8 +444,9 @@ interface FormulaEditorBinding {
   getVariables: () => string[];
 }
 
+type FormulaEditorType = "number" | "money" | "percent";
+
 type SummaryTab = "variables" | "assets" | "taxes";
-type PlannerBoardTab = "setup" | "simulation";
 type SimulationChartMetric = "totalAssets" | "liquidAssets";
 type SimulationInflationPreset = "fixed" | "fixed-custom" | "regime" | "regime-custom";
 type TaxPreset = "nyc" | `state:${string}` | "custom";
@@ -455,7 +458,16 @@ const SIMULATION_SETTINGS_STORAGE_KEY_PREFIX = "soroban:simulation-settings:";
 // When true, each active worker is assigned a distinct sweep value before any sweep is split into chunks.
 const ENABLE_VARIABLE_SWEEP_WORKER_FANOUT = true;
 const VARIABLE_SWEEP_DETAIL_SAMPLE_LIMIT = 128;
+const DEFAULT_SIMULATION_ATTEMPTS = 5000;
 const DEFAULT_SIMULATION_FIXED_INFLATION_RATE = "2.5";
+const DEFAULT_CURRENT_USER_AGE = 35;
+const MIN_CURRENT_USER_AGE = 0;
+const MAX_CURRENT_USER_AGE = 89;
+const MIN_SIMULATION_TARGET_AGE = 50;
+const MAX_SIMULATION_TARGET_AGE = 90;
+const DEFAULT_SIMULATION_TARGET_AGE = 80;
+const DEFAULT_SIMULATION_HORIZON_YEARS = DEFAULT_SIMULATION_TARGET_AGE - DEFAULT_CURRENT_USER_AGE;
+const SHOW_SIMULATION_EXAMPLE_CARD = false;
 const DEFAULT_SIMULATION_REGIME_INFLATION = {
   lowAverageRate: "2.5",
   lowVolatility: "1",
@@ -519,9 +531,9 @@ let assetEditorOpen = false;
 let taxComposerOpen = false;
 let simulationInflationSectionExpanded = false;
 let simulationTaxesSectionExpanded = false;
+let simulationSettingsSectionExpanded = false;
 let activeFlowEventEdit: ActiveFlowEventEdit | null = null;
 let activeSummaryTab: SummaryTab = "variables";
-let activePlannerBoardTab: PlannerBoardTab = "setup";
 let activeInlineAssetValueEditName: string | null = null;
 let activeInlineExpenseValueEditName: string | null = null;
 let shouldFocusNewAssetName = false;
@@ -532,6 +544,8 @@ let selectedSimulationChartMetric: SimulationChartMetric = "liquidAssets";
 let simulationResults: Map<SimulationPercentile, SimulationScenario> | null = null;
 let simulationDetailResults: SimulationDetailScenario[] | null = null;
 let simulationSweepResults: SimulationSweepResult | null = null;
+let simulationResultsStale = false;
+let completedSimulationInputSignature: string | null = null;
 let selectedSimulationSweepStepIndex = 0;
 let expandedSimulationExampleKeys = new Set<string>();
 let simulationRunState: SimulationRunState | null = null;
@@ -563,13 +577,13 @@ function createEventEntryDraft(flowName = plannerState.flows[0]?.name ?? ""): Ev
   };
 }
 
-function createFlowDraft(): FlowDraft {
+function createFlowDraft(type: FlowType = "expense"): FlowDraft {
   return {
-    type: "expense",
+    type,
     name: "",
-    taxTreatment: "nondeductible-expense",
+    taxTreatment: type === "income" ? "wages" : "nondeductible-expense",
     formula: "",
-    inflationAdjusted: true,
+    inflationAdjusted: type === "expense",
     oneTime: false,
     oneTimeYear: plannerState.startYear,
     changeEvents: [],
@@ -593,7 +607,7 @@ function createAssetDraft(): AssetDraft {
     detailMode: "basic",
     kind: "us-stocks",
     name: "",
-    startingValue: "0",
+    startingValue: "",
     expectedReturn: defaultPreset.expectedReturn,
     volatility: defaultPreset.volatility,
     initialCost: "0",
@@ -738,8 +752,9 @@ function createAssetEditDraft(): AssetEditDraft {
 function createSimulationDraft(): SimulationDraft {
   return {
     startYear: String(new Date().getFullYear()),
-    attempts: 10000,
-    horizonYears: 10,
+    attempts: DEFAULT_SIMULATION_ATTEMPTS,
+    currentAge: DEFAULT_CURRENT_USER_AGE,
+    horizonYears: DEFAULT_SIMULATION_HORIZON_YEARS,
     inflationPreset: "regime",
     fixedInflationRate: DEFAULT_SIMULATION_FIXED_INFLATION_RATE,
     regimeSwitchingInflation: {
@@ -755,6 +770,55 @@ function createSimulationDraft(): SimulationDraft {
       maxValue: "0",
     },
   };
+}
+
+function normalizeSimulationCurrentAge(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_CURRENT_USER_AGE;
+  }
+
+  const roundedValue = Math.round(value);
+  return roundedValue >= MIN_CURRENT_USER_AGE && roundedValue <= MAX_CURRENT_USER_AGE
+    ? roundedValue
+    : DEFAULT_CURRENT_USER_AGE;
+}
+
+function getMinimumSimulationHorizonYears(currentAge = simulationDraft.currentAge): number {
+  return Math.max(1, MIN_SIMULATION_TARGET_AGE - currentAge);
+}
+
+function getMaximumSimulationHorizonYears(currentAge = simulationDraft.currentAge): number {
+  return Math.max(1, MAX_SIMULATION_TARGET_AGE - currentAge);
+}
+
+function getDefaultSimulationHorizonYears(currentAge = simulationDraft.currentAge): number {
+  return Math.max(
+    getMinimumSimulationHorizonYears(currentAge),
+    Math.min(getMaximumSimulationHorizonYears(currentAge), DEFAULT_SIMULATION_TARGET_AGE - currentAge)
+  );
+}
+
+function normalizeSimulationHorizonYears(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return getDefaultSimulationHorizonYears();
+  }
+
+  const roundedValue = Math.round(value);
+  return roundedValue >= getMinimumSimulationHorizonYears() && roundedValue <= getMaximumSimulationHorizonYears()
+    ? roundedValue
+    : getDefaultSimulationHorizonYears();
+}
+
+function getSimulationTargetAge(): number {
+  return simulationDraft.currentAge + normalizeSimulationHorizonYears(simulationDraft.horizonYears);
+}
+
+function setSimulationTargetAge(targetAge: number): void {
+  const roundedAge = Math.round(targetAge);
+  simulationDraft.horizonYears =
+    roundedAge >= MIN_SIMULATION_TARGET_AGE && roundedAge <= MAX_SIMULATION_TARGET_AGE
+      ? normalizeSimulationHorizonYears(roundedAge - simulationDraft.currentAge)
+      : getDefaultSimulationHorizonYears();
 }
 
 function getSimulationInflationModeForPreset(preset: SimulationInflationPreset): SimulationInflationMode {
@@ -1401,6 +1465,7 @@ function renderFormulaEditor({
   inputName,
   inputId,
   fieldToken,
+  type = "number",
   requiredLabel = "Formula",
 }: {
   value: string;
@@ -1409,13 +1474,18 @@ function renderFormulaEditor({
   inputName?: string;
   inputId?: string;
   fieldToken?: string;
+  type?: FormulaEditorType;
   requiredLabel?: string;
 }): string {
+  const formula = formatFormulaText(value);
+
   return `
     <div
       class="formula-editor"
       data-formula-editor
       data-variables-scope="${variablesScope}"
+      data-formula-type="${type}"
+      data-plain-numeric="${isPlainNumericFormula(formula) ? "true" : "false"}"
       data-required-label="${escapeAttribute(requiredLabel)}"
       ${fieldToken ? `data-field-token="${escapeAttribute(fieldToken)}"` : ""}
     >
@@ -1426,13 +1496,13 @@ function renderFormulaEditor({
         role="textbox"
         aria-label="${escapeAttribute(placeholder)}"
         data-placeholder="${escapeAttribute(placeholder)}"
-      >${escapeHtml(value)}</div>
+      >${escapeHtml(formula)}</div>
       <input
         class="formula-editor-hidden-input"
         ${inputId ? `id="${escapeAttribute(inputId)}"` : ""}
         ${inputName ? `name="${escapeAttribute(inputName)}"` : ""}
         type="hidden"
-        value="${escapeAttribute(value)}"
+        value="${escapeAttribute(formula)}"
       />
       <div class="formula-editor-menu" hidden></div>
       <p class="formula-editor-status" aria-live="polite" hidden></p>
@@ -1637,6 +1707,77 @@ function renderAssetCashGenerationSummary(asset: AssetDefinition): string {
         : `${rate}${inflationCorrelationSummary} ${taxTreatment}`;
     })
     .join(" | ");
+}
+
+function isAssetReturnDefault(asset: AssetDefinition): boolean {
+  const defaults = getDefaultAssetReturnSettings(asset);
+  return numbersMatch(asset.expectedReturn, defaults.expectedReturn) && numbersMatch(asset.volatility, defaults.volatility);
+}
+
+function getDefaultAssetReturnSettings(asset: AssetDefinition): { expectedReturn: number; volatility: number } {
+  if (isHomeAsset(asset)) {
+    return {
+      expectedReturn: Number(HOME_EXPECTED_RETURN_DEFAULT),
+      volatility: Number(HOME_VOLATILITY_DEFAULT),
+    };
+  }
+
+  const preset = asset.assetType ? ASSET_TYPE_PRESETS[asset.assetType] : null;
+  return {
+    expectedReturn: preset ? Number(preset.expectedReturn) : 0,
+    volatility: preset ? Number(preset.volatility) : 0,
+  };
+}
+
+function isAssetCashGenerationDefault(asset: AssetDefinition): boolean {
+  const cashGenerations = getAssetCashGenerations(asset);
+  if (!isInvestmentAsset(asset)) {
+    return cashGenerations.length === 0;
+  }
+
+  const presetCashGenerations = asset.assetType ? ASSET_TYPE_PRESETS[asset.assetType].cashGenerations : [];
+  if (cashGenerations.length !== presetCashGenerations.length) {
+    return false;
+  }
+
+  return cashGenerations.every((cashGeneration, index) => {
+    const presetCashGeneration = presetCashGenerations[index];
+    if (!presetCashGeneration) {
+      return false;
+    }
+
+    const defaultInflationCorrelation = getDefaultAssetCashGenerationInflationCorrelation(asset.assetType ?? null);
+    const cashGenerationInflationCorrelation = cashGeneration.inflationCorrelation ?? defaultInflationCorrelation;
+    return (
+      (cashGeneration.name ?? "") === presetCashGeneration.name &&
+      numbersMatch(cashGeneration.rate, Number(presetCashGeneration.rate)) &&
+      numbersMatch(cashGeneration.volatility, Number(presetCashGeneration.volatility)) &&
+      numbersMatch(cashGenerationInflationCorrelation, Number(presetCashGeneration.inflationCorrelation)) &&
+      (cashGeneration.taxTreatment ?? "ordinary-income") === presetCashGeneration.taxTreatment
+    );
+  });
+}
+
+function renderVisibleAssetCashGenerationSummary(asset: AssetDefinition): string {
+  if (!isHomeAsset(asset) && isAssetCashGenerationDefault(asset)) {
+    return "";
+  }
+
+  return renderAssetCashGenerationSummary(asset);
+}
+
+function renderAssetStats(asset: AssetDefinition): string {
+  const stats: string[] = [];
+  if (!isAssetReturnDefault(asset)) {
+    stats.push(`<span><strong>Expected return</strong>${formatPercentage(asset.expectedReturn)}</span>`);
+    stats.push(`<span><strong>Volatility</strong>${formatPercentage(asset.volatility)}</span>`);
+  }
+
+  return stats.join("");
+}
+
+function numbersMatch(left: number, right: number): boolean {
+  return Math.abs(left - right) <= 0.000001;
 }
 
 function getInterestOnlyMaturityActionLabel(action: HomeAssetDefinition["interestOnlyMaturityAction"]): string {
@@ -1978,7 +2119,7 @@ function buildFlowRows(startYearInput: string): Array<{ flow: FlowDefinition; ye
     });
 }
 
-function syncSimulationDraftAssetRows(): void {
+function syncSimulationDraftAssetRows({ invalidateOnChange = true }: { invalidateOnChange?: boolean } = {}): void {
   const draftRows = new Map(simulationDraft.assetRows.map((row) => [row.name, row]));
   const previousNames = simulationDraft.assetRows.map((row) => row.name).join("|");
   simulationDraft.assetRows = plannerState.assets.map((asset) => {
@@ -1989,7 +2130,7 @@ function syncSimulationDraftAssetRows(): void {
       sellProportion: existing?.sellProportion ?? String(isInvestmentAsset(asset) ? asset.sellProportion : 0),
     };
   });
-  if (simulationDraft.assetRows.map((row) => row.name).join("|") !== previousNames) {
+  if (invalidateOnChange && simulationDraft.assetRows.map((row) => row.name).join("|") !== previousNames) {
     invalidateSimulationState();
   }
 }
@@ -2018,14 +2159,125 @@ function syncSimulationVariableSweepDraft(): void {
   }
 }
 
+function buildSimulationInputSignaturePayload(): Record<string, unknown> {
+  return {
+    variables: plannerState.variables,
+    assets: plannerState.assets,
+    taxes: plannerState.taxes,
+    taxProfile: plannerState.taxProfile,
+    assetCorrelations: plannerState.assetCorrelations,
+    flows: plannerState.flows,
+    events: serializeEvents(plannerState.events),
+    startYear: plannerState.startYear,
+    simulation: {
+      startYear: simulationDraft.startYear,
+      attempts: simulationDraft.attempts,
+      horizonYears: simulationDraft.horizonYears,
+      inflationPreset: simulationDraft.inflationPreset,
+      fixedInflationRate: simulationDraft.fixedInflationRate,
+      regimeSwitchingInflation: simulationDraft.regimeSwitchingInflation,
+      taxPreset: simulationDraft.taxPreset,
+      customAssetLiquidation: simulationDraft.customAssetLiquidation,
+      variableSweep: simulationDraft.variableSweep,
+      assetRows: simulationDraft.assetRows.map((asset) => ({
+        name: asset.name,
+        sellProportion: asset.sellProportion,
+      })),
+    },
+  };
+}
+
+function buildSimulationInputSignature(): string {
+  return JSON.stringify(buildSimulationInputSignaturePayload());
+}
+
+function getSimulationInputSignatureDiff(previousSignature: string | null, nextSignature: string): string[] {
+  if (previousSignature === null) {
+    return ["no completed simulation signature"];
+  }
+
+  let previousPayload: Record<string, unknown>;
+  let nextPayload: Record<string, unknown>;
+  try {
+    previousPayload = JSON.parse(previousSignature) as Record<string, unknown>;
+    nextPayload = JSON.parse(nextSignature) as Record<string, unknown>;
+  } catch {
+    return ["signature parse failed"];
+  }
+
+  const changedSections: string[] = [];
+  for (const key of new Set([...Object.keys(previousPayload), ...Object.keys(nextPayload)])) {
+    if (JSON.stringify(previousPayload[key]) !== JSON.stringify(nextPayload[key])) {
+      changedSections.push(key);
+    }
+  }
+
+  const previousSimulation = previousPayload.simulation as Record<string, unknown> | undefined;
+  const nextSimulation = nextPayload.simulation as Record<string, unknown> | undefined;
+  if (previousSimulation && nextSimulation) {
+    for (const key of new Set([...Object.keys(previousSimulation), ...Object.keys(nextSimulation)])) {
+      if (JSON.stringify(previousSimulation[key]) !== JSON.stringify(nextSimulation[key])) {
+        changedSections.push(`simulation.${key}`);
+      }
+    }
+  }
+
+  return changedSections;
+}
+
+function debugSimulationStaleState(
+  eventName: string,
+  details: {
+    currentSignature?: string;
+    completedSignature?: string | null;
+    stale?: boolean;
+    includeStack?: boolean;
+  } = {}
+): void {
+  const currentSignature = details.currentSignature ?? buildSimulationInputSignature();
+  const completedSignature =
+    details.completedSignature === undefined ? completedSimulationInputSignature : details.completedSignature;
+  const changedSections = getSimulationInputSignatureDiff(completedSignature, currentSignature);
+
+  console.groupCollapsed(`[simulation debug] ${eventName}`);
+  console.log({
+    stale: details.stale ?? simulationResultsStale,
+    hasResults: hasDisplayedSimulationResults(),
+    hasCompletedSignature: completedSignature !== null,
+    changedSections,
+    currentSignatureLength: currentSignature.length,
+    completedSignatureLength: completedSignature?.length ?? 0,
+  });
+  if (changedSections.length > 0) {
+    console.log("current payload", buildSimulationInputSignaturePayload());
+    if (completedSignature) {
+      console.log("completed payload", JSON.parse(completedSignature) as unknown);
+    }
+  }
+  if (details.includeStack) {
+    console.trace("[simulation debug] invalidation stack");
+  }
+  console.groupEnd();
+}
+
 function clearSimulationOutputs(): void {
   simulationResults = null;
   simulationDetailResults = null;
   simulationSweepResults = null;
+  simulationResultsStale = false;
+  completedSimulationInputSignature = null;
   selectedSimulationSweepStepIndex = 0;
   selectedSimulationPercentile = 50;
   selectedSimulationChartMetric = "liquidAssets";
   expandedSimulationExampleKeys = new Set();
+}
+
+function hasDisplayedSimulationResults(): boolean {
+  return getDisplayedSimulationResults() !== null;
+}
+
+function normalizeSimulationDraftHorizon(): void {
+  simulationDraft.horizonYears = normalizeSimulationHorizonYears(simulationDraft.horizonYears);
 }
 
 function resetPlannerWorkspaceState(): void {
@@ -2040,8 +2292,8 @@ function resetPlannerWorkspaceState(): void {
   closeTransientPlannerUi();
   simulationInflationSectionExpanded = false;
   simulationTaxesSectionExpanded = false;
+  simulationSettingsSectionExpanded = false;
   activeSummaryTab = "variables";
-  activePlannerBoardTab = "setup";
   syncTaxProfileDraft();
   syncSimulationDraftAssetRows();
   syncSimulationVariableSweepDraft();
@@ -2268,6 +2520,7 @@ function buildPersistedSimulationSettingsDraft(): PersistedSimulationSettingsDra
   return {
     startYear: simulationDraft.startYear,
     attempts: simulationDraft.attempts,
+    currentAge: simulationDraft.currentAge,
     horizonYears: simulationDraft.horizonYears,
     inflationPreset: simulationDraft.inflationPreset,
     fixedInflationRate: simulationDraft.fixedInflationRate,
@@ -2313,8 +2566,11 @@ function applySimulationSettingsDraftFromLocalStorage(userId: string): void {
     if (typeof parsedValue.attempts === "number" && Number.isFinite(parsedValue.attempts)) {
       simulationDraft.attempts = Math.max(1000, Math.min(50000, parsedValue.attempts));
     }
+    if (typeof parsedValue.currentAge === "number" && Number.isFinite(parsedValue.currentAge)) {
+      simulationDraft.currentAge = normalizeSimulationCurrentAge(parsedValue.currentAge);
+    }
     if (typeof parsedValue.horizonYears === "number" && Number.isFinite(parsedValue.horizonYears)) {
-      simulationDraft.horizonYears = Math.max(1, Math.min(50, parsedValue.horizonYears));
+      simulationDraft.horizonYears = normalizeSimulationHorizonYears(parsedValue.horizonYears);
     }
     if (isSimulationInflationPreset(parsedValue.inflationPreset)) {
       simulationDraft.inflationPreset = parsedValue.inflationPreset;
@@ -2370,7 +2626,25 @@ function cancelActiveSimulationRun(): void {
 
 function invalidateSimulationState(): void {
   cancelActiveSimulationRun();
-  clearSimulationOutputs();
+  if (hasDisplayedSimulationResults()) {
+    const currentSignature = buildSimulationInputSignature();
+    simulationResultsStale =
+      completedSimulationInputSignature === null ||
+      currentSignature !== completedSimulationInputSignature;
+    debugSimulationStaleState("invalidateSimulationState", {
+      currentSignature,
+      completedSignature: completedSimulationInputSignature,
+      stale: simulationResultsStale,
+      includeStack: true,
+    });
+    if (simulationResultsStale) {
+      expandedSimulationExampleKeys = new Set();
+    }
+    syncSimulationStalePresentation();
+    syncSimulationSubmitState();
+  } else {
+    clearSimulationOutputs();
+  }
 }
 
 function eventSummary(action: EventAction): string {
@@ -2703,10 +2977,13 @@ function renderSetupAssetArea(): string {
             >
               <div class="workspace-item-header">
                 <div class="workspace-item-lead">
-                  <div class="workspace-item-title">
-                    ${escapeHtml(asset.name)}
+                  <div class="workspace-item-title-row">
+                    <div class="workspace-item-title">
+                      ${escapeHtml(asset.name)}
+                    </div>
+                    <span class="pill">${escapeHtml(getAssetDefinitionTypeLabel(asset))}</span>
                   </div>
-                  ${renderAssetCashGenerationSummary(asset) ? `<p class="workspace-item-copy">${escapeHtml(renderAssetCashGenerationSummary(asset))}</p>` : ""}
+                  ${renderVisibleAssetCashGenerationSummary(asset) ? `<p class="workspace-item-copy">${escapeHtml(renderVisibleAssetCashGenerationSummary(asset))}</p>` : ""}
                   ${renderHomeMortgageSummary(asset) ? `<p class="workspace-item-copy">${escapeHtml(renderHomeMortgageSummary(asset))}</p>` : ""}
                 </div>
                 ${
@@ -2719,6 +2996,7 @@ function renderSetupAssetArea(): string {
                         value: getAssetValueFormulaInput(asset),
                         placeholder: isHomeAsset(asset) ? "salary * 4" : "salary * 2",
                         variablesScope: "planner",
+                        type: "money",
                       })}
                     </div>
                   </form>
@@ -2736,9 +3014,7 @@ function renderSetupAssetArea(): string {
                 }
               </div>
               <div class="workspace-item-stats">
-                <span><strong>Type</strong>${getAssetDefinitionTypeLabel(asset)}</span>
-                <span><strong>Expected return</strong>${formatPercentage(asset.expectedReturn)}</span>
-                <span><strong>Volatility</strong>${formatPercentage(asset.volatility)}</span>
+                ${renderAssetStats(asset)}
               </div>
             </article>
           `
@@ -2816,9 +3092,12 @@ function renderFlowSummary(flow: FlowDefinition, yearlyAmount: number): string {
   return parts.join(" | ");
 }
 
-function renderSetupFlowArea(flowRows: Array<{ flow: FlowDefinition; yearlyAmount: number }>): string {
+function renderSetupFlowArea(
+  flowRows: Array<{ flow: FlowDefinition; yearlyAmount: number }>,
+  type: FlowType
+): string {
   if (flowRows.length === 0) {
-    return `<p class="helper-copy">No income or expenses yet. Add one to model recurring or one-time cash flows.</p>`;
+    return `<p class="helper-copy">${type === "income" ? "Add income from salary, inheritance, side hustles, etc." : "Add expenses like shopping, car payments, etc."}</p>`;
   }
 
   return `
@@ -2842,7 +3121,6 @@ function renderSetupFlowArea(flowRows: Array<{ flow: FlowDefinition; yearlyAmoun
                       <div class="workspace-item-title">
                         ${escapeHtml(flow.name)}
                       </div>
-                      <span class="pill">${flow.type === "income" ? "Income" : "Expense"}</span>
                     </div>
                     ${flowSummary ? `<p class="workspace-item-copy">${escapeHtml(flowSummary)}</p>` : ""}
                   </div>
@@ -2856,6 +3134,7 @@ function renderSetupFlowArea(flowRows: Array<{ flow: FlowDefinition; yearlyAmoun
                           value: flow.formula,
                           placeholder: "1,000",
                           variablesScope: "planner",
+                          type: "money",
                           requiredLabel: "Amount",
                         })}
                       </div>
@@ -2883,21 +3162,13 @@ function renderSetupFlowArea(flowRows: Array<{ flow: FlowDefinition; yearlyAmoun
 }
 
 function renderVariablesCard(): string {
-  return `
-    <section class="panel workspace-section">
-      <div class="workspace-section-header workspace-section-header-compact">
-        <div class="panel-heading">
-          <p class="kicker">Variables</p>
-          <h2>Formula inputs</h2>
-        </div>
-        <p class="helper-copy">Create a variable in the asset, income, or expense editor and it will appear here. For example, create an expense and set the amount to rent * 0.1</p>
-      </div>
-      <div class="workspace-list workspace-list-tight">
-        ${plannerState.variables
+  const variableRows =
+    plannerState.variables.length > 0
+      ? plannerState.variables
           .map(
             (variable) => `
-              <label class="variable-edit-form workspace-variable-row" data-variable-name="${escapeHtml(variable.name)}">
-                <span class="workspace-variable-name">${escapeHtml(variable.name)}</span>
+              <label class="formula-input-row" data-variable-name="${escapeHtml(variable.name)}">
+                <span class="formula-input-name">${escapeHtml(variable.name)}</span>
                 <input
                   name="value"
                   ${renderEditableNumberInputAttributes()}
@@ -2906,71 +3177,111 @@ function renderVariablesCard(): string {
               </label>
             `
           )
-          .join("")}
+          .join("")
+      : `<p class="helper-copy">Create a variable in an asset, income, or expense formula and it will appear here.</p>`;
+
+  return `
+    <section class="panel workspace-section formula-inputs-card">
+      <div class="workspace-section-header workspace-section-header-compact">
+        <div class="panel-heading">
+          <p class="kicker">Variables</p>
+          <h2>Formula inputs</h2>
+        </div>
+      </div>
+      <div class="formula-input-list">
+        ${variableRows}
+      </div>
+    </section>
+  `;
+}
+
+function renderTaxPresetOptions(selectedTaxPreset: TaxPreset, includeCustom = false): string {
+  const builtInOptions = getBuiltInTaxPresetOptions()
+    .map(
+      (preset) => `
+        <option value="${escapeAttribute(preset.id)}" ${selectedTaxPreset === preset.id ? "selected" : ""}>
+          ${escapeHtml(preset.label)}
+        </option>
+      `
+    )
+    .join("");
+
+  return `${builtInOptions}${
+    includeCustom ? `<option value="custom" ${selectedTaxPreset === "custom" ? "selected" : ""}>Custom</option>` : ""
+  }`;
+}
+
+function renderBasicInfoSection(): string {
+  return `
+    <section class="panel workspace-section">
+      <div class="workspace-section-header">
+        <div class="panel-heading">
+          <p class="kicker">Basic info</p>
+          <h2>Age and location</h2>
+        </div>
+      </div>
+      <div class="simulation-sweep-fields">
+        <label>
+          Age
+          <input
+            name="basicInfoCurrentAge"
+            type="number"
+            min="${MIN_CURRENT_USER_AGE}"
+            max="${MAX_CURRENT_USER_AGE}"
+            step="1"
+            value="${simulationDraft.currentAge}"
+          />
+        </label>
+        <label>
+          Location
+          <select name="basicInfoTaxPreset">
+            ${renderTaxPresetOptions(simulationDraft.taxPreset, true)}
+          </select>
+        </label>
       </div>
     </section>
   `;
 }
 
 function renderSetupBoard(flowRows: Array<{ flow: FlowDefinition; yearlyAmount: number }>): string {
+  const incomeRows = flowRows.filter(({ flow }) => flow.type === "income");
+  const expenseRows = flowRows.filter(({ flow }) => flow.type === "expense");
+
   return `
-    <div class="setup-layout">
-      <div class="setup-main">
+    <div class="setup-main">
+        ${renderBasicInfoSection()}
         <section class="panel workspace-section">
           <div class="workspace-section-header">
             <div class="panel-heading">
-              <p class="kicker">Assets</p>
-              <h2>Holdings and return assumptions</h2>
+              <p class="kicker">Cash flow</p>
+              <h2>Income</h2>
             </div>
-            <button type="button" id="open-asset-composer">Create asset</button>
+            <button type="button" data-open-flow-composer="income">Add income</button>
           </div>
-          ${renderSetupAssetArea()}
+          ${renderSetupFlowArea(incomeRows, "income")}
         </section>
 
         <section class="panel workspace-section">
           <div class="workspace-section-header">
             <div class="panel-heading">
               <p class="kicker">Cash flow</p>
-              <h2>Income and Expenses</h2>
+              <h2>Expenses</h2>
             </div>
-            <button type="button" id="open-flow-composer">Create income or expense</button>
+            <button type="button" data-open-flow-composer="expense">Add expense</button>
           </div>
-          ${renderSetupFlowArea(flowRows)}
+          ${renderSetupFlowArea(expenseRows, "expense")}
         </section>
-      </div>
 
-      <div class="workspace-sidecard setup-side">
-        ${renderVariablesCard()}
-      </div>
-    </div>
-  `;
-}
-
-function renderPlannerBoardTabs(): string {
-  return `
-    <div class="planner-board-controls">
-      <div class="tab-strip planner-tab-strip" role="tablist" aria-label="Planner views">
-        <button
-          type="button"
-          class="${activePlannerBoardTab === "setup" ? "tab-button is-active" : "tab-button"}"
-          data-board-tab="setup"
-        >
-          Setup
-        </button>
-        <button
-          type="button"
-          class="${activePlannerBoardTab === "simulation" ? "tab-button is-active" : "tab-button"}"
-          data-board-tab="simulation"
-        >
-          Simulate
-        </button>
-      </div>
-      <div class="planner-header-actions">
-        <button type="button" class="secondary-button" id="save-scenario-button">Save scenario</button>
-        <button type="button" class="secondary-button" id="load-scenario-button">Load scenario</button>
-        <button type="button" class="danger-button" id="clear-scenario-button">Clear scenario</button>
-        <input id="load-scenario-input" type="file" accept=".json,application/json" hidden />
-      </div>
+        <section class="panel workspace-section">
+          <div class="workspace-section-header">
+            <div class="panel-heading">
+              <p class="kicker">Assets</p>
+              <h2>Your Money</h2>
+            </div>
+            <button type="button" id="open-asset-composer">Add asset</button>
+          </div>
+          ${renderSetupAssetArea()}
+        </section>
     </div>
   `;
 }
@@ -3033,10 +3344,10 @@ function seedCustomTaxProfileFromPreset(taxPreset: TaxPreset): void {
 }
 
 function renderPlanner(user: UserIdentity): void {
-  syncSimulationDraftAssetRows();
+  syncSimulationDraftAssetRows({ invalidateOnChange: false });
   syncSimulationVariableSweepDraft();
+  normalizeSimulationDraftHorizon();
   const flowRows = buildFlowRows(simulationDraft.startYear);
-  const activeBoardLabel = activePlannerBoardTab === "setup" ? "Setup" : "Simulation";
 
   mountedAppRoot.innerHTML = `
     <div class="app-shell">
@@ -3051,14 +3362,12 @@ function renderPlanner(user: UserIdentity): void {
       </header>
 
       <main class="planner-main">
-        <section class="panel board-panel planner-board-shell">
-          ${renderPlannerBoardTabs()}
-          <div class="planner-board-shell-body">
-          ${
-            activePlannerBoardTab === "setup"
-              ? renderSetupBoard(flowRows)
-              : renderSimulationBoard()
-          }
+        <section class="planner-workspace-split">
+          <div class="planner-workspace-panel planner-workspace-setup">
+            ${renderSetupBoard(flowRows)}
+          </div>
+          <div class="planner-workspace-panel planner-workspace-simulation">
+            ${renderSimulationBoard()}
           </div>
         </section>
       </main>
@@ -3471,10 +3780,10 @@ function focusAssetStartingValueInputIfZero(): void {
 }
 
 function getSimulationSubmitState(): { disabled: boolean; reason: string } {
-  if (simulationDraft.assetRows.length === 0) {
+  if (!hasSimulationEntries()) {
     return {
       disabled: true,
-      reason: "Create at least one asset to run a simulation.",
+      reason: "Create at least one income, expense, or asset to run a simulation.",
     };
   }
 
@@ -3561,6 +3870,10 @@ function getSimulationSubmitState(): { disabled: boolean; reason: string } {
     disabled: false,
     reason: "",
   };
+}
+
+function hasSimulationEntries(): boolean {
+  return plannerState.assets.length > 0 || plannerState.flows.length > 0;
 }
 
 function getSimulationPercentileColor(percentile: SimulationPercentile): string {
@@ -3949,6 +4262,7 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
     startYear: plannerState.startYear,
     yearsToShow: plannerState.yearsToShow,
     simulationAttempts: simulationDraft.attempts,
+    simulationCurrentAge: simulationDraft.currentAge,
     simulationTaxPreset: simulationDraft.taxPreset,
     simulationHorizonYears: simulationDraft.horizonYears,
     simulationCustomAssetLiquidation: simulationDraft.customAssetLiquidation,
@@ -4278,18 +4592,6 @@ function renderSimulationChart(
           <strong>${escapeHtml(title)}</strong>
           <p class="helper-copy">${escapeHtml(description)}</p>
         </div>
-        <div class="simulation-chart-legend">
-          ${simulationPercentiles
-            .map(
-              (percentile) => `
-                <span class="simulation-chart-legend-item">
-                  <span class="simulation-chart-swatch" style="--swatch:${getSimulationPercentileColor(percentile)}"></span>
-                  ${percentile}th
-                </span>
-              `
-            )
-            .join("")}
-        </div>
       </div>
       <div class="tab-strip simulation-chart-metric-tabs" role="tablist" aria-label="Simulation chart metric">
         <button
@@ -4339,18 +4641,26 @@ function renderSimulationChart(
                 })
                 .join(" ");
               return `
-                <path class="simulation-chart-line ${selectedSimulationPercentile === scenario.percentile ? "is-active" : ""}" d="${path}" stroke="${color}"></path>
+                <path
+                  class="simulation-chart-line ${selectedSimulationPercentile === scenario.percentile ? "is-active" : "is-muted"}"
+                  d="${path}"
+                  stroke="${color}"
+                  style="--series-color:${color}"
+                  data-simulation-chart-percentile-select="${scenario.percentile}"
+                ></path>
                 ${scenario.rows
                   .map((row) => {
                     const value = row[valueKey] ?? 0;
                     return `
                       <circle
-                        class="simulation-chart-point ${selectedSimulationPercentile === scenario.percentile ? "is-active" : ""}"
+                        class="simulation-chart-point ${selectedSimulationPercentile === scenario.percentile ? "is-active" : "is-muted"}"
                         cx="${xForYear(row.yearNumber)}"
                         cy="${yForValue(value)}"
                         r="${selectedSimulationPercentile === scenario.percentile ? 6 : 5}"
                         fill="${color}"
+                        style="--series-color:${color}"
                         data-simulation-chart-point="true"
+                        data-simulation-chart-percentile-select="${scenario.percentile}"
                         data-simulation-chart-year="${row.yearNumber}"
                         data-simulation-chart-label="${escapeAttribute(row.label)}"
                         data-simulation-chart-value="${escapeAttribute(formatCompactCurrency(value))}"
@@ -4468,16 +4778,14 @@ function renderSimulationResultsBody(): string {
     selectedSimulationChartMetric === "liquidAssets"
       ? {
           title: "Liquid assets by year",
-          description:
-            "Uses the same percentile bucketing as the main chart, but only for liquid assets. Home equity is excluded.",
+          description: "Your net worth without counting the value of your home",
           ariaLabel: "Simulation liquid assets by year and percentile",
           valueKey: "liquidAssets" as const,
           valueLabel: "Liquid assets",
         }
       : {
           title: "Total assets by year",
-          description:
-            "X-axis: simulation year. Y-axis: portfolio value at each year-by-year percentile across all simulation attempts.",
+          description: "Total value of all assets, including your home",
           ariaLabel: "Simulation total assets by year and percentile",
           valueKey: "totalAssets" as const,
           valueLabel: "Total assets",
@@ -4485,22 +4793,11 @@ function renderSimulationResultsBody(): string {
 
   return `
       ${renderSimulationChart(displayedSimulationResults, selectedSimulationChart)}
+      ${SHOW_SIMULATION_EXAMPLE_CARD ? `
       <section class="simulation-example-card">
         <div class="simulation-example-card-controls">
-          <div class="tab-strip simulation-example-percentile-tabs" role="tablist" aria-label="Simulation percentiles">
-            ${simulationPercentiles
-              .map(
-                (percentile) => `
-                  <button
-                    type="button"
-                    class="${selectedSimulationPercentile === percentile ? "tab-button is-active" : "tab-button"}"
-                    data-simulation-percentile="${percentile}"
-                  >
-                    ${percentile}th
-                  </button>
-                `
-              )
-              .join("")}
+          <div>
+            <strong>${selectedSimulationPercentile}th percentile example</strong>
           </div>
           <div class="simulation-actions simulation-results-actions">
             <button
@@ -4513,7 +4810,7 @@ function renderSimulationResultsBody(): string {
             </button>
           </div>
         </div>
-        <p class="helper-copy">See an example scenario from each percentile. For illustrative purposes only.</p>
+        <p class="helper-copy">See an example scenario for the selected percentile. For illustrative purposes only.</p>
         <div class="board-scroll simulation-results">
           <table class="flow-table">
             <thead>
@@ -4571,6 +4868,7 @@ function renderSimulationResultsBody(): string {
           </table>
         </div>
       </section>
+      ` : ""}
   `;
 }
 
@@ -4623,6 +4921,56 @@ function getSimulationTaxPresetSummary(): string {
     preset.profile.localTaxName,
     preset.profile.stateTaxableIncomeAdjustment
   );
+}
+
+function getSimulationHeadlineAmount(): string {
+  const scenario = getDisplayedSimulationResults()?.get(selectedSimulationPercentile) ?? null;
+  const targetRow = scenario?.rows.find((row) => row.yearNumber === simulationDraft.horizonYears) ?? scenario?.rows.at(-1) ?? null;
+  return targetRow ? formatCurrency(targetRow.totalAssets) : "$xxx,xxx";
+}
+
+function renderSimulationTargetAgeOptions(): string {
+  const minimumTargetAge = Math.max(MIN_SIMULATION_TARGET_AGE, simulationDraft.currentAge + 1);
+  return Array.from(
+    { length: MAX_SIMULATION_TARGET_AGE - minimumTargetAge + 1 },
+    (_, index) => minimumTargetAge + index
+  )
+    .map(
+      (age) => `
+        <option value="${age}" ${getSimulationTargetAge() === age ? "selected" : ""}>${age}</option>
+      `
+    )
+    .join("");
+}
+
+function renderSimulationHeadline(): string {
+  return `
+    <section class="simulation-forecast-header" aria-labelledby="simulation-forecast-heading">
+      <h2 id="simulation-forecast-heading">
+        There's a
+        <span class="simulation-inline-select-wrap">
+          <select class="simulation-inline-select" data-simulation-percentile-select aria-label="Simulation percentile">
+            ${simulationPercentiles
+              .map(
+                (percentile) => `
+                  <option value="${percentile}" ${selectedSimulationPercentile === percentile ? "selected" : ""}>
+                    ${percentile}%
+                  </option>
+                `
+              )
+              .join("")}
+          </select>
+        </span>
+        chance that you'll have ${escapeHtml(getSimulationHeadlineAmount())} when you are
+        <span class="simulation-inline-select-wrap">
+          <select class="simulation-inline-select" data-simulation-target-age aria-label="Target age">
+            ${renderSimulationTargetAgeOptions()}
+          </select>
+        </span>
+        years old.
+      </h2>
+    </section>
+  `;
 }
 
 function getTaxScheduleSummary(
@@ -4684,431 +5032,110 @@ function renderDisclosureIcon(expanded: boolean): string {
   `;
 }
 
-function renderSimulationBoard(): string {
+function renderSimulationRunControl({ showProgress = true }: { showProgress?: boolean } = {}): string {
   const simulationSubmitState = getSimulationSubmitState();
   const isSimulationRunning = simulationRunState !== null && simulationRunState.errorMessage === null;
-  const simulationProgressPercent = simulationRunState
-    ? Math.max(0, Math.min(100, (simulationRunState.completedAttempts / Math.max(1, simulationRunState.totalAttempts)) * 100))
-    : 0;
-  const sweepVariableOptions = plannerState.variables
-    .map(
-      (variable) => `
-        <option value="${escapeAttribute(variable.name)}" ${
-          simulationDraft.variableSweep.variableName === variable.name ? "selected" : ""
-        }>
-          ${escapeHtml(variable.name)}
-        </option>
-      `
-    )
-    .join("");
-  const builtInTaxPresetOptions = getBuiltInTaxPresetOptions()
-    .map((preset) => {
-      return `
-        <option value="${escapeAttribute(preset.id)}" ${simulationDraft.taxPreset === preset.id ? "selected" : ""}>
-          ${escapeHtml(preset.label)}
-        </option>
-      `;
-    })
-    .join("");
+  const buttonLabel = isSimulationRunning
+    ? "Simulating..."
+    : hasDisplayedSimulationResults()
+      ? "Regenerate results"
+      : "Run simulation";
+
   return `
-    <div class="simulation-panel">
-      <form id="simulation-form" class="stack-form">
-        <section class="simulation-section simulation-config-card">
-          <div class="simulation-config-subsection">
-            <div class="simulation-toolbar">
-              <label class="simulation-toolbar-field">
-                <span class="simulation-toolbar-label">Start year</span>
-                <span class="simulation-toolbar-control">
-                  <input
-                    name="simulationStartYear"
-                    type="number"
-                    min="1900"
-                    max="9999"
-                    value="${escapeHtml(simulationDraft.startYear)}"
-                  />
-                </span>
-              </label>
-              <label class="simulation-toolbar-field">
-                <span class="simulation-toolbar-label">Time horizon (years)</span>
-                <span class="simulation-toolbar-control">
-                  <input
-                    name="simulationHorizonYears"
-                    type="number"
-                    min="1"
-                    max="50"
-                    value="${simulationDraft.horizonYears}"
-                  />
-                </span>
-              </label>
-              <label class="simulation-toolbar-field simulation-toolbar-field-range">
-                <span class="simulation-toolbar-label">Attempts</span>
-                <span class="simulation-toolbar-control simulation-toolbar-range-control">
-                  <input
-                    name="simulationAttempts"
-                    type="range"
-                    min="1000"
-                    max="50000"
-                    step="1000"
-                    value="${simulationDraft.attempts}"
-                  />
-                  <span class="summary-meta simulation-toolbar-meta" data-simulation-attempts-label>
-                    ${simulationDraft.attempts.toLocaleString("en-US")} attempts
-                  </span>
-                </span>
-              </label>
-            </div>
-          </div>
-
-          <div class="simulation-config-subsection">
-            <div class="simulation-section-header">
-              <div class="simulation-section-leading simulation-header-inline-field">
-                <div class="simulation-section-heading">
-                  <h3>Inflation</h3>
-                </div>
-                <select name="simulationInflationPreset" class="simulation-header-select">
-                  <option value="fixed" ${simulationDraft.inflationPreset === "fixed" ? "selected" : ""}>Fixed 2.5%</option>
-                  <option value="fixed-custom" ${simulationDraft.inflationPreset === "fixed-custom" ? "selected" : ""}>Fixed custom</option>
-                  <option value="regime" ${simulationDraft.inflationPreset === "regime" ? "selected" : ""}>Default</option>
-                  <option value="regime-custom" ${simulationDraft.inflationPreset === "regime-custom" ? "selected" : ""}>Regime custom</option>
-                </select>
-              </div>
-              ${
-                isSimulationInflationCustomPreset(simulationDraft.inflationPreset)
-                  ? `
-              <div class="simulation-section-actions">
-                <button
-                  type="button"
-                  class="ghost-button icon-button disclosure-button"
-                  data-simulation-action="toggle-inflation-section"
-                  aria-label="${simulationInflationSectionExpanded ? "Collapse inflation settings" : "Expand inflation settings"}"
-                  aria-expanded="${simulationInflationSectionExpanded ? "true" : "false"}"
-                >
-                  ${renderDisclosureIcon(simulationInflationSectionExpanded)}
-                </button>
-              </div>
-                  `
-                  : ""
-              }
-            </div>
-            ${
-              isSimulationInflationCustomPreset(simulationDraft.inflationPreset) && simulationInflationSectionExpanded
-                ? `
-            <div class="simulation-section-body">
-              <div class="simulation-sweep-config">
-                ${
-                  simulationDraft.inflationPreset === "fixed-custom"
-                    ? `
-                <label>
-                  Inflation rate (%)
-                  <input
-                    name="simulationFixedInflationRate"
-                    ${renderEditableNumberInputAttributes()}
-                    value="${escapeHtml(formatEditableNumberInput(simulationDraft.fixedInflationRate))}"
-                  />
-                </label>
-                    `
-                    : `
-                <p class="helper-copy">Each simulated year picks a low or high inflation regime, then samples that year's inflation from the regime's average and volatility.</p>
-                <div class="simulation-sweep-fields">
-                  <label>
-                    Low average (%)
-                    <input
-                      name="simulationInflationLowAverageRate"
-                      ${renderEditableNumberInputAttributes()}
-                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.lowAverageRate))}"
-                    />
-                  </label>
-                  <label>
-                    Low volatility (%)
-                    <input
-                      name="simulationInflationLowVolatility"
-                      ${renderEditableNumberInputAttributes()}
-                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.lowVolatility))}"
-                    />
-                  </label>
-                  <label>
-                    High average (%)
-                    <input
-                      name="simulationInflationHighAverageRate"
-                      ${renderEditableNumberInputAttributes()}
-                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.highAverageRate))}"
-                    />
-                  </label>
-                  <label>
-                    High volatility (%)
-                    <input
-                      name="simulationInflationHighVolatility"
-                      ${renderEditableNumberInputAttributes()}
-                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.highVolatility))}"
-                    />
-                  </label>
-                  <label>
-                    Stay low (%)
-                    <input
-                      name="simulationInflationStayLowProbability"
-                      ${renderEditableNumberInputAttributes()}
-                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.stayLowProbability))}"
-                    />
-                  </label>
-                  <label>
-                    Stay high (%)
-                    <input
-                      name="simulationInflationStayHighProbability"
-                      ${renderEditableNumberInputAttributes()}
-                      value="${escapeHtml(formatEditableNumberInput(simulationDraft.regimeSwitchingInflation.stayHighProbability))}"
-                    />
-                  </label>
-                </div>
-                    `
-                }
-              </div>
-            </div>
-                `
-                : ""
-            }
-          </div>
-
-          <div class="simulation-config-subsection">
-            <div class="simulation-section-header">
-              <div class="simulation-section-leading simulation-header-inline-field">
-                <div class="simulation-section-heading">
-                  <h3>Taxes</h3>
-                </div>
-                <select name="simulationTaxPreset" class="simulation-header-select">
-                  ${builtInTaxPresetOptions}
-                  <option value="custom" ${simulationDraft.taxPreset === "custom" ? "selected" : ""}>Custom</option>
-                </select>
-                <span class="summary-meta tax-preset-summary">${escapeHtml(getSimulationTaxPresetSummary())}</span>
-              </div>
-              ${
-                simulationDraft.taxPreset === "custom"
-                  ? `
-              <div class="simulation-section-actions">
-                <button
-                  type="button"
-                  class="ghost-button icon-button disclosure-button"
-                  data-simulation-action="toggle-taxes-section"
-                  aria-label="${simulationTaxesSectionExpanded ? "Collapse tax settings" : "Expand tax settings"}"
-                  aria-expanded="${simulationTaxesSectionExpanded ? "true" : "false"}"
-                >
-                  ${renderDisclosureIcon(simulationTaxesSectionExpanded)}
-                </button>
-              </div>
-                  `
-                  : ""
-              }
-            </div>
-            ${
-              simulationDraft.taxPreset === "custom" && simulationTaxesSectionExpanded
-                ? `
-            <div class="simulation-section-body">
-              <div class="simulation-sweep-config">
-                <div id="simulation-tax-profile-form" class="stack-form" data-tax-profile-editor="simulation">
-                  ${renderTaxProfileFields()}
-                </div>
-              </div>
-            </div>
-                `
-                : ""
-            }
-          </div>
-
-          <div class="simulation-config-subsection">
-            <div class="simulation-section-header">
-              <div class="simulation-section-leading">
-                <span
-                  class="disabled-reason-anchor"
-                  ${plannerState.variables.length === 0 ? `data-disabled-reason="Create at least one variable before running a variable sweep."` : ""}
-                >
-                  <label class="switch-field">
-                    <input
-                      name="simulationVariableSweepEnabled"
-                      type="checkbox"
-                      ${simulationDraft.variableSweep.enabled ? "checked" : ""}
-                      ${plannerState.variables.length === 0 ? "disabled" : ""}
-                    />
-                    <span class="switch-track" aria-hidden="true"></span>
-                  </label>
-                </span>
-                <div class="simulation-section-heading">
-                  <h3>Variable Sweep</h3>
-                </div>
-              </div>
-              <div class="simulation-section-actions">
-              </div>
-            </div>
-            ${
-              plannerState.variables.length > 0 && simulationDraft.variableSweep.enabled
-                  ? `
-            <div class="simulation-sweep-config">
-              <p class="helper-copy">Run ${VARIABLE_SWEEP_STEP_COUNT} simulations with one variable interpolated from min to max.</p>
-              <div class="simulation-sweep-fields">
-                <label>
-                  Variable
-                  <select name="simulationVariableSweepVariableName">
-                    ${sweepVariableOptions}
-                  </select>
-                </label>
-                <label>
-                  Min value
-                  <input
-                    name="simulationVariableSweepMinValue"
-                    ${renderEditableNumberInputAttributes()}
-                    value="${escapeHtml(formatEditableNumberInput(simulationDraft.variableSweep.minValue))}"
-                  />
-                </label>
-                <label>
-                  Max value
-                  <input
-                    name="simulationVariableSweepMaxValue"
-                    ${renderEditableNumberInputAttributes()}
-                    value="${escapeHtml(formatEditableNumberInput(simulationDraft.variableSweep.maxValue))}"
-                  />
-                </label>
-              </div>
-            </div>
-                  `
-                  : ""
-            }
-          </div>
-        </section>
-
-        ${
-          simulationDraft.assetRows.length === 0
-            ? `
-        <section class="simulation-section">
-          <div class="simulation-section-header">
-            <div>
-              <h3>Assets</h3>
-            </div>
-          </div>
-          <p class="helper-copy">Create at least one asset to run a simulation.</p>
-        </section>
-              `
-            : `
-        <section class="simulation-section">
-          <div class="simulation-section-header">
-            <div class="simulation-section-leading">
-              <label class="switch-field" aria-label="Custom asset liquidation">
-                <input
-                  name="simulationCustomAssetLiquidation"
-                  type="checkbox"
-                  ${simulationDraft.customAssetLiquidation ? "checked" : ""}
-                />
-                <span class="switch-track" aria-hidden="true"></span>
-              </label>
-              <div class="simulation-section-heading">
-                <h3>Custom Asset Liquidation</h3>
-              </div>
-            </div>
-          </div>
-          ${
-            simulationDraft.customAssetLiquidation
-              ? `
-          <div class="simulation-section-body">
-            <p class="helper-copy">Assets are sold in proportion to their current portfolio weight. Use multipliers to tilt that weight. A multiplier of <code>1</code> keeps the current balance.</p>
-            <div class="board-scroll">
-              <table class="flow-table simulation-input-table">
-                <thead>
-                  <tr>
-                    <th>Sell multiplier</th>
-                    <th>Asset</th>
-                    <th>Value</th>
-                    <th>Expected return (%)</th>
-                    <th>Volatility (%)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${simulationDraft.assetRows
-                    .map(
-                      (asset) => `
-                        <tr>
-                          <td>${
-                            asset.kind === "home"
-                              ? "Not sellable"
-                              : `<input type="number" min="0" step="0.01" data-simulation-asset-field="${escapeAttribute(asset.name)}:sellProportion" value="${escapeHtml(asset.sellProportion)}" />`
-                          }</td>
-                          <th>
-                            <button type="button" class="link-button" data-edit-asset="${escapeHtml(asset.name)}">
-                              ${escapeHtml(asset.name)}
-                            </button>
-                          </th>
-                          <td>${formatCurrency(Number(asset.kind === "home" ? asset.initialCost : asset.startingValue))}</td>
-                          <td>${formatPercentage(Number(asset.expectedReturn))}</td>
-                          <td>${formatPercentage(Number(asset.volatility))}</td>
-                        </tr>
-                      `
-                    )
-                    .join("")}
-                </tbody>
-              </table>
-            </div>
-          </div>
-                `
-              : ""
-          }
-        </section>
-            `
-        }
-
-        <section class="simulation-section">
-          <div class="simulation-actions">
-          ${
-            simulationRunState
-              ? `
-          <div class="simulation-progress" role="status" aria-live="polite">
-            <div
-              class="simulation-progress-track${simulationRunState.errorMessage ? " is-error" : ""}"
-              aria-hidden="true"
-            >
-              <span style="width:${simulationRunState.errorMessage ? 100 : simulationProgressPercent}%"></span>
-            </div>
-            <span class="summary-meta">
-              ${
-                simulationRunState.errorMessage
-                  ? escapeHtml(simulationRunState.errorMessage)
-                  : `${simulationRunState.totalSweepSteps > 1 ? `${simulationRunState.completedSweepSteps.toLocaleString("en-US")} of ${simulationRunState.totalSweepSteps.toLocaleString("en-US")} sweep values complete. ` : ""}${simulationRunState.completedAttempts.toLocaleString("en-US")} of ${simulationRunState.totalAttempts.toLocaleString("en-US")} attempts across ${simulationRunState.workerCount.toLocaleString("en-US")} worker${simulationRunState.workerCount === 1 ? "" : "s"}`
-              }
-            </span>
-          </div>
-              `
-              : ""
-          }
-          <span id="simulation-submit-wrapper" title="${escapeAttribute(simulationSubmitState.reason)}">
-            <button id="simulation-submit-button" type="submit" ${simulationSubmitState.disabled || isSimulationRunning ? "disabled" : ""}>
-              ${isSimulationRunning ? "Simulating..." : "Run Simulation"}
-            </button>
-          </span>
-          </div>
-        </section>
-      </form>
-
-      ${
-        getDisplayedSimulationResults()
-          ? `
-      <div class="simulation-results-divider" aria-hidden="true"></div>
-      <section class="simulation-results-section" aria-labelledby="simulation-results-heading">
-        <div class="simulation-results-heading">
-          <h2 id="simulation-results-heading">Results</h2>
-          <p>You run out of liquid assets <strong>${formatPercentage(getDisplayedSimulationRunOutProbability())}</strong> of the time</p>
-        </div>
-        ${renderSimulationSweepResults()}
-        <div id="simulation-results-panel">${renderSimulationResultsBody()}</div>
-      </section>
-          `
-          : ``
-      }
+    <div class="simulation-run-control">
+      ${showProgress && simulationRunState ? renderSimulationProgress() : ""}
+      <span id="simulation-run-wrapper" title="${escapeAttribute(simulationSubmitState.reason)}">
+        <button
+          id="simulation-run-button"
+          type="submit"
+          form="simulation-form"
+          ${simulationSubmitState.disabled || isSimulationRunning ? "disabled" : ""}
+        >
+          ${buttonLabel}
+        </button>
+      </span>
     </div>
   `;
 }
 
-function syncSimulationAttemptsLabel(root: ParentNode = document): void {
-  const label = root.querySelector<HTMLElement>("[data-simulation-attempts-label]");
-  if (!label) {
-    return;
+function renderSimulationProgress(): string {
+  if (!simulationRunState) {
+    return "";
   }
 
-  label.textContent = `${simulationDraft.attempts.toLocaleString("en-US")} attempts`;
+  const simulationProgressPercent = Math.max(
+    0,
+    Math.min(100, (simulationRunState.completedAttempts / Math.max(1, simulationRunState.totalAttempts)) * 100)
+  );
+
+  return `
+    <div class="simulation-progress" role="status" aria-live="polite">
+      <div
+        class="simulation-progress-track${simulationRunState.errorMessage ? " is-error" : ""}"
+        aria-hidden="true"
+      >
+        <span style="width:${simulationRunState.errorMessage ? 100 : simulationProgressPercent}%"></span>
+      </div>
+      <span class="summary-meta">
+        ${
+          simulationRunState.errorMessage
+            ? escapeHtml(simulationRunState.errorMessage)
+            : `${simulationRunState.totalSweepSteps > 1 ? `${simulationRunState.completedSweepSteps.toLocaleString("en-US")} of ${simulationRunState.totalSweepSteps.toLocaleString("en-US")} sweep values complete. ` : ""}${simulationRunState.completedAttempts.toLocaleString("en-US")} of ${simulationRunState.totalAttempts.toLocaleString("en-US")} attempts across ${simulationRunState.workerCount.toLocaleString("en-US")} worker${simulationRunState.workerCount === 1 ? "" : "s"}`
+        }
+      </span>
+    </div>
+  `;
+}
+
+function renderSimulationBoard(): string {
+  return `
+    <div class="simulation-panel">
+      ${renderSimulationHeadline()}
+
+      ${
+        getDisplayedSimulationResults()
+          ? `
+      <section class="simulation-results-section${simulationResultsStale ? " is-stale" : ""}" aria-label="Simulation results">
+        <div class="simulation-stale-banner" data-simulation-stale-banner ${simulationResultsStale ? "" : "hidden"}>
+          <p>These results are based on older inputs.</p>
+          ${renderSimulationRunControl()}
+        </div>
+        <div id="simulation-results-panel">${renderSimulationResultsBody()}</div>
+        ${renderSimulationSweepResults()}
+      </section>
+          `
+          : `
+      <section class="simulation-empty-results">
+        ${
+          simulationRunState
+            ? renderSimulationProgress()
+            : `<p class="helper-copy">Run a simulation to see the percentile graph.</p>`
+        }
+        ${renderSimulationRunControl({ showProgress: false })}
+      </section>
+          `
+      }
+
+      ${
+        !hasSimulationEntries()
+          ? `
+      <form id="simulation-form" class="stack-form">
+        <section class="simulation-section">
+          <div class="simulation-section-header">
+            <div>
+              <h3>Scenario entries</h3>
+            </div>
+          </div>
+          <p class="helper-copy">Create at least one income, expense, or asset to run a simulation.</p>
+        </section>
+      </form>
+            `
+          : `<form id="simulation-form" class="stack-form" hidden></form>`
+      }
+
+      ${renderVariablesCard()}
+    </div>
+  `;
 }
 
 function syncSimulationSweepSelectionDisplay(): void {
@@ -5138,14 +5165,15 @@ function syncSimulationSweepSelectionDisplay(): void {
 }
 
 function bindSimulationResultsControls(user: UserIdentity): void {
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-simulation-percentile]")) {
-    button.addEventListener("click", () => {
-      const percentile = Number(button.dataset.simulationPercentile) as SimulationPercentile;
-      if (!getDisplayedSimulationResults()?.has(percentile)) {
+  for (const target of document.querySelectorAll<SVGElement>("[data-simulation-chart-percentile-select]")) {
+    target.addEventListener("click", () => {
+      const percentile = Number(target.dataset.simulationChartPercentileSelect) as SimulationPercentile;
+      if (!simulationPercentiles.includes(percentile) || !getDisplayedSimulationResults()?.has(percentile)) {
         return;
       }
 
       selectedSimulationPercentile = percentile;
+      expandedSimulationExampleKeys = new Set();
       renderPlanner(user);
     });
   }
@@ -5211,8 +5239,8 @@ function refreshSimulationResultsPanel(user: UserIdentity): void {
 }
 
 function syncSimulationSubmitState(): void {
-  const submitButton = document.querySelector<HTMLButtonElement>("#simulation-submit-button");
-  const submitWrapper = document.querySelector<HTMLElement>("#simulation-submit-wrapper");
+  const submitButton = document.querySelector<HTMLButtonElement>("#simulation-run-button");
+  const submitWrapper = document.querySelector<HTMLElement>("#simulation-run-wrapper");
   if (!submitButton || !submitWrapper) {
     return;
   }
@@ -5220,6 +5248,20 @@ function syncSimulationSubmitState(): void {
   const state = getSimulationSubmitState();
   submitButton.disabled = state.disabled;
   submitWrapper.title = state.reason;
+}
+
+function syncSimulationStalePresentation(): void {
+  const resultsSection = document.querySelector<HTMLElement>(".simulation-results-section");
+  const staleBanner = document.querySelector<HTMLElement>("[data-simulation-stale-banner]");
+  const depletionSummary = document.querySelector<HTMLElement>("[data-simulation-depletion-summary]");
+
+  resultsSection?.classList.toggle("is-stale", simulationResultsStale);
+  if (staleBanner) {
+    staleBanner.hidden = !simulationResultsStale;
+  }
+  if (depletionSummary) {
+    depletionSummary.hidden = simulationResultsStale;
+  }
 }
 
 function bindSimulationChartTooltip(): void {
@@ -5232,22 +5274,55 @@ function bindSimulationChartTooltip(): void {
     const hideTooltip = () => {
       tooltip.hidden = true;
     };
+    const setSeriesHover = (percentile: string | undefined, hovered: boolean): void => {
+      if (!percentile) {
+        return;
+      }
+
+      for (const target of panel.querySelectorAll<SVGElement>(
+        `[data-simulation-chart-percentile-select="${CSS.escape(percentile)}"]`
+      )) {
+        target.classList.toggle("is-series-hovered", hovered);
+      }
+    };
 
     const updateTooltipPosition = (event: MouseEvent) => {
       const panelRect = panel.getBoundingClientRect();
-      const tooltipOffset = 16;
-      tooltip.style.left = `${event.clientX - panelRect.left + tooltipOffset}px`;
-      tooltip.style.top = `${event.clientY - panelRect.top - tooltipOffset}px`;
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const tooltipOffset = 14;
+      const edgePadding = 10;
+      const rawX = event.clientX - panelRect.left + tooltipOffset;
+      const rawY = event.clientY - panelRect.top - tooltipRect.height - tooltipOffset;
+      const belowY = event.clientY - panelRect.top + tooltipOffset;
+      const maxX = Math.max(edgePadding, panelRect.width - tooltipRect.width - edgePadding);
+      const maxY = Math.max(edgePadding, panelRect.height - tooltipRect.height - edgePadding);
+      const clampedX = Math.min(Math.max(rawX, edgePadding), maxX);
+      const clampedY = Math.min(Math.max(rawY >= edgePadding ? rawY : belowY, edgePadding), maxY);
+      tooltip.style.left = `${clampedX}px`;
+      tooltip.style.top = `${clampedY}px`;
     };
 
     for (const point of panel.querySelectorAll<SVGCircleElement>("[data-simulation-chart-point]")) {
       point.addEventListener("mouseenter", (event) => {
+        setSeriesHover(point.dataset.simulationChartPercentile, true);
         tooltip.textContent = `${point.dataset.simulationChartLabel} | ${point.dataset.simulationChartValueLabel}: ${point.dataset.simulationChartValue} | ${point.dataset.simulationChartPercentile}th percentile`;
         tooltip.hidden = false;
         updateTooltipPosition(event);
       });
       point.addEventListener("mousemove", updateTooltipPosition);
-      point.addEventListener("mouseleave", hideTooltip);
+      point.addEventListener("mouseleave", () => {
+        setSeriesHover(point.dataset.simulationChartPercentile, false);
+        hideTooltip();
+      });
+    }
+
+    for (const line of panel.querySelectorAll<SVGPathElement>(".simulation-chart-line")) {
+      line.addEventListener("mouseenter", () => {
+        setSeriesHover(line.dataset.simulationChartPercentileSelect, true);
+      });
+      line.addEventListener("mouseleave", () => {
+        setSeriesHover(line.dataset.simulationChartPercentileSelect, false);
+      });
     }
 
     panel.addEventListener("mouseleave", hideTooltip);
@@ -5271,7 +5346,7 @@ function renderAssetComposer(): string {
         <form id="asset-form" class="stack-form">
           <label>
             Asset name
-            <input name="assetLabel" type="text" value="${escapeHtml(assetDraft.name)}" placeholder="Brokerage account" required />
+            <input name="assetLabel" type="text" value="${escapeHtml(assetDraft.name)}" placeholder="Brokerage account, 401k, etc." required />
           </label>
           <label>
             Asset type
@@ -5281,6 +5356,7 @@ function renderAssetComposer(): string {
           </label>
           ${renderAssetDetailModeFields(assetDraft)}
           ${renderAssetAdvancedSettingsToggle(assetDraft)}
+          ${renderAssetAdvancedSettingsFields(assetDraft)}
           <div class="event-buttons">
             <button type="button" class="secondary-button" id="close-asset-composer-secondary">Cancel</button>
             <button type="submit">Save asset</button>
@@ -5337,8 +5413,9 @@ function renderAssetEditor(): string {
             </select>
           </label>
           ${renderAssetDetailModeFields(assetEditDraft)}
-          ${renderAssetCorrelationFields(relatedAssets)}
           ${renderAssetAdvancedSettingsToggle(assetEditDraft)}
+          ${renderAssetAdvancedSettingsFields(assetEditDraft)}
+          ${renderAssetCorrelationFields(relatedAssets)}
           <div class="event-buttons">
             <button type="button" class="secondary-button" id="close-asset-editor">Cancel</button>
             <button type="submit">Save asset</button>
@@ -5428,17 +5505,19 @@ function renderAssetDetailModeFields(draft: AssetDraft): string {
     return renderHomeAssetFields(draft);
   }
 
-  if (draft.detailMode === "advanced") {
-    return `
-      ${renderAssetCoreFields(draft)}
-      ${renderAssetReturnFields(draft)}
-      ${renderAssetTaxModelFields(draft)}
-    `;
+  return `
+    ${renderAssetCoreFields(draft)}
+  `;
+}
+
+function renderAssetAdvancedSettingsFields(draft: AssetDraft): string {
+  if (draft.kind === "home" || draft.detailMode !== "advanced") {
+    return "";
   }
 
   return `
-    ${renderAssetCoreFields(draft)}
-    ${isBondAssetDraftKind(draft.kind) ? renderBasicBondReturnFields(draft) : renderBasicStockReturnFields(draft)}
+    ${isBondAssetDraftKind(draft.kind) ? renderBondInterestFields(draft) : renderInvestmentReturnFields(draft)}
+    ${isBondAssetDraftKind(draft.kind) ? renderAssetSaleTaxFields(draft) : renderAssetTaxModelFields(draft)}
   `;
 }
 
@@ -5456,6 +5535,7 @@ function renderHomeAssetFields(draft: AssetDraft): string {
             value: draft.initialCost,
             placeholder: "salary * 4",
             variablesScope: "planner",
+            type: "money",
           })}
         </label>
         <label>
@@ -5537,12 +5617,13 @@ function renderHomeAssetFields(draft: AssetDraft): string {
 function renderAssetCoreFields(draft: AssetDraft): string {
   return `
     <label>
-      Starting value
+      Current value
       ${renderFormulaEditor({
         inputName: "startingValue",
         value: draft.startingValue,
-        placeholder: "salary * 2",
+        placeholder: "$0",
         variablesScope: "planner",
+        type: "money",
       })}
     </label>
   `;
@@ -5568,67 +5649,60 @@ function getPrimaryBondCashGenerationDraft(draft: AssetDraft): AssetCashGenerati
   return draft.cashGenerations[0];
 }
 
-function renderBasicBondReturnFields(draft: AssetDraft): string {
+function renderBondInterestFields(draft: AssetDraft): string {
   const cashGeneration = getPrimaryBondCashGenerationDraft(draft);
 
   return `
-    <div class="split-fields asset-basic-fields">
-      <label>
-        Interest rate (%)
-        <input
-          name="assetBasicBondInterestRate"
-          data-cash-generation-field="${cashGeneration.id}:rate"
-          type="number"
-          step="0.01"
-          value="${escapeHtml(cashGeneration.rate)}"
-          required
-        />
-      </label>
-      <label>
-        Volatility (%)
-        <input
-          name="assetBasicBondVolatility"
-          data-cash-generation-field="${cashGeneration.id}:volatility"
-          type="number"
-          step="0.01"
-          value="${escapeHtml(cashGeneration.volatility)}"
-          required
-        />
-      </label>
-    </div>
+    <section class="composer-subsection asset-form-section">
+      <div class="event-entry-header">
+        <strong>Interest and volatility</strong>
+      </div>
+      <div class="split-fields">
+        <label>
+          Interest rate (%)
+          <input
+            name="assetBasicBondInterestRate"
+            data-cash-generation-field="${cashGeneration.id}:rate"
+            type="number"
+            step="0.01"
+            value="${escapeHtml(cashGeneration.rate)}"
+            required
+          />
+        </label>
+        <label>
+          Volatility (%)
+          <input
+            name="assetBasicBondVolatility"
+            data-cash-generation-field="${cashGeneration.id}:volatility"
+            type="number"
+            step="0.01"
+            value="${escapeHtml(cashGeneration.volatility)}"
+            required
+          />
+        </label>
+        <label>
+          Interest tax treatment
+          <select name="assetBasicBondTaxTreatment" data-cash-generation-field="${cashGeneration.id}:taxTreatment">
+            ${renderAssetCashTaxTreatmentOptions(cashGeneration.taxTreatment)}
+          </select>
+        </label>
+      </div>
+    </section>
   `;
 }
 
-function renderBasicStockReturnFields(draft: AssetDraft): string {
+function renderInvestmentReturnFields(draft: AssetDraft): string {
   return `
-    <div class="split-fields asset-basic-fields">
-      <label>
-        Returns (%)
-        <input
-          name="expectedReturn"
-          type="number"
-          step="0.01"
-          value="${escapeHtml(draft.expectedReturn)}"
-          required
-        />
-      </label>
-      <label>
-        Volatility (%)
-        <input
-          name="volatility"
-          type="number"
-          step="0.01"
-          value="${escapeHtml(draft.volatility)}"
-          required
-        />
-      </label>
-    </div>
+    <section class="composer-subsection asset-form-section">
+      <div class="event-entry-header">
+        <strong>Returns and volatility</strong>
+      </div>
+      ${renderAssetReturnFields(draft)}
+    </section>
   `;
 }
 
 function renderAssetReturnFields(draft: AssetDraft): string {
-  const preset = getAssetTypePreset(draft.kind);
-
   return `
     <div class="split-fields">
       <label>
@@ -5638,7 +5712,6 @@ function renderAssetReturnFields(draft: AssetDraft): string {
           type="number"
           step="0.01"
           value="${escapeHtml(draft.expectedReturn)}"
-          ${preset ? "disabled" : ""}
           required
         />
       </label>
@@ -5649,7 +5722,6 @@ function renderAssetReturnFields(draft: AssetDraft): string {
           type="number"
           step="0.01"
           value="${escapeHtml(draft.volatility)}"
-          ${preset ? "disabled" : ""}
           required
         />
       </label>
@@ -5972,7 +6044,11 @@ function renderTaxComposer(): string {
   `;
 }
 
-function renderExpenseToggle(name: "oneTime" | "inflationAdjusted", checked: boolean, label: string): string {
+function renderExpenseToggle(
+  name: "oneTime" | "inflationAdjusted" | "taxDeductible",
+  checked: boolean,
+  label: string
+): string {
   return `
     <div class="expense-toggle-row">
       <label class="switch-field expense-toggle-switch" aria-label="${escapeHtml(label)}">
@@ -5983,6 +6059,21 @@ function renderExpenseToggle(name: "oneTime" | "inflationAdjusted", checked: boo
         <strong>${escapeHtml(label)}</strong>
       </div>
     </div>
+  `;
+}
+
+function renderFlowTaxTreatmentField(draft: FlowDraft | FlowEditDraft): string {
+  if (draft.type === "expense") {
+    return renderExpenseToggle("taxDeductible", draft.taxTreatment === "deductible-expense", "Tax deductible");
+  }
+
+  return `
+    <label>
+      Type
+      <select name="taxTreatment">
+        ${renderFlowTaxTreatmentOptions(draft.type, draft.taxTreatment)}
+      </select>
+    </label>
   `;
 }
 
@@ -6031,41 +6122,30 @@ function renderFlowComposer(): string {
       <section class="panel modal-panel">
         <div class="modal-header">
           <div class="panel-heading">
-            <p class="kicker">Create Income or Expense</p>
+            <p class="kicker">Create ${flowDraft.type === "income" ? "Income" : "Expense"}</p>
             <h2>New ${flowDraft.type}</h2>
           </div>
         </div>
         <form id="flow-form" class="stack-form">
-          <label>
-            Type
-            <select name="type">
-              <option value="income" ${flowDraft.type === "income" ? "selected" : ""}>Income</option>
-              <option value="expense" ${flowDraft.type === "expense" ? "selected" : ""}>Expense</option>
-            </select>
-          </label>
+          ${flowDraft.type === "income" ? renderFlowTaxTreatmentField(flowDraft) : ""}
           <label>
             ${flowDraft.type === "income" ? "Income name" : "Expense name"}
             <input
               name="flowLabel"
               type="text"
-              placeholder="${flowDraft.type === "income" ? "Salary" : "Health insurance"}"
+              placeholder="${flowDraft.type === "income" ? "Salary, inheritance, etc." : "Shopping, food, etc."}"
               value="${escapeHtml(flowDraft.name)}"
               required
             />
           </label>
           <label>
-            Tax treatment
-            <select name="taxTreatment">
-              ${renderFlowTaxTreatmentOptions(flowDraft.type, flowDraft.taxTreatment)}
-            </select>
-          </label>
-          <label>
-            Amount
+            Amount per year
             ${renderFormulaEditor({
               inputName: "formula",
               value: flowDraft.formula,
-              placeholder: "1,000",
+              placeholder: "$50,000",
               variablesScope: "planner",
+              type: "money",
               requiredLabel: "Amount",
             })}
           </label>
@@ -6077,6 +6157,7 @@ function renderFlowComposer(): string {
                 ${flowDraft.oneTime ? renderOneTimeFlowFields(flowDraft) : renderExpenseToggle("inflationAdjusted", flowDraft.inflationAdjusted, "Apply inflation")}
               `
           }
+          ${flowDraft.type === "expense" ? renderFlowTaxTreatmentField(flowDraft) : ""}
           ${
             flowDraft.oneTime
               ? ""
@@ -6246,6 +6327,7 @@ function renderFlowEvents(flowName: string): string {
                             value: formulaValue,
                             placeholder: "1,000",
                             variablesScope: "planner",
+                            type: "money",
                             requiredLabel: "Amount",
                           })}
                         </div>`
@@ -6323,6 +6405,7 @@ function renderFlowDraftEvents(draft: FlowDraft): string {
                               value: formulaValue,
                               placeholder: "1,000",
                               variablesScope: "planner",
+                              type: "money",
                               requiredLabel: "Amount",
                             })}
                           </div>`
@@ -6395,23 +6478,12 @@ function renderFlowEditor(): string {
           </button>
         </div>
         <form id="flow-edit-form" class="stack-form">
-          <label>
-            Type
-            <select name="type">
-              <option value="income" ${flowEditDraft.type === "income" ? "selected" : ""}>Income</option>
-              <option value="expense" ${flowEditDraft.type === "expense" ? "selected" : ""}>Expense</option>
-            </select>
-          </label>
+          ${flowEditDraft.type === "income" ? renderFlowTaxTreatmentField(flowEditDraft) : ""}
           <label>
             ${flowEditDraft.type === "income" ? "Income name" : "Expense name"}
             <input name="flowLabel" type="text" value="${escapeHtml(flowEditDraft.name)}" required />
           </label>
-          <label>
-            Tax treatment
-            <select name="taxTreatment">
-              ${renderFlowTaxTreatmentOptions(flowEditDraft.type, flowEditDraft.taxTreatment)}
-            </select>
-          </label>
+          ${flowEditDraft.type === "expense" ? renderFlowTaxTreatmentField(flowEditDraft) : ""}
           <label>
             Amount
             ${renderFormulaEditor({
@@ -6419,6 +6491,7 @@ function renderFlowEditor(): string {
               value: flowEditDraft.formula,
               placeholder: "1,000",
               variablesScope: "planner",
+              type: "money",
               requiredLabel: "Amount",
             })}
           </label>
@@ -6478,6 +6551,7 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
             placeholder: "1,000",
             variablesScope: "event-draft",
             fieldToken: `${entryId}:${action.id}:formula`,
+            type: "money",
             requiredLabel: "Amount",
           })}
         </label>
@@ -6517,6 +6591,7 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
             placeholder: "sideGig",
             variablesScope: "event-draft",
             fieldToken: `${entryId}:${action.id}:flowDefinitionFormula`,
+            type: "money",
             requiredLabel: "Amount",
           })}
         </label>
@@ -6534,6 +6609,7 @@ function renderActionFields(entryId: string, action: EventActionDraft): string {
             placeholder: "taxBillAmount * 0.5",
             variablesScope: "event-draft",
             fieldToken: `${entryId}:${action.id}:oneTimeExpenseFormula`,
+            type: "money",
             requiredLabel: "Amount",
           })}
         </label>
@@ -6549,67 +6625,16 @@ function bindHandlers(user: UserIdentity): void {
   focusNewAssetNameInput();
 
   const openAssetButton = document.querySelector<HTMLButtonElement>("#open-asset-composer");
-  const openFlowButton = document.querySelector<HTMLButtonElement>("#open-flow-composer");
-  const saveScenarioButton = document.querySelector<HTMLButtonElement>("#save-scenario-button");
-  const loadScenarioButton = document.querySelector<HTMLButtonElement>("#load-scenario-button");
-  const clearScenarioButton = document.querySelector<HTMLButtonElement>("#clear-scenario-button");
-  const loadScenarioInput = document.querySelector<HTMLInputElement>("#load-scenario-input");
 
-  saveScenarioButton?.addEventListener("click", () => {
-    downloadScenarioExport(user);
-  });
-
-  loadScenarioButton?.addEventListener("click", () => {
-    loadScenarioInput?.click();
-  });
-
-  clearScenarioButton?.addEventListener("click", () => {
-    void clearScenario(user);
-  });
-
-  loadScenarioInput?.addEventListener("change", async () => {
-    const file = loadScenarioInput.files?.[0];
-    loadScenarioInput.value = "";
-    if (!file) {
-      return;
-    }
-
-    const previousState = buildPersistedPlannerStateRecord(user);
-
-    try {
-      const parsed = JSON.parse(await file.text()) as unknown;
-      const importedState = extractScenarioPlannerState(parsed);
-
-      invalidateSimulationState();
-      closeTransientPlannerUi();
-      applySavedPlannerState({
-        ...importedState,
-        userId: user.id,
-        email: user.email,
-        updatedAt: new Date().toISOString(),
-      } as SavedPlannerState);
-      await persistPlannerState(user);
+  for (const openFlowButton of document.querySelectorAll<HTMLButtonElement>("[data-open-flow-composer]")) {
+    openFlowButton.addEventListener("click", () => {
+      const type = openFlowButton.dataset.openFlowComposer === "income" ? "income" : "expense";
+      Object.assign(flowDraft, createFlowDraft(type));
+      flowComposerOpen = true;
+      shouldFocusNewFlowName = true;
       renderPlanner(user);
-    } catch (error) {
-      try {
-        applySavedPlannerState({
-          ...previousState,
-          updatedAt: new Date().toISOString(),
-        });
-      } catch (restoreError) {
-        console.error(restoreError);
-      }
-      renderPlanner(user);
-      console.error(error);
-      window.alert(error instanceof Error ? error.message : "Scenario file could not be loaded.");
-    }
-  });
-
-  openFlowButton?.addEventListener("click", () => {
-    flowComposerOpen = true;
-    shouldFocusNewFlowName = true;
-    renderPlanner(user);
-  });
+    });
+  }
 
   openAssetButton?.addEventListener("click", () => {
     assetComposerOpen = true;
@@ -6630,17 +6655,27 @@ function bindHandlers(user: UserIdentity): void {
     });
   }
 
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-board-tab]")) {
-    button.addEventListener("click", () => {
-      const nextTab = button.dataset.boardTab as PlannerBoardTab | undefined;
-      if (!nextTab) {
-        return;
-      }
+  const percentileSelect = document.querySelector<HTMLSelectElement>("[data-simulation-percentile-select]");
+  percentileSelect?.addEventListener("change", () => {
+    const percentile = Number(percentileSelect.value) as SimulationPercentile;
+    if (!simulationPercentiles.includes(percentile)) {
+      return;
+    }
 
-      activePlannerBoardTab = nextTab;
-      renderPlanner(user);
-    });
-  }
+    selectedSimulationPercentile = percentile;
+    expandedSimulationExampleKeys = new Set();
+    renderPlanner(user);
+  });
+
+  const targetAgeSelect = document.querySelector<HTMLSelectElement>("[data-simulation-target-age]");
+  targetAgeSelect?.addEventListener("change", () => {
+    setSimulationTargetAge(Number(targetAgeSelect.value));
+    invalidateSimulationState();
+    expandedSimulationExampleKeys = new Set();
+    persistSimulationSettingsDraftToLocalStorage(user.id);
+    void persistPlannerState(user);
+    renderPlanner(user);
+  });
 
   const simulationForm = document.querySelector<HTMLFormElement>("#simulation-form");
 
@@ -6663,7 +6698,7 @@ function bindHandlers(user: UserIdentity): void {
   };
 
   const applySimulationTaxPresetChange = (target: HTMLSelectElement): boolean => {
-    if (target.name !== "simulationTaxPreset") {
+    if (target.name !== "simulationTaxPreset" && target.name !== "basicInfoTaxPreset") {
       return false;
     }
 
@@ -6688,6 +6723,25 @@ function bindHandlers(user: UserIdentity): void {
     void persistPlannerState(user);
     return true;
   };
+
+  const basicInfoAgeInput = document.querySelector<HTMLInputElement>('input[name="basicInfoCurrentAge"]');
+  basicInfoAgeInput?.addEventListener("change", () => {
+    const previousHorizonYears = simulationDraft.horizonYears;
+    simulationDraft.currentAge = normalizeSimulationCurrentAge(Number(basicInfoAgeInput.value));
+    simulationDraft.horizonYears = normalizeSimulationHorizonYears(simulationDraft.horizonYears);
+    if (simulationDraft.horizonYears !== previousHorizonYears) {
+      invalidateSimulationState();
+    }
+    syncSimulationSubmitState();
+    persistSimulationSettingsDraftToLocalStorage(user.id);
+    void persistPlannerState(user);
+    renderPlanner(user);
+  });
+
+  const basicInfoLocationSelect = document.querySelector<HTMLSelectElement>('select[name="basicInfoTaxPreset"]');
+  basicInfoLocationSelect?.addEventListener("change", () => {
+    applySimulationTaxPresetChange(basicInfoLocationSelect);
+  });
 
   const applySimulationVariableSweepVariableChange = (target: HTMLSelectElement): boolean => {
     if (target.name !== "simulationVariableSweepVariableName") {
@@ -6714,7 +6768,11 @@ function bindHandlers(user: UserIdentity): void {
 
     event.preventDefault();
     const action = actionButton.dataset.simulationAction;
-    if (action === "toggle-inflation-section") {
+    if (action === "toggle-settings-section") {
+      simulationSettingsSectionExpanded = !simulationSettingsSectionExpanded;
+      renderPlanner(user);
+      return;
+    } else if (action === "toggle-inflation-section") {
       if (!isSimulationInflationCustomPreset(simulationDraft.inflationPreset)) {
         return;
       }
@@ -6769,7 +6827,7 @@ function bindHandlers(user: UserIdentity): void {
       simulationDraft.startYear = normalizedYear;
       plannerState.startYear = normalizedYear;
     } else if (target.name === "simulationHorizonYears") {
-      simulationDraft.horizonYears = Math.max(1, Math.min(50, Number(target.value) || 1));
+      simulationDraft.horizonYears = normalizeSimulationHorizonYears(Number(target.value));
     } else if (target instanceof HTMLSelectElement && applySimulationInflationPresetChange(target)) {
       return;
     } else if (target.name === "simulationFixedInflationRate") {
@@ -6786,12 +6844,6 @@ function bindHandlers(user: UserIdentity): void {
       simulationDraft.regimeSwitchingInflation.stayLowProbability = target.value;
     } else if (target.name === "simulationInflationStayHighProbability") {
       simulationDraft.regimeSwitchingInflation.stayHighProbability = target.value;
-    } else if (target.name === "simulationAttempts") {
-      simulationDraft.attempts = Math.max(1000, Math.min(50000, Number(target.value) || 10000));
-      invalidateSimulationState();
-      syncSimulationAttemptsLabel(simulationForm);
-      persistSimulationSettingsDraftToLocalStorage(user.id);
-      return;
     } else if (target instanceof HTMLSelectElement && applySimulationTaxPresetChange(target)) {
       return;
     } else if (target.name === "simulationVariableSweepEnabled" && target instanceof HTMLInputElement) {
@@ -6838,14 +6890,6 @@ function bindHandlers(user: UserIdentity): void {
       return;
     }
 
-    if (target.name === "simulationAttempts") {
-      simulationDraft.attempts = Math.max(1000, Math.min(50000, Number(target.value) || 10000));
-      invalidateSimulationState();
-      syncSimulationAttemptsLabel(simulationForm);
-      void persistPlannerState(user);
-      return;
-    }
-
     if (target.name === "simulationVariableSweepEnabled") {
       simulationDraft.variableSweep.enabled = target.checked;
       if (target.checked) {
@@ -6875,6 +6919,15 @@ function bindHandlers(user: UserIdentity): void {
     }
 
     await persistPlannerState(user);
+    syncSimulationDraftAssetRows({ invalidateOnChange: false });
+    syncSimulationVariableSweepDraft();
+    normalizeSimulationDraftHorizon();
+    const runInputSignature = buildSimulationInputSignature();
+    debugSimulationStaleState("run start", {
+      currentSignature: runInputSignature,
+      completedSignature: completedSimulationInputSignature,
+      stale: simulationResultsStale,
+    });
     const sweepValues = getSimulationSweepVariableValues();
     const sweepVariableName = simulationDraft.variableSweep.enabled
       ? simulationDraft.variableSweep.variableName
@@ -7066,6 +7119,13 @@ function bindHandlers(user: UserIdentity): void {
         selectedSimulationSweepStepIndex = 0;
       }
 
+      simulationResultsStale = false;
+      completedSimulationInputSignature = runInputSignature;
+      debugSimulationStaleState("run complete", {
+        currentSignature: buildSimulationInputSignature(),
+        completedSignature: completedSimulationInputSignature,
+        stale: simulationResultsStale,
+      });
       selectedSimulationPercentile = 50;
       expandedSimulationExampleKeys = new Set();
       simulationRunState = null;
@@ -7146,18 +7206,6 @@ function bindHandlers(user: UserIdentity): void {
     renderPlanner(user);
   });
 
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-simulation-percentile]")) {
-    button.addEventListener("click", () => {
-      const percentile = Number(button.dataset.simulationPercentile) as SimulationPercentile;
-      if (!getDisplayedSimulationResults()?.has(percentile)) {
-        return;
-      }
-
-      selectedSimulationPercentile = percentile;
-      renderPlanner(user);
-    });
-  }
-
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-simulation-chart-metric]")) {
     button.addEventListener("click", () => {
       const metric = button.dataset.simulationChartMetric as SimulationChartMetric | undefined;
@@ -7166,6 +7214,19 @@ function bindHandlers(user: UserIdentity): void {
       }
 
       selectedSimulationChartMetric = metric;
+      renderPlanner(user);
+    });
+  }
+
+  for (const target of document.querySelectorAll<SVGElement>("[data-simulation-chart-percentile-select]")) {
+    target.addEventListener("click", () => {
+      const percentile = Number(target.dataset.simulationChartPercentileSelect) as SimulationPercentile;
+      if (!simulationPercentiles.includes(percentile) || !getDisplayedSimulationResults()?.has(percentile)) {
+        return;
+      }
+
+      selectedSimulationPercentile = percentile;
+      expandedSimulationExampleKeys = new Set();
       renderPlanner(user);
     });
   }
@@ -7579,6 +7640,7 @@ function bindFormulaEditors(): void {
       const rawCaretOffset = preferredCaretOffset ?? getCaretCharacterOffset(editor);
       const formula = formatFormulaText(rawFormula);
       const caretOffset = formatFormulaText(rawFormula.slice(0, rawCaretOffset)).length;
+      syncFormulaEditorDisplayType(wrapper, formula);
       hiddenInput.value = formula;
       renderFormulaEditorTokens(binding, formula, caretOffset);
       syncFormulaDraftField(wrapper, formula);
@@ -7732,6 +7794,7 @@ function refreshFormulaEditors(form: HTMLFormElement): void {
 
     const caretOffset =
       document.activeElement === editor ? getCaretCharacterOffset(editor) : hiddenInput.value.length;
+    syncFormulaEditorDisplayType(wrapper, hiddenInput.value);
     renderFormulaEditorTokens(binding, hiddenInput.value, caretOffset);
     updateFormulaEditorValidation(binding);
   }
@@ -7821,7 +7884,11 @@ function normalizeEditorText(value: string): string {
 }
 
 function isPlainNumericFormula(formula: string): boolean {
-  return /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$|^[+-]?\.\d+$/.test(formula.trim());
+  return /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?$|^[+-]?\.\d+$/.test(formula.trim());
+}
+
+function syncFormulaEditorDisplayType(wrapper: HTMLElement, formula: string): void {
+  wrapper.dataset.plainNumeric = isPlainNumericFormula(formula) ? "true" : "false";
 }
 
 function resolveAssetValueInput(
@@ -9123,15 +9190,12 @@ function bindFlowComposer(user: UserIdentity): void {
       return;
     }
 
-    if (target.name === "type") {
-      updateFlowDraftType(flowDraft, target.value === "income" ? "income" : "expense");
-      renderPlanner(user);
-      focusFlowNameInputIfEmpty("#flow-form");
-      return;
-    } else if (target.name === "flowLabel") {
+    if (target.name === "flowLabel") {
       flowDraft.name = target.value;
     } else if (target.name === "taxTreatment") {
       flowDraft.taxTreatment = target.value as FlowTaxTreatment;
+    } else if (target.name === "taxDeductible" && target instanceof HTMLInputElement) {
+      flowDraft.taxTreatment = target.checked ? "deductible-expense" : "nondeductible-expense";
     } else if (target.name === "formula") {
       flowDraft.formula = target.value;
     } else if (target.name === "startYear") {
@@ -9444,15 +9508,12 @@ function bindFlowEditor(user: UserIdentity): void {
       return;
     }
 
-    if (target.name === "type") {
-      updateFlowDraftType(flowEditDraft, target.value === "income" ? "income" : "expense");
-      renderPlanner(user);
-      focusFlowNameInputIfEmpty("#flow-edit-form");
-      return;
-    } else if (target.name === "flowLabel") {
+    if (target.name === "flowLabel") {
       flowEditDraft.name = target.value;
     } else if (target.name === "taxTreatment") {
       flowEditDraft.taxTreatment = target.value as FlowTaxTreatment;
+    } else if (target.name === "taxDeductible" && target instanceof HTMLInputElement) {
+      flowEditDraft.taxTreatment = target.checked ? "deductible-expense" : "nondeductible-expense";
     } else if (target.name === "formula") {
       flowEditDraft.formula = target.value;
     } else if (target.name === "startYear") {
@@ -10514,14 +10575,15 @@ function applySavedPlannerState(savedState: SavedPlannerState): void {
     typeof partialState.simulationAttempts === "number" && Number.isFinite(partialState.simulationAttempts)
       ? Math.max(1000, Math.min(50000, partialState.simulationAttempts))
       : fallbackSimulationDraft.attempts;
+  simulationDraft.currentAge =
+    typeof partialState.simulationCurrentAge === "number" && Number.isFinite(partialState.simulationCurrentAge)
+      ? normalizeSimulationCurrentAge(partialState.simulationCurrentAge)
+      : fallbackSimulationDraft.currentAge;
   simulationDraft.taxPreset = normalizeSimulationTaxPreset(
     partialState.simulationTaxPreset,
     fallbackSimulationDraft.taxPreset
   );
-  simulationDraft.horizonYears =
-    typeof partialState.simulationHorizonYears === "number" && Number.isFinite(partialState.simulationHorizonYears)
-      ? Math.max(1, Math.min(50, partialState.simulationHorizonYears))
-      : fallbackSimulationDraft.horizonYears;
+  simulationDraft.horizonYears = normalizeSimulationHorizonYears(partialState.simulationHorizonYears);
   simulationDraft.customAssetLiquidation = partialState.simulationCustomAssetLiquidation === true;
   simulationDraft.inflationPreset = normalizeSimulationInflationPreset(partialState.simulationInflation);
   simulationDraft.fixedInflationRate =
