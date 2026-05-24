@@ -3435,6 +3435,10 @@ function renderPlanner(user: UserIdentity): void {
             Calculate the lifestyle you can afford
           </p>
         </div>
+        <div class="planner-header-actions" aria-label="Scenario file actions">
+          <button type="button" class="secondary-button" id="import-scenario-json">Import JSON</button>
+          <button type="button" class="secondary-button" id="export-scenario-json">Export JSON</button>
+        </div>
       </header>
 
       <main class="planner-main">
@@ -4337,6 +4341,9 @@ function buildPersistedPlannerStateRecord(user: UserIdentity): Omit<SavedPlanner
       taxRates: tax.taxRates.map((rate) => ({ ...rate })),
       ...(tax.exclusions ? { exclusions: tax.exclusions.map((exclusion) => ({ ...exclusion })) } : {}),
       ...(tax.maximum === undefined ? {} : { maximum: tax.maximum }),
+      ...(tax.taxableIncomeMultiplier === undefined || tax.taxableIncomeMultiplier === 1
+        ? {}
+        : { taxableIncomeMultiplier: tax.taxableIncomeMultiplier }),
     })),
     taxProfile: { ...snapshot.taxProfile },
     assetCorrelations: snapshot.assetCorrelations,
@@ -4413,6 +4420,22 @@ function downloadScenarioExport(user: UserIdentity): void {
   window.setTimeout(() => {
     URL.revokeObjectURL(url);
   }, 0);
+}
+
+async function importScenarioFile(file: File, user: UserIdentity): Promise<void> {
+  const parsedValue = JSON.parse(await file.text()) as unknown;
+  const plannerState = extractScenarioPlannerState(parsedValue);
+
+  applySavedPlannerState({
+    ...plannerState,
+    userId: user.id,
+    email: user.email,
+    updatedAt: new Date().toISOString(),
+  });
+  invalidateSimulationState();
+  clearSimulationOutputs();
+  await persistPlannerState(user);
+  renderPlanner(user);
 }
 
 async function clearScenario(user: UserIdentity): Promise<void> {
@@ -6829,6 +6852,8 @@ function bindHandlers(user: UserIdentity): void {
   focusNewAssetNameInput();
 
   const openAssetButton = document.querySelector<HTMLButtonElement>("#open-asset-composer");
+  const importScenarioButton = document.querySelector<HTMLButtonElement>("#import-scenario-json");
+  const exportScenarioButton = document.querySelector<HTMLButtonElement>("#export-scenario-json");
   const closeSimulationExampleDetailsButton = document.querySelector<HTMLButtonElement>(
     "#close-simulation-example-details"
   );
@@ -6853,6 +6878,32 @@ function bindHandlers(user: UserIdentity): void {
     shouldFocusNewAssetName = true;
     activeSummaryTab = "assets";
     renderPlanner(user);
+  });
+
+  exportScenarioButton?.addEventListener("click", () => {
+    downloadScenarioExport(user);
+  });
+
+  importScenarioButton?.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    input.addEventListener(
+      "change",
+      () => {
+        const file = input.files?.[0];
+        if (!file) {
+          return;
+        }
+
+        void importScenarioFile(file, user).catch((error) => {
+          console.error(error);
+          window.alert(error instanceof Error ? error.message : "Scenario JSON could not be imported.");
+        });
+      },
+      { once: true }
+    );
+    input.click();
   });
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-summary-tab]")) {

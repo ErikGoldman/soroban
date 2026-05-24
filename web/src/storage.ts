@@ -368,8 +368,13 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
     events,
     startYear,
     yearsToShow,
+    simulationAttempts,
     simulationCurrentAge,
+    simulationTaxPreset,
     simulationHorizonYears,
+    simulationCustomAssetLiquidation,
+    simulationInflationRate,
+    simulationInflation,
     simulationVariableSweep,
   }: Omit<SavedPlannerState, "updatedAt">): Promise<SavedPlannerState> {
     const record: SavedPlannerState = {
@@ -384,8 +389,13 @@ export class IndexedDbPlanningStorage implements PlanningStorage {
       events,
       startYear,
       yearsToShow,
+      simulationAttempts,
       simulationCurrentAge,
+      simulationTaxPreset,
       simulationHorizonYears,
+      simulationCustomAssetLiquidation,
+      simulationInflationRate,
+      simulationInflation,
       simulationVariableSweep,
       updatedAt: new Date().toISOString(),
     };

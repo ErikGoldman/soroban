@@ -293,7 +293,7 @@ label {
 }
 
 .planner-header {
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 14px;
   align-items: center;
   margin-bottom: 16px;
