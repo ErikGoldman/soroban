@@ -2913,6 +2913,27 @@ function getOneTimeFormulaForFlow(flow: FlowDefinition): string {
   return flow.formula;
 }
 
+function getDisplayFormulaForFlow(flow: FlowDefinition): string {
+  return isFlowOneTimeMode(flow) ? getOneTimeFormulaForFlow(flow) : flow.formula;
+}
+
+function getPreviewAmountForFlow(flow: FlowDefinition, yearlyAmount: number): number {
+  if (!isFlowOneTimeMode(flow)) {
+    return yearlyAmount;
+  }
+
+  try {
+    const amount = evaluateFormula(getOneTimeFormulaForFlow(flow), buildPlannerFormulaContext());
+    if (!Number.isFinite(amount)) {
+      return yearlyAmount;
+    }
+
+    return flow.type === "income" ? Math.abs(amount) : -Math.abs(amount);
+  } catch {
+    return yearlyAmount;
+  }
+}
+
 function upsertExpenseChangeEvent(originalEventName: string | null, flowName: string, year: string, formula: string): void {
   const nextEvent = new Event({
     name: createExpenseChangeEventName(flowName, year),
@@ -3182,6 +3203,8 @@ function renderSetupFlowArea(
         .map(
           ({ flow, yearlyAmount }) => {
             const flowSummary = renderFlowSummary(flow, yearlyAmount);
+            const displayFormula = getDisplayFormulaForFlow(flow);
+            const previewAmount = getPreviewAmountForFlow(flow, yearlyAmount);
 
             return `
               <article
@@ -3207,7 +3230,7 @@ function renderSetupFlowArea(
                       <div data-inline-expense-value-input="true">
                         ${renderFormulaEditor({
                           inputName: "formula",
-                          value: flow.formula,
+                          value: displayFormula,
                           placeholder: "1,000",
                           variablesScope: "planner",
                           type: "money",
@@ -3223,7 +3246,7 @@ function renderSetupFlowArea(
                       data-edit-expense-value="${escapeAttribute(flow.name)}"
                       aria-label="Edit ${escapeAttribute(flow.name)} amount"
                     >
-                      ${formatSignedCurrency(yearlyAmount)}
+                      ${formatSignedCurrency(previewAmount)}
                     </button>
                       `
                   }
@@ -3243,7 +3266,7 @@ function renderVariablesCard(): string {
       ? plannerState.variables
           .map(
             (variable) => `
-              <label class="formula-input-row" data-variable-name="${escapeHtml(variable.name)}">
+              <label class="formula-input-row" data-variable-name="${escapeAttribute(variable.name)}">
                 <span class="formula-input-name">${escapeHtml(variable.name)}</span>
                 <input
                   name="value"
@@ -3316,6 +3339,96 @@ function renderBasicInfoSection(): string {
         </label>
       </div>
     </section>
+  `;
+}
+
+function renderSimulationVariableSweepControls(): string {
+  const variableOptions = plannerState.variables
+    .map(
+      (variable) => `
+        <option
+          value="${escapeAttribute(variable.name)}"
+          ${simulationDraft.variableSweep.variableName === variable.name ? "selected" : ""}
+        >
+          ${escapeHtml(variable.name)}
+        </option>
+      `
+    )
+    .join("");
+  const fieldsDisabled = plannerState.variables.length === 0 || !simulationDraft.variableSweep.enabled;
+
+  return `
+    <section class="simulation-sweep-config">
+      <div class="simulation-sweep-results-header">
+        <div>
+          <strong>Variable sweep</strong>
+          <p class="helper-copy">Run the simulation across a range of values for one formula input.</p>
+        </div>
+        <label class="switch-field" aria-label="Enable variable sweep">
+          <input
+            type="checkbox"
+            name="simulationVariableSweepEnabled"
+            ${simulationDraft.variableSweep.enabled ? "checked" : ""}
+            ${plannerState.variables.length === 0 ? "disabled" : ""}
+          />
+          <span class="switch-track" aria-hidden="true"></span>
+        </label>
+      </div>
+      ${
+        plannerState.variables.length === 0
+          ? `<p class="helper-copy">Create a variable in an asset, income, or expense formula to sweep it.</p>`
+          : `
+            <div class="simulation-sweep-fields">
+              <label>
+                Variable
+                <select name="simulationVariableSweepVariableName" ${fieldsDisabled ? "disabled" : ""}>
+                  ${variableOptions}
+                </select>
+              </label>
+              <label>
+                Min value
+                <input
+                  name="simulationVariableSweepMinValue"
+                  ${renderEditableNumberInputAttributes()}
+                  value="${escapeHtml(simulationDraft.variableSweep.minValue)}"
+                  ${fieldsDisabled ? "disabled" : ""}
+                />
+              </label>
+              <label>
+                Max value
+                <input
+                  name="simulationVariableSweepMaxValue"
+                  ${renderEditableNumberInputAttributes()}
+                  value="${escapeHtml(simulationDraft.variableSweep.maxValue)}"
+                  ${fieldsDisabled ? "disabled" : ""}
+                />
+              </label>
+            </div>
+          `
+      }
+    </section>
+  `;
+}
+
+function renderSimulationForm(): string {
+  return `
+    <form id="simulation-form" class="stack-form">
+      ${
+        !hasSimulationEntries()
+          ? `
+            <section class="simulation-section">
+              <div class="simulation-section-header">
+                <div>
+                  <h3>Scenario entries</h3>
+                </div>
+              </div>
+              <p class="helper-copy">Create at least one income, expense, or asset to run a simulation.</p>
+            </section>
+          `
+          : ""
+      }
+      ${renderSimulationVariableSweepControls()}
+    </form>
   `;
 }
 
@@ -5319,22 +5432,7 @@ function renderSimulationBoard(): string {
           `
       }
 
-      ${
-        !hasSimulationEntries()
-          ? `
-      <form id="simulation-form" class="stack-form">
-        <section class="simulation-section">
-          <div class="simulation-section-header">
-            <div>
-              <h3>Scenario entries</h3>
-            </div>
-          </div>
-          <p class="helper-copy">Create at least one income, expense, or asset to run a simulation.</p>
-        </section>
-      </form>
-            `
-          : `<form id="simulation-form" class="stack-form" hidden></form>`
-      }
+      ${renderSimulationForm()}
 
       ${renderVariablesCard()}
     </div>
@@ -7712,7 +7810,7 @@ function bindHandlers(user: UserIdentity): void {
     });
   }
 
-  for (const field of document.querySelectorAll<HTMLLabelElement>(".variable-edit-form")) {
+  for (const field of document.querySelectorAll<HTMLLabelElement>(".formula-input-row[data-variable-name]")) {
     const input = field.querySelector<HTMLInputElement>('input[name="value"]');
     if (!input) {
       continue;
@@ -10678,7 +10776,7 @@ async function saveInlineExpenseValue(flowName: string, formula: string, user: U
   }
 
   const trimmedFormula = formula.trim();
-  const previousFormulas = [existingFlow.formula];
+  const previousFormulas = getFlowAndEventFormulas(existingFlow);
 
   try {
     const validation = validateFormula(trimmedFormula, plannerState.variables.map((variable) => variable.name), "Amount");
@@ -10687,11 +10785,24 @@ async function saveInlineExpenseValue(flowName: string, formula: string, user: U
     }
 
     ensurePlannerVariablesExist(collectMissingFormulaVariables([trimmedFormula]));
-    updateFlow(flowName, {
-      ...existingFlow,
-      formula: trimmedFormula,
-    });
-    pruneUnusedPlannerVariables(collectRemovedFormulaVariables(previousFormulas, [trimmedFormula]));
+    if (isFlowOneTimeMode(existingFlow)) {
+      syncExpenseOneTimeSchedule(
+        existingFlow.name,
+        true,
+        getOneTimeYearForFlow(existingFlow),
+        trimmedFormula
+      );
+    } else {
+      updateFlow(flowName, {
+        ...existingFlow,
+        formula: trimmedFormula,
+      });
+    }
+
+    const nextFlow = plannerState.flows.find((flow) => flow.name === existingFlow.name);
+    pruneUnusedPlannerVariables(
+      collectRemovedFormulaVariables(previousFormulas, nextFlow ? getFlowAndEventFormulas(nextFlow) : [])
+    );
   } catch (error) {
     window.alert(error instanceof Error ? error.message : "Flow value could not be saved.");
     return false;

@@ -105,6 +105,71 @@ describe("planner cleanup", () => {
     expect(result.variables.map((variable) => variable.name)).toEqual(["salary"]);
   });
 
+  it("deletes event actions that add the removed flow", () => {
+    const snapshot = {
+      variables: [
+        { name: "salary", value: 5000 },
+        { name: "vacation", value: 2000 },
+      ],
+      flows: [
+        { name: "Salary", type: "income" as const, formula: "salary" },
+        { name: "Vacation", type: "expense" as const, formula: "0" },
+      ],
+      events: [
+        {
+          name: "Vacation purchase",
+          schedule: [
+            {
+              year: { year: 2027 },
+              actions: [
+                {
+                  kind: "add-flow" as const,
+                  flow: { name: "Vacation", type: "expense" as const, formula: "vacation" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = deleteFlowAndPruneVariables(snapshot, "Vacation");
+
+    expect(result.flows.map((flow) => flow.name)).toEqual(["Salary"]);
+    expect(result.events).toEqual([]);
+    expect(result.variables.map((variable) => variable.name)).toEqual(["salary"]);
+  });
+
+  it("keeps variables that are still referenced by asset formulas when a flow is deleted", () => {
+    const snapshot = {
+      variables: [
+        { name: "salary", value: 5000 },
+        { name: "bondPct", value: 0.35 },
+      ],
+      assets: [
+        {
+          name: "Bonds",
+          assetType: "federal-bonds" as const,
+          startingValue: 35000,
+          startingValueFormula: "100000 * bondPct",
+          expectedReturn: 0.03,
+          volatility: 0.08,
+          sellProportion: 1,
+        },
+      ],
+      flows: [
+        { name: "Salary", type: "income" as const, formula: "salary" },
+        { name: "Bond allocation review", type: "expense" as const, formula: "bondPct * 100" },
+      ],
+      events: [],
+    };
+
+    const result = deleteFlowAndPruneVariables(snapshot, "Bond allocation review");
+
+    expect(result.flows.map((flow) => flow.name)).toEqual(["Salary"]);
+    expect(result.variables.map((variable) => variable.name)).toEqual(["salary", "bondPct"]);
+  });
+
   it("deletes an event and prunes variables no longer referenced anywhere", () => {
     const snapshot = {
       variables: [

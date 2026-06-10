@@ -588,6 +588,7 @@ export interface EventDefinition {
 
 export interface PlannerSnapshot {
   variables: VariableDefinition[];
+  assets?: readonly AssetDefinition[];
   flows: FlowDefinition[];
   events: EventDefinition[];
 }
@@ -683,7 +684,9 @@ export function deleteFlowAndPruneVariables(
         .map((entry) => ({
           ...entry,
           actions: entry.actions.filter(
-            (action) => action.kind !== "set-flow-formula" || action.flowName !== flowName
+            (action) =>
+              (action.kind !== "set-flow-formula" || action.flowName !== flowName) &&
+              (action.kind !== "add-flow" || action.flow.name !== flowName)
           ),
         }))
         .filter((entry) => entry.actions.length > 0),
@@ -691,7 +694,7 @@ export function deleteFlowAndPruneVariables(
     .filter((event) => event.schedule.length > 0);
 
   return {
-    variables: pruneUnusedVariables({ variables: snapshot.variables, flows, events }),
+    variables: pruneUnusedVariables({ variables: snapshot.variables, assets: snapshot.assets, flows, events }),
     flows,
     events,
   };
@@ -706,6 +709,7 @@ export function deleteEventAndPruneVariables(
   return {
     variables: pruneUnusedVariables({
       variables: snapshot.variables,
+      assets: snapshot.assets,
       flows: snapshot.flows,
       events,
     }),
@@ -716,7 +720,33 @@ export function deleteEventAndPruneVariables(
 
 export function pruneUnusedVariables(snapshot: PlannerSnapshot): VariableDefinition[] {
   const referencedVariableNames = collectReferencedVariableNames(snapshot.flows, snapshot.events);
+  for (const variableName of collectAssetFormulaVariableNames(snapshot.assets ?? [])) {
+    referencedVariableNames.add(variableName);
+  }
   return snapshot.variables.filter((variable) => referencedVariableNames.has(variable.name));
+}
+
+function collectAssetFormulaVariableNames(assets: readonly AssetDefinition[]): Set<string> {
+  const referencedVariableNames = new Set<string>();
+
+  for (const asset of assets) {
+    const formulas =
+      asset.kind === "home"
+        ? [asset.initialCostFormula]
+        : [asset.startingValueFormula, asset.desiredAnnualContributionFormula];
+
+    for (const formula of formulas) {
+      if (!formula) {
+        continue;
+      }
+
+      for (const variableName of collectFormulaVariableNames(formula)) {
+        referencedVariableNames.add(variableName);
+      }
+    }
+  }
+
+  return referencedVariableNames;
 }
 
 export function collectReferencedVariableNames(
@@ -851,9 +881,11 @@ function normalizeHomeAssetDefinition(
   assertFiniteNumber(definition.propertyTaxRate, `Property tax rate for asset "${assetName}" must be finite.`);
   assertFiniteNumber(definition.purchaseYear, `Purchase year for asset "${assetName}" must be finite.`);
 
+  /*
   if (definition.initialCost <= 0) {
     throw new Error(`Home price for asset "${assetName}" must be greater than zero.`);
   }
+ */
   if (definition.cashPurchasePercent < 0 || definition.cashPurchasePercent > 1) {
     throw new Error(`Cash purchase percent for asset "${assetName}" must be between 0 and 1.`);
   }
