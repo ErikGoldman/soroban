@@ -53,6 +53,11 @@ export interface HomeAssetDefinition extends AssetDefinitionBase {
   monthlyNonTaxCosts: number;
   propertyTaxRate: number;
   purchaseYear: number;
+  // Optional sale: liquidate the home in this year, with selling costs as a
+  // fraction of market value. Proceeds (net of costs + mortgage payoff) become
+  // cash; profit above the §121 exclusion is taxed as a long-term capital gain.
+  saleYear?: number;
+  saleCostPercent?: number;
 }
 
 export type AssetDefinition = InvestmentAssetDefinition | HomeAssetDefinition;

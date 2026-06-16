@@ -189,6 +189,8 @@ interface NormalizedSimulationHomeAsset {
   monthlyNonTaxCosts: number;
   propertyTaxRate: number;
   purchaseYear: number;
+  saleYear: number | null;
+  saleCostPercent: number;
 }
 
 type NormalizedSimulationAsset = NormalizedSimulationInvestmentAsset | NormalizedSimulationHomeAsset;
@@ -828,6 +830,14 @@ function runSimulationAttempts({
         homeState,
         flowTotals
       );
+      const homeSaleResult = applyHomeSalesForYear(
+        snapshotYear,
+        normalizedAssets,
+        assetValues,
+        homeState,
+        flowTotals,
+        householdTaxProfile?.filingStatus ?? "individual"
+      );
       const contributionAmounts = new Map(
         reinvestableAssetNames.map((assetName) => [assetName, Math.max(0, yearlyPlan.flowAmounts.get(assetName) ?? 0)])
       );
@@ -840,7 +850,12 @@ function runSimulationAttempts({
         preTaxCashBalance: 0,
         taxableGains: 0,
       };
-      let cashBalance = homePurchaseResult.generatedCashTotal;
+      // a home sale this year realizes a long-term capital gain (above the
+      // primary-residence exclusion) — seed it so the year's taxes include it
+      if (homeSaleResult.taxableGain > 0.000001) {
+        applyTaxTreatmentAmount(saleResult.taxInput, "long-term-capital-gains", homeSaleResult.taxableGain);
+      }
+      let cashBalance = homePurchaseResult.generatedCashTotal + homeSaleResult.cashProceeds;
       let generatedExpenseTotal = homePurchaseResult.expenseTotal;
       let generatedCashTotal = 0;
       let totalTaxableGains = 0;
@@ -965,16 +980,20 @@ function runSimulationAttempts({
       }
 
       if (postTaxSurplus > 0) {
-        const surplusReinvestmentAssetNames = normalizedAssets
+        const surplusReinvestmentAssets = normalizedAssets
           .filter(
             (asset): asset is NormalizedSimulationInvestmentAsset =>
               asset.kind === "investment" && !isRetirementInvestmentAsset(asset)
           )
-          .map((asset) => asset.name);
+          .map((asset) => ({
+            name: asset.name,
+            isCashLike: isCashLikeInvestmentAsset(asset),
+            weight: asset.reinvestmentWeight,
+          }));
         const reinvestmentAmounts = buildSurplusReinvestmentAmounts(
           postTaxSurplus,
-          contributionAmounts,
-          surplusReinvestmentAssetNames
+          saleResult.assetValues,
+          surplusReinvestmentAssets
         );
         for (const [assetName, reinvestmentAmount] of reinvestmentAmounts) {
           saleResult.assetValues.set(assetName, (saleResult.assetValues.get(assetName) ?? 0) + reinvestmentAmount);
@@ -1339,6 +1358,9 @@ function normalizeSimulationAsset(asset: SimulationAssetInput): NormalizedSimula
       monthlyNonTaxCosts: Math.max(0, asset.monthlyNonTaxCosts),
       propertyTaxRate: Math.max(0, asset.propertyTaxRate),
       purchaseYear: asset.purchaseYear,
+      saleYear:
+        typeof asset.saleYear === "number" && asset.saleYear > asset.purchaseYear ? Math.floor(asset.saleYear) : null,
+      saleCostPercent: Math.max(0, Math.min(1, asset.saleCostPercent ?? 0)),
     };
   }
 
@@ -1356,6 +1378,8 @@ function normalizeSimulationAsset(asset: SimulationAssetInput): NormalizedSimula
     desiredAnnualContribution: Math.max(0, asset.desiredAnnualContribution ?? 0),
     expectedReturn: asset.expectedReturn,
     volatility: asset.volatility,
+    reinvestmentWeight:
+      typeof asset.reinvestmentWeight === "number" ? Math.max(0, asset.reinvestmentWeight) : undefined,
     sellProportion: Number.isFinite(asset.sellProportion) ? Math.max(0, asset.sellProportion) : 1,
     avoidEarlyWithdrawalPenalty: asset.avoidEarlyWithdrawalPenalty === true,
     cashGenerations: cashGenerations.map((cashGeneration, index) => ({
@@ -1568,6 +1592,53 @@ function applyHomePurchasesForYear(
     generatedCashTotal,
     expenseTotal,
   };
+}
+
+// Sell any home whose sale year is THIS year. The house is liquidated at its
+// current market value, selling costs come off the top, the remaining mortgage
+// is paid off, and the net proceeds become spendable/reinvestable cash (so the
+// normal surplus-reinvestment step distributes it across investments, auto or
+// weighted, exactly like income). Profit above the Section 121 primary-residence
+// exclusion is reported as a long-term capital gain so it is taxed correctly.
+function applyHomeSalesForYear(
+  year: number,
+  assets: readonly NormalizedSimulationAsset[],
+  assetValues: Map<string, number>,
+  homeState: HomeSimulationState,
+  flowTotals: Map<string, number>,
+  filingStatus: FilingStatus
+): { cashProceeds: number; taxableGain: number } {
+  let cashProceeds = 0;
+  let taxableGain = 0;
+
+  for (const asset of assets) {
+    if (asset.kind !== "home" || asset.saleYear === null || asset.saleYear !== year) {
+      continue;
+    }
+    const marketValue = homeState.marketValues.get(asset.name) ?? 0;
+    if (marketValue <= 0.000001) {
+      continue;
+    }
+    const mortgageBalance = homeState.mortgageBalances.get(asset.name) ?? 0;
+    const sellingCosts = marketValue * asset.saleCostPercent;
+    const amountRealized = marketValue - sellingCosts; // proceeds the IRS counts (net of selling costs)
+    const netToCash = amountRealized - mortgageBalance; // what actually lands in cash after the loan payoff
+
+    const grossGain = amountRealized - asset.initialCost;
+    const exclusion = filingStatus === "individual" ? 250000 : 500000;
+    const homeTaxableGain = Math.max(0, grossGain - exclusion);
+
+    // liquidate: the home leaves the portfolio for good
+    homeState.marketValues.set(asset.name, 0);
+    homeState.mortgageBalances.set(asset.name, 0);
+    assetValues.set(asset.name, 0);
+
+    cashProceeds += netToCash;
+    taxableGain += homeTaxableGain;
+    flowTotals.set(`${asset.name} sale proceeds`, (flowTotals.get(`${asset.name} sale proceeds`) ?? 0) + netToCash);
+  }
+
+  return { cashProceeds, taxableGain };
 }
 
 function applyPeriodAssetReturns({
@@ -1865,6 +1936,14 @@ function isRetirementInvestmentAsset(asset: NormalizedSimulationInvestmentAsset)
   return asset.assetType === "ira" || asset.assetType === "roth-ira" || asset.assetType === "401k";
 }
 
+// A cash-like asset (no expected growth, no volatility, no cash generation) is a
+// holding buffer rather than something we actively want to grow. Surplus cash is
+// reinvested OUT of these and into real growth assets, so they're only used as a
+// reinvestment destination when there is nothing else to put money into.
+function isCashLikeInvestmentAsset(asset: NormalizedSimulationInvestmentAsset): boolean {
+  return asset.expectedReturn === 0 && asset.volatility === 0 && asset.cashGenerations.length === 0;
+}
+
 function isAssetAccessibleForDefaultSale(asset: NormalizedSimulationInvestmentAsset, age: number): boolean {
   return !asset.avoidEarlyWithdrawalPenalty || age >= EARLY_WITHDRAWAL_PENALTY_AVOIDANCE_AGE;
 }
@@ -1897,33 +1976,78 @@ function get401kContributionLimit(age: number): number {
 
 function buildSurplusReinvestmentAmounts(
   availableSurplus: number,
-  contributionAmounts: ReadonlyMap<string, number>,
-  assetNames: readonly string[]
+  assetValues: ReadonlyMap<string, number>,
+  reinvestmentAssets: readonly { name: string; isCashLike: boolean; weight?: number }[]
 ): Map<string, number> {
   const reinvestmentAmounts = new Map<string, number>();
-  let remainingSurplus = Math.max(0, availableSurplus);
-
-  for (const assetName of assetNames) {
-    if (remainingSurplus <= 0.000001) {
-      break;
-    }
-
-    const matchedFlowAmount = Math.max(0, contributionAmounts.get(assetName) ?? 0);
-    if (matchedFlowAmount <= 0) {
-      continue;
-    }
-
-    const reinvestmentAmount = Math.min(matchedFlowAmount, remainingSurplus);
-    reinvestmentAmounts.set(assetName, reinvestmentAmount);
-    remainingSurplus -= reinvestmentAmount;
+  const surplus = Math.max(0, availableSurplus);
+  if (surplus <= 0.000001 || reinvestmentAssets.length === 0) {
+    return reinvestmentAmounts;
   }
 
-  if (remainingSurplus > 0.000001 && assetNames.length > 0) {
-    const fallbackAssetName = assetNames[0];
-    reinvestmentAmounts.set(
-      fallbackAssetName,
-      (reinvestmentAmounts.get(fallbackAssetName) ?? 0) + remainingSurplus
-    );
+  // Custom allocation: when explicit reinvestment weights are supplied (the user
+  // chose a target split in the income editor), divide the surplus by those
+  // weights directly — equal weights give an equal split, unequal weights skew
+  // accordingly — rather than mirroring current holdings.
+  const customAssets = reinvestmentAssets.filter(
+    (asset) => typeof asset.weight === "number" && asset.weight > 0
+  );
+  if (customAssets.length > 0) {
+    const totalCustomWeight = customAssets.reduce((total, asset) => total + (asset.weight ?? 0), 0);
+    let allocatedCustom = 0;
+    let heaviestCustom = customAssets[0];
+    for (const asset of customAssets) {
+      if ((asset.weight ?? 0) > (heaviestCustom.weight ?? 0)) {
+        heaviestCustom = asset;
+      }
+      const amount = (surplus * (asset.weight ?? 0)) / totalCustomWeight;
+      if (amount > 0.000001) {
+        reinvestmentAmounts.set(asset.name, amount);
+        allocatedCustom += amount;
+      }
+    }
+    const leftoverCustom = surplus - allocatedCustom;
+    if (Math.abs(leftoverCustom) > 0.000001) {
+      reinvestmentAmounts.set(
+        heaviestCustom.name,
+        (reinvestmentAmounts.get(heaviestCustom.name) ?? 0) + leftoverCustom
+      );
+    }
+    return reinvestmentAmounts;
+  }
+
+  // Reinvest surplus cash into non-house assets in the proportion they are
+  // currently owned (e.g. a 70/30 stock/bond split reinvests new cash 70/30,
+  // drifting as the holdings drift). Prefer growth assets; only fall back to
+  // cash-like buffers when there is nothing else to hold the money.
+  const growthAssets = reinvestmentAssets.filter((asset) => !asset.isCashLike);
+  const weightedAssets = growthAssets.length > 0 ? growthAssets : [...reinvestmentAssets];
+
+  const weights = weightedAssets.map((asset) => Math.max(0, assetValues.get(asset.name) ?? 0));
+  let totalWeight = weights.reduce((total, weight) => total + weight, 0);
+  // No current holdings to proportion against — split the surplus evenly so it
+  // still gets put to work.
+  const effectiveWeights = totalWeight > 0.000001 ? weights : weightedAssets.map(() => 1);
+  totalWeight = effectiveWeights.reduce((total, weight) => total + weight, 0);
+
+  let allocated = 0;
+  let heaviestIndex = 0;
+  for (let index = 0; index < weightedAssets.length; index += 1) {
+    if (effectiveWeights[index] > effectiveWeights[heaviestIndex]) {
+      heaviestIndex = index;
+    }
+    const amount = (surplus * effectiveWeights[index]) / totalWeight;
+    if (amount > 0.000001) {
+      reinvestmentAmounts.set(weightedAssets[index].name, amount);
+      allocated += amount;
+    }
+  }
+
+  // Hand any rounding remainder to the largest holding.
+  const leftover = surplus - allocated;
+  if (Math.abs(leftover) > 0.000001) {
+    const heaviestName = weightedAssets[heaviestIndex].name;
+    reinvestmentAmounts.set(heaviestName, (reinvestmentAmounts.get(heaviestName) ?? 0) + leftover);
   }
 
   return reinvestmentAmounts;
