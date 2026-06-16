@@ -172,13 +172,13 @@ function NetWorthChart({ plan, series, w = 1000, h = 360, showMarks = true, onMi
       {gy.map((v, i) => (
         <g key={i}>
           <line x1={pad.l} y1={py(v)} x2={w - pad.r} y2={py(v)} stroke={WF.line2} strokeWidth="1" strokeDasharray="2 4" />
-          <text x={pad.l - 8} y={py(v) + 3} textAnchor="end" fontFamily={WF.mono} fontSize="9.5" fill={WF.ink3}>{fmtMoney(v)}</text>
+          <text x={pad.l - 8} y={py(v) + 3} textAnchor="end" fontFamily={WF.mono} fontSize={WF.fs(9.5)} fill={WF.ink3}>{fmtMoney(v)}</text>
         </g>
       ))}
 
       {/* x-axis year labels */}
       {xt.map((yr) => (
-        <text key={yr} x={px(yr)} y={h - pad.b + 16} textAnchor="middle" fontFamily={WF.mono} fontSize="9.5" fill={WF.ink3}>{yr}</text>
+        <text key={yr} x={px(yr)} y={h - pad.b + 16} textAnchor="middle" fontFamily={WF.mono} fontSize={WF.fs(9.5)} fill={WF.ink3}>{yr}</text>
       ))}
 
       {/* child birth-year markers — draggable, hilite diamonds */}
@@ -190,7 +190,7 @@ function NetWorthChart({ plan, series, w = 1000, h = 360, showMarks = true, onMi
           <g key={'c' + i}>
             <line x1={x} y1={iy + 3.5} x2={x} y2={h - pad.b} stroke={WF.ink} strokeWidth="1" strokeDasharray="2 4" opacity="0.3" />
             <circle cx={x} cy={iy} r={3.5} fill={WF.paper} stroke={WF.ink} strokeWidth={isDragging ? 2.2 : 1.5} />
-            <text x={x + 6} y={iy + 8} fontFamily={WF.mono} fontSize="8.5" fill={WF.ink2}>CHILD {i + 1}</text>
+            <text x={x + 6} y={iy + 8} fontFamily={WF.mono} fontSize={WF.fs(8.5)} fill={WF.ink2}>CHILD {i + 1}</text>
             <rect x={x - 12} y={iy - 12} width="24" height="30" fill="transparent"
               style={{ cursor: 'ew-resize' }}
               onMouseDown={(e) => { e.stopPropagation(); setHover(null); setChildDrag({ childIdx: cm.childIdx }); if (onDragStart) onDragStart(); }} />
@@ -209,7 +209,7 @@ function NetWorthChart({ plan, series, w = 1000, h = 360, showMarks = true, onMi
             <rect x={x - 3.4} y={pad.t - 3.4} width="6.8" height="6.8"
               fill={active ? WF.accent : WF.ink} transform={`rotate(45 ${x} ${pad.t})`}
               stroke={WF.paper} strokeWidth={active ? 1.4 : 0} />
-            <text x={x + 6} y={ly} fontFamily={WF.mono} fontSize="8.5" fill={WF.ink2}>{m.label.toUpperCase()}</text>
+            <text x={x + 6} y={ly} fontFamily={WF.mono} fontSize={WF.fs(8.5)} fill={WF.ink2}>{m.label.toUpperCase()}</text>
             {canDrag && (
               <rect x={x - 9} y={pad.t - 10} width="18" height="20" fill="transparent"
                 style={{ cursor: 'ew-resize' }}
@@ -251,10 +251,10 @@ function NetWorthChart({ plan, series, w = 1000, h = 360, showMarks = true, onMi
         strong ? (
           <g key={key}>
             <circle cx={px(last.year)} cy={py(last.nw)} r="3.6" fill={WF.paper} stroke={WF.ink} strokeWidth="2" />
-            <text x={rEdgeX} y={y + 4} fontFamily={WF.sans} fontWeight="700" fontSize="14" fill={WF.ink} letterSpacing="-0.3">{fmtMoney(val)}</text>
+            <text x={rEdgeX} y={y + 4} fontFamily={WF.sans} fontWeight="700" fontSize={WF.fs(14)} fill={WF.ink} letterSpacing="-0.3">{fmtMoney(val)}</text>
           </g>
         ) : (
-          <text key={key} x={rEdgeX} y={y + 4} fontFamily={WF.mono} fontSize="9.5" fill={WF.ink3}
+          <text key={key} x={rEdgeX} y={y + 4} fontFamily={WF.mono} fontSize={WF.fs(9.5)} fill={WF.ink3}
             style={{ textTransform: 'uppercase' }}>
             {label} {fmtShort(val)}
           </text>
@@ -265,8 +265,8 @@ function NetWorthChart({ plan, series, w = 1000, h = 360, showMarks = true, onMi
       {!hd && !hasBands && (
         <>
           <circle cx={px(last.year)} cy={py(last.nw)} r="3.6" fill={WF.paper} stroke={WF.ink} strokeWidth="2" />
-          <text x={w - pad.r + 8} y={py(last.nw) - 2} fontFamily={WF.sans} fontWeight="700" fontSize="14" fill={WF.ink}>{fmtMoney(last.nw)}</text>
-          <text x={w - pad.r + 8} y={py(last.nw) + 10} fontFamily={WF.mono} fontSize="8.5" fill={WF.ink3}>at age {last.age}</text>
+          <text x={w - pad.r + 8} y={py(last.nw) - 2} fontFamily={WF.sans} fontWeight="700" fontSize={WF.fs(14)} fill={WF.ink}>{fmtMoney(last.nw)}</text>
+          <text x={w - pad.r + 8} y={py(last.nw) + 10} fontFamily={WF.mono} fontSize={WF.fs(8.5)} fill={WF.ink3}>at age {last.age}</text>
         </>
       )}
 
@@ -276,21 +276,21 @@ function NetWorthChart({ plan, series, w = 1000, h = 360, showMarks = true, onMi
           <line x1={hx} y1={pad.t} x2={hx} y2={h - pad.b} stroke={WF.ink} strokeWidth="1" strokeOpacity="0.3" />
           <circle cx={hx} cy={hy} r="4" fill={WF.paper} stroke={WF.ink} strokeWidth="2" />
           <rect x={tipX} y={tipY} width={tipW} height={tipH} fill="#CBFF37" rx="2" stroke="#1b1b1d" strokeWidth="1.5" />
-          <text x={tipX + 10} y={tipY + 14} fontFamily={WF.mono} fontSize="9" fill="#1b1b1d">
+          <text x={tipX + 10} y={tipY + 14} fontFamily={WF.mono} fontSize={WF.fs(9)} fill="#1b1b1d">
             {hd.year} · age {hd.age}
           </text>
-          <text x={tipX + 10} y={tipY + 33} fontFamily={WF.sans} fontWeight="700" fontSize="15" fill="#1b1b1d">
+          <text x={tipX + 10} y={tipY + 33} fontFamily={WF.sans} fontWeight="700" fontSize={WF.fs(15)} fill="#1b1b1d">
             {fmtMoney(hVal)}
           </text>
           {hSpec && (
             <text x={tipX + 10} y={tipY + 48} textAnchor="start"
-              fontFamily={WF.mono} fontSize="8.5" fill="#1b1b1d" fillOpacity="0.6">
+              fontFamily={WF.mono} fontSize={WF.fs(8.5)} fill="#1b1b1d" fillOpacity="0.6">
               {hSpec.key === 'nw' ? 'median' : hSpec.label + ' percentile'}
             </text>
           )}
           {canClick && (
             <text x={tipX + 10} y={tipY + 63} textAnchor="start"
-              fontFamily={WF.mono} fontSize="8" fill="#1b1b1d" fillOpacity="0.85" style={{ fontWeight: 700 }}>
+              fontFamily={WF.mono} fontSize={WF.fs(8)} fill="#1b1b1d" fillOpacity="0.85" style={{ fontWeight: 700 }}>
               → CLICK FOR YEARLY DETAIL
             </text>
           )}
@@ -380,7 +380,7 @@ function MiniNW({ series, plan, w = 300, h = 44 }) {
       {hov && (
         <div style={{ position: 'absolute', top: 0, left: Math.min(px(hov.year) / w * 100, 72) + '%', transform: 'translateX(-50%)',
           pointerEvents: 'none', background: '#CCFF36', border: `1px solid ${WF.ink}`, padding: '2px 7px',
-          fontFamily: WF.mono, fontSize: 9.5, color: WF.ink, whiteSpace: 'nowrap', lineHeight: 1.5 }}>
+          fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink, whiteSpace: 'nowrap', lineHeight: 1.5 }}>
           <span style={{ fontWeight: 700 }}>{fmtMoney(hov.nw)}</span>
           <span style={{ color: WF.ink3, marginLeft: 5 }}>age {hov.age}</span>
         </div>

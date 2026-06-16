@@ -158,10 +158,10 @@ function PItemRow({ plan, item, open, onToggle, onDelete, onSetChange, onToggleH
         }
         <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-            <span style={{ fontFamily: WF.sans, fontSize: 13, fontWeight: 600, color: item.label.trim() ? WF.ink : WF.ink3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: 1 }}>{label}</span>
+            <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), fontWeight: 600, color: item.label.trim() ? WF.ink : WF.ink3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: 1 }}>{label}</span>
             <span style={{ flexShrink: 0 }}><ItemTags item={item} /></span>
           </span>
-          {linked ? <LinkChip plan={plan} item={item} /> : sub ? <span style={{ fontFamily: WF.mono, color: WF.ink3, fontSize: "12px" }}>{sub}</span> : null}
+          {linked ? <LinkChip plan={plan} item={item} /> : sub ? <span style={{ fontFamily: WF.mono, color: WF.ink3, fontSize: WF.fs(12) }}>{sub}</span> : null}
         </span>
       </span>
       {editing ?
@@ -183,10 +183,10 @@ function PItemRow({ plan, item, open, onToggle, onDelete, onSetChange, onToggleH
             setEditing(false);
           } else if (e.key === 'Escape') { e.stopPropagation(); setEditing(false); }
         }}
-        style={{ justifySelf: 'end', width: 100, textAlign: 'right', fontFamily: WF.mono, fontSize: 13.5, fontWeight: 600, color: WF.ink, border: 'none', borderBottom: `2px solid ${WF.ink}`, background: 'transparent', outline: 'none', fontVariantNumeric: 'tabular-nums', padding: '0 2px' }} /> :
+        style={{ justifySelf: 'end', width: 100, textAlign: 'right', fontFamily: WF.mono, fontSize: WF.fs(13.5), fontWeight: 600, color: WF.ink, border: 'none', borderBottom: `2px solid ${WF.ink}`, background: 'transparent', outline: 'none', fontVariantNumeric: 'tabular-nums', padding: '0 2px' }} /> :
 
 
-      <span onClick={startEdit} style={{ justifySelf: 'end', fontFamily: WF.mono, fontSize: 13.5, fontWeight: 600, color: WF.ink, fontVariantNumeric: 'tabular-nums', cursor: linked ? 'default' : 'text', borderBottom: linked ? 'none' : `1px dashed ${WF.line}` }}>{amountStr}</span>
+      <span onClick={startEdit} style={{ justifySelf: 'end', fontFamily: WF.mono, fontSize: WF.fs(13.5), fontWeight: 600, color: WF.ink, fontVariantNumeric: 'tabular-nums', cursor: linked ? 'default' : 'text', borderBottom: linked ? 'none' : `1px dashed ${WF.line}` }}>{amountStr}</span>
       }
       <button className="pr-del" title={item.hidden ? 'show item' : 'hide item'} onClick={(e) => { e.stopPropagation(); onToggleHidden && onToggleHidden(); }} style={{ width: 22, height: 22, border: 'none', borderRadius: 0, background: 'transparent', color: WF.ink, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: item.hidden ? 0.7 : undefined }}>
         {item.hidden
@@ -194,7 +194,7 @@ function PItemRow({ plan, item, open, onToggle, onDelete, onSetChange, onToggleH
           : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         }
       </button>
-      <button className="pr-del" title={`delete ${label}`} onClick={(e) => {e.stopPropagation();onDelete(item);}} style={{ width: 22, height: 22, border: 'none', borderRadius: 0, background: 'transparent', color: WF.ink, cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <button className="pr-del" title={`delete ${label}`} onClick={(e) => {e.stopPropagation();onDelete(item);}} style={{ width: 22, height: 22, border: 'none', borderRadius: 0, background: 'transparent', color: WF.ink, cursor: 'pointer', fontSize: WF.fs(13), lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="3 6 5 6 21 6"></polyline>
           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -202,7 +202,7 @@ function PItemRow({ plan, item, open, onToggle, onDelete, onSetChange, onToggleH
           <line x1="14" y1="11" x2="14" y2="17"></line>
         </svg>
       </button>
-      <span className="wf-caret" style={{ fontFamily: WF.mono, fontSize: 13, color: WF.ink3, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s', justifySelf: 'center' }}>›</span>
+      <span className="wf-caret" style={{ fontFamily: WF.mono, fontSize: WF.fs(13), color: WF.ink3, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s', justifySelf: 'center' }}>›</span>
     </div>);
 
 }
@@ -216,11 +216,11 @@ function PSectionHeader({ section, plan, collapsed, onToggle, onDragStart, onDra
   return (
     <div className="wf-tab" draggable={true} onDragStart={onDragStart} onDragEnd={onDragEnd} onClick={onToggle} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 4px 8px', borderBottom: `1.5px solid ${WF.ink}`, cursor: 'grab' }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-        <span className="wf-caret" style={{ fontFamily: WF.mono, fontSize: 12, color: WF.ink3, display: 'inline-block', transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s' }}>›</span>
-        <span style={{ fontFamily: WF.sans, color: WF.ink, fontWeight: "700", fontSize: "14px" }}>{section.label}</span>
-        <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>{collapsed ? (() => { const hidden = items.filter(i => i.hidden).length; return `${items.length} item${items.length === 1 ? '' : 's'}${hidden ? `, ${hidden} hidden` : ''}`; })() : ''}</span>
+        <span className="wf-caret" style={{ fontFamily: WF.mono, fontSize: WF.fs(12), color: WF.ink3, display: 'inline-block', transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s' }}>›</span>
+        <span style={{ fontFamily: WF.sans, color: WF.ink, fontWeight: "700", fontSize: WF.fs(14) }}>{section.label}</span>
+        <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>{collapsed ? (() => { const hidden = items.filter(i => i.hidden).length; return `${items.length} item${items.length === 1 ? '' : 's'}${hidden ? `, ${hidden} hidden` : ''}`; })() : ''}</span>
       </span>
-      {section.id !== 'income' && items.length > 0 && <span style={{ fontFamily: WF.mono, fontSize: 11.5, color: WF.ink, fontWeight: 600 }}>{fmtShort(total)} <span style={{ color: WF.ink3, fontWeight: 400 }}>{unit}</span></span>}
+      {section.id !== 'income' && items.length > 0 && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(11.5), color: WF.ink, fontWeight: 600 }}>{fmtShort(total)} <span style={{ color: WF.ink3, fontWeight: 400 }}>{unit}</span></span>}
     </div>);
 
 }
@@ -339,7 +339,7 @@ function PSectionList({ p, openId, setOpenId, requestDelete, addOpen, setAddOpen
                               a.click();
                               URL.revokeObjectURL(url);
                             }}
-                            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '0 9px', height: 24, border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, fontFamily: WF.mono, fontSize: 10, color: WF.ink2, cursor: 'pointer', letterSpacing: 0.3, transition: 'border-color .12s, color .12s' }}
+                            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '0 9px', height: 24, border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink2, cursor: 'pointer', letterSpacing: 0.3, transition: 'border-color .12s, color .12s' }}
                             onMouseEnter={(e) => { e.currentTarget.style.borderColor = WF.ink; e.currentTarget.style.color = WF.ink; }}
                             onMouseLeave={(e) => { e.currentTarget.style.borderColor = WF.line; e.currentTarget.style.color = WF.ink2; }}
                           >
@@ -360,11 +360,11 @@ function PSectionList({ p, openId, setOpenId, requestDelete, addOpen, setAddOpen
               <AddItemForm section={sec.id} p={p} onClose={() => setAddOpen(null)} onAdded={(item) => {setAddOpen(null);onAdded(item);}} />
             ) : items.length === 0 ? (
               <div className="wf-hatch" style={{ marginTop: 10, border: `1px dashed ${WF.line}`, borderRadius: 2, padding: '26px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-                <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink, textAlign: 'center' }}>{SECTION_EMPTY[sec.id]}</span>
-                <button className="wf-tab" onClick={() => {setAddOpen(sec.id);}} style={{ padding: '0 13px', height: 32, boxSizing: 'border-box', border: 'none', borderRadius: 0, backgroundColor: WF.paper, backgroundImage: `url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' stroke='%23c4c4c9' stroke-width='1.5' stroke-dasharray='4%2c4' stroke-linecap='square'/%3e%3c/svg%3e")`, backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink, cursor: 'pointer' }}>+ {ADD_LABEL[sec.id]}</button>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink, textAlign: 'center' }}>{SECTION_EMPTY[sec.id]}</span>
+                <button className="wf-tab" onClick={() => {setAddOpen(sec.id);}} style={{ padding: '0 13px', height: 32, boxSizing: 'border-box', border: 'none', borderRadius: 0, backgroundColor: WF.paper, backgroundImage: `url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' stroke='%23c4c4c9' stroke-width='1.5' stroke-dasharray='4%2c4' stroke-linecap='square'/%3e%3c/svg%3e")`, backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink, cursor: 'pointer' }}>+ {ADD_LABEL[sec.id]}</button>
               </div>
             ) : (
-              <button className="wf-tab" onClick={() => {setAddOpen(sec.id);}} style={{ marginTop: 8, padding: '0 11px', height: 32, boxSizing: 'border-box', border: 'none', borderRadius: 0, backgroundColor: WF.paper, backgroundImage: `url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' stroke='%23c4c4c9' stroke-width='1.5' stroke-dasharray='4%2c4' stroke-linecap='square'/%3e%3c/svg%3e")`, backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink, cursor: 'pointer' }}>+ {ADD_LABEL[sec.id]}</button>
+              <button className="wf-tab" onClick={() => {setAddOpen(sec.id);}} style={{ marginTop: 8, padding: '0 11px', height: 32, boxSizing: 'border-box', border: 'none', borderRadius: 0, backgroundColor: WF.paper, backgroundImage: `url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' stroke='%23c4c4c9' stroke-width='1.5' stroke-dasharray='4%2c4' stroke-linecap='square'/%3e%3c/svg%3e")`, backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink, cursor: 'pointer' }}>+ {ADD_LABEL[sec.id]}</button>
             )}
               </div>
             }
@@ -396,9 +396,9 @@ function PTimeline({ plan }) {
           return (
             <div key={item.id} style={{ display: 'flex', alignItems: 'center', borderTop: `1px solid ${idx === 0 ? WF.line : WF.line2}`, flex: 1, minHeight: 24 }}>
               <div style={{ width: 150, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
-                {idx === 0 ? <span style={{ fontFamily: WF.mono, fontSize: 8, letterSpacing: 0.4, textTransform: 'uppercase', color: WF.ink3, width: 16 }}>{sec.label[0]}</span> : <span style={{ width: 16 }} />}
+                {idx === 0 ? <span style={{ fontFamily: WF.mono, fontSize: WF.fs(8), letterSpacing: 0.4, textTransform: 'uppercase', color: WF.ink3, width: 16 }}>{sec.label[0]}</span> : <span style={{ width: 16 }} />}
                 <span style={{ width: 6, height: 6, borderRadius: item.section === 'asset' ? 1 : '50%', transform: item.section === 'asset' ? 'rotate(45deg)' : 'none', background: item.section === 'income' ? WF.ink : WF.paper, border: `1.5px solid ${WF.ink}`, flexShrink: 0 }} />
-                <span style={{ fontFamily: WF.sans, fontSize: 11.5, color: WF.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label.trim() || '(unnamed)'}</span>
+                <span style={{ fontFamily: WF.sans, fontSize: WF.fs(11.5), color: WF.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label.trim() || '(unnamed)'}</span>
               </div>
               <div style={{ position: 'relative', flex: 1, height: '100%' }}>
                 {PTL_YEARS.map((y) => <div key={y} style={{ position: 'absolute', left: pct(y) + '%', top: 0, bottom: 0, width: 1, background: WF.line2 }} />)}
@@ -417,7 +417,7 @@ function PTimeline({ plan }) {
       <div style={{ display: 'flex', borderTop: `1.5px solid ${WF.ink}` }}>
         <div style={{ width: 150, flexShrink: 0 }} />
         <div style={{ position: 'relative', flex: 1, height: 20 }}>
-          {PTL_YEARS.map((y) => <span key={y} style={{ position: 'absolute', left: pct(y) + '%', top: 3, transform: 'translateX(-50%)', fontFamily: WF.mono, fontSize: 9, color: WF.ink3 }}>{y}</span>)}
+          {PTL_YEARS.map((y) => <span key={y} style={{ position: 'absolute', left: pct(y) + '%', top: 3, transform: 'translateX(-50%)', fontFamily: WF.mono, fontSize: WF.fs(9), color: WF.ink3 }}>{y}</span>)}
         </div>
       </div>
     </div>);
@@ -440,15 +440,15 @@ function ImportAccountsModal({ onClose, onImport }) {
     <ModalShell onClose={onClose} width={540}>
       <ModalHead eyebrow="connect an account" title="Import from an institution" onClose={onClose} />
       <Rule />
-      <span style={{ fontFamily: WF.sans, fontSize: 12.5, color: WF.ink2, lineHeight: 1.5 }}>Pick where your money lives — we’ll pull in balances and recurring deposits as editable items. Nothing leaves your browser.</span>
+      <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), color: WF.ink2, lineHeight: 1.5 }}>Pick where your money lives — we’ll pull in balances and recurring deposits as editable items. Nothing leaves your browser.</span>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
         {PROVIDERS.map((prov) => {
           const on = connecting === prov.name;
           return (
             <button key={prov.name} className="wf-tab" onClick={() => connect(prov)} disabled={!!connecting}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, padding: 12, border: `1px solid ${on ? WF.ink : WF.line}`, borderRadius: 2, background: WF.paper, cursor: connecting ? 'default' : 'pointer', opacity: connecting && !on ? 0.45 : 1 }}>
-              <div className="wf-hatch" style={{ width: '100%', height: 28, border: `1px solid ${WF.line2}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: WF.mono, fontSize: 9.5, color: WF.ink2, letterSpacing: 0.3 }}>{prov.name}</div>
-              <span style={{ fontFamily: WF.mono, fontSize: 9, color: WF.ink3, textTransform: 'uppercase', letterSpacing: 0.4 }}>{on ? 'connecting…' : prov.tag}</span>
+              <div className="wf-hatch" style={{ width: '100%', height: 28, border: `1px solid ${WF.line2}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink2, letterSpacing: 0.3 }}>{prov.name}</div>
+              <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9), color: WF.ink3, textTransform: 'uppercase', letterSpacing: 0.4 }}>{on ? 'connecting…' : prov.tag}</span>
             </button>
           );
         })}

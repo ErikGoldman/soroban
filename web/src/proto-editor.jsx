@@ -42,7 +42,7 @@ function ChangeRows({ item, p, label }) {
               {showLabels && <Eyebrow>amount</Eyebrow>}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <NumCell value={c.amount} onChange={(v) => p.setChange(item.id, c.i, 'amount', v)} w={130} strong />
-                {unit && <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>{unit}</span>}
+                {unit && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>{unit}</span>}
               </div>
             </div>
             {!oneTime && !isAsset && (
@@ -55,20 +55,20 @@ function ChangeRows({ item, p, label }) {
                     <YearCell value={c.year} onChange={(v) => { p.setChange(item.id, c.i, 'year', v); if (isSchool && isLast) p.update(item.id, { endYear: v + K12_SPAN }); }} />
                   </div>
                 </div>
-                <span style={{ fontFamily: WF.mono, fontSize: 13, color: WF.ink3, paddingBottom: 8 }}>→</span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(13), color: WF.ink3, paddingBottom: 8 }}>→</span>
                 {/* ENDS */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   {showLabels && <Eyebrow>ends</Eyebrow>}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 33 }}>
                     {isLast ? (
                       neverEnds
-                        ? <span style={{ fontFamily: WF.mono, fontSize: 12, color: WF.ink3 }}>never</span>
+                        ? <span style={{ fontFamily: WF.mono, fontSize: WF.fs(12), color: WF.ink3 }}>never</span>
                         : <>
                             {monthly && <MonthSelect value={item.endMonth || 0} onChange={(v) => p.update(item.id, { endMonth: v })} />}
                             <YearCell value={toYear} onChange={(v) => p.update(item.id, { endYear: v })} />
                           </>
                     ) : (
-                      <span style={{ fontFamily: WF.mono, fontSize: 11.5, color: WF.ink3 }}>
+                      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(11.5), color: WF.ink3 }}>
                         {monthly && cs[idx + 1] ? MONTHS[cs[idx + 1].month || 0] + ' ' : ''}{cs[idx + 1] ? cs[idx + 1].year : ''}
                       </span>
                     )}
@@ -107,7 +107,7 @@ function ChangeRows({ item, p, label }) {
         );
       })}
       {dupLabel && <ErrNote>two changes land on {dupLabel} — the later one in the list wins. remove or re-date one.</ErrNote>}
-      <button className="wf-tab" onClick={() => p.addChange(item.id)} style={{ alignSelf: 'flex-start', padding: '0 11px', height: 32, boxSizing: 'border-box', border: 'none', borderRadius: 0, backgroundColor: WF.paper, backgroundImage: `url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' stroke='%23c4c4c9' stroke-width='1.5' stroke-dasharray='4%2c4' stroke-linecap='square'/%3e%3c/svg%3e")`, backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink, cursor: 'pointer' }}>+ {label}</button>
+      <button className="wf-tab" onClick={() => p.addChange(item.id)} style={{ alignSelf: 'flex-start', padding: '0 11px', height: 32, boxSizing: 'border-box', border: 'none', borderRadius: 0, backgroundColor: WF.paper, backgroundImage: `url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' stroke='%23c4c4c9' stroke-width='1.5' stroke-dasharray='4%2c4' stroke-linecap='square'/%3e%3c/svg%3e")`, backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink, cursor: 'pointer' }}>+ {label}</button>
     </div>
   );
 }
@@ -115,7 +115,7 @@ function ChangeRows({ item, p, label }) {
 // ── asset type select (mirrors the engine's InvestmentAssetType + home) ──
 function AssetTypeSelect({ value, onChange, w = 150 }) {
   return (
-    <select value={value || ''} onChange={(e) => onChange(e.target.value)} style={{ fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink, padding: '7px 8px', border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, width: w, cursor: 'pointer' }}>
+    <select value={value || ''} onChange={(e) => onChange(e.target.value)} style={{ fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink, padding: '7px 8px', border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, width: w, cursor: 'pointer' }}>
       {!value && <option value="">pick a type…</option>}
       {ASSET_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
     </select>
@@ -130,7 +130,7 @@ function EditorNameRow({ p, item, onDelete }) {
       <div style={{ flex: 1, maxWidth: 340, display: 'flex', flexDirection: 'column', gap: 5 }}>
         <Eyebrow>name</Eyebrow>
         <TextInput value={item.label} onChange={(v) => p.update(item.id, { label: v })} placeholder="Give it a name" error={empty} />
-        {empty && <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink }}>! name can’t be empty</span>}
+        {empty && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink }}>! name can’t be empty</span>}
       </div>
       <button className="wf-tab" onClick={() => onDelete(item)} title="Delete item" style={{ marginLeft: 'auto', marginRight: 30, marginTop: 19, width: 22, height: 22, padding: 0, border: 'none', background: 'transparent', color: WF.ink, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
@@ -170,34 +170,34 @@ function IncomeDistributionPanel({ item, p, plan }) {
   return (
     <div style={{ border: `1px solid ${WF.line}`, borderRadius: 3, padding: '12px 14px', background: WF.paper, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-        <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, color: WF.ink }}>Savings allocation</span>
+        <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, color: WF.ink }}>Savings allocation</span>
         <Check checked={enabled} label={enabled ? 'Custom' : 'Auto (proportional)'} onClick={toggle} />
       </div>
       {!enabled && (
-        <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3, lineHeight: 1.6 }}>Surplus income is invested proportionally across all assets. Enable Custom to choose a target split.</span>
+        <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3, lineHeight: 1.6 }}>Surplus income is invested proportionally across all assets. Enable Custom to choose a target split.</span>
       )}
       {enabled && investable.length === 0 && (
         <ErrNote>No investable assets — add stocks, bonds, or retirement accounts under Your money.</ErrNote>
       )}
       {enabled && investable.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3, lineHeight: 1.5 }}>RELATIVE WEIGHTS — equal = equal split. RETIREMENT ACCOUNTS (IRA, 401K) CAPPED AT IRS ANNUAL LIMITS.</span>
+          <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3, lineHeight: 1.5 }}>RELATIVE WEIGHTS — equal = equal split. RETIREMENT ACCOUNTS (IRA, 401K) CAPPED AT IRS ANNUAL LIMITS.</span>
           {investable.map((a) => {
             const w = Number(weights[a.id]) || 0;
             const pct = totalW > 0 ? (w / totalW) * 100 : 0;
             const isRet = RETIREMENT_TYPES.includes(a.assetType);
             return (
               <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                <span style={{ fontFamily: WF.sans, fontSize: 12, color: WF.ink, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{a.label}</span>
-                {isRet && <span title="IRS annual contribution limits apply" style={{ fontFamily: WF.mono, fontSize: 8.5, color: WF.ink3, background: WF.fill, border: `1px solid ${WF.line}`, borderRadius: 2, padding: '1px 4px', flexShrink: 0 }}>cap</span>}
+                <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12), color: WF.ink, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{a.label}</span>
+                {isRet && <span title="IRS annual contribution limits apply" style={{ fontFamily: WF.mono, fontSize: WF.fs(8.5), color: WF.ink3, background: WF.fill, border: `1px solid ${WF.line}`, borderRadius: 2, padding: '1px 4px', flexShrink: 0 }}>cap</span>}
                 <input type="number" min="0" step="1" value={w}
                   onChange={(e) => setWeight(a.id, e.target.value)}
-                  style={{ width: 44, textAlign: 'center', border: `1px solid ${WF.line}`, borderRadius: 2, padding: '4px 4px', fontFamily: WF.mono, fontSize: 12, fontWeight: 600, color: WF.ink, background: WF.paper, outline: 'none', boxSizing: 'border-box' }}
+                  style={{ width: 44, textAlign: 'center', border: `1px solid ${WF.line}`, borderRadius: 2, padding: '4px 4px', fontFamily: WF.mono, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink, background: WF.paper, outline: 'none', boxSizing: 'border-box' }}
                 />
                 <div style={{ width: 72, height: 3, background: WF.line2, borderRadius: 2, overflow: 'hidden', flexShrink: 0 }}>
                   <div style={{ width: `${pct}%`, height: '100%', background: WF.ink, borderRadius: 2, transition: 'width .15s' }} />
                 </div>
-                <span style={{ fontFamily: WF.mono, fontSize: 10, color: pct > 0 ? WF.ink : WF.ink3, width: 30, textAlign: 'right', flexShrink: 0 }}>{Math.round(pct)}%</span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: pct > 0 ? WF.ink : WF.ink3, width: 30, textAlign: 'right', flexShrink: 0 }}>{Math.round(pct)}%</span>
               </div>
             );
           })}
@@ -245,8 +245,8 @@ function SellHouseControl({ p, item, home }) {
 
   const PreviewRow = ({ label, value, minus, strong }) => (
     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, padding: strong ? '8px 0 0' : '4px 0', borderTop: strong ? `1px solid ${WF.line}` : 'none' }}>
-      <span style={{ fontFamily: WF.sans, fontSize: 12, fontWeight: strong ? 700 : 500, color: minus ? WF.ink2 : WF.ink }}>{label}</span>
-      <span style={{ fontFamily: WF.mono, fontSize: strong ? 13 : 11.5, fontWeight: strong ? 700 : 600, color: minus ? WF.ink2 : WF.ink, fontVariantNumeric: 'tabular-nums' }}>{minus ? '− ' : ''}{fmtShort(Math.abs(value))}</span>
+      <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: strong ? 700 : 500, color: minus ? WF.ink2 : WF.ink }}>{label}</span>
+      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(strong ? 13 : 11.5), fontWeight: strong ? 700 : 600, color: minus ? WF.ink2 : WF.ink, fontVariantNumeric: 'tabular-nums' }}>{minus ? '− ' : ''}{fmtShort(Math.abs(value))}</span>
     </div>
   );
 
@@ -254,7 +254,7 @@ function SellHouseControl({ p, item, home }) {
     <div style={{ border: `1.5px solid ${on ? WF.ink : WF.line}`, borderRadius: 3, background: WF.paper, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: on ? 12 : 0, transition: 'border-color .15s' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Check checked={on} label="Sell this house" onClick={toggle} />
-        {on && <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>reinvested as income · auto or weighted</span>}
+        {on && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>reinvested as income · auto or weighted</span>}
       </div>
       {on && (
         <React.Fragment>
@@ -267,12 +267,12 @@ function SellHouseControl({ p, item, home }) {
               <Eyebrow>selling costs</Eyebrow>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <PctCell value={feePct} onChange={(v) => setSale({ feePct: v })} />
-                <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>agent + closing</span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>agent + closing</span>
               </div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingBottom: 2 }}>
-              <Eyebrow style={{ fontSize: 8.5 }}>held</Eyebrow>
-              <span style={{ fontFamily: WF.mono, fontSize: 11, color: WF.ink2 }}>{yrs} yrs</span>
+              <Eyebrow style={{ fontSize: WF.fs(8.5) }}>held</Eyebrow>
+              <span style={{ fontFamily: WF.mono, fontSize: WF.fs(11), color: WF.ink2 }}>{yrs} yrs</span>
             </div>
           </div>
           <div style={{ background: WF.fill, border: `1px solid ${WF.line2}`, borderRadius: 3, padding: '10px 12px' }}>
@@ -281,7 +281,7 @@ function SellHouseControl({ p, item, home }) {
             {payoff > 1 && <PreviewRow label="Mortgage payoff" value={payoff} minus />}
             <PreviewRow label="Proceeds reinvested" value={net} strong />
             <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${WF.line2}`, display: 'flex', alignItems: 'flex-start', gap: 7 }}>
-              <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3, lineHeight: 1.55 }}>
+              <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3, lineHeight: 1.55 }}>
                 {taxable > 1
                   ? <>Profit is {fmtShort(gain)} — the first $250k is tax-free (primary home), so <strong style={{ color: WF.ink }}>{fmtShort(taxable)}</strong> is taxed as a long-term capital gain in the simulation.</>
                   : <>Profit of {fmtShort(Math.max(0, gain))} sits under the $250k primary-home exclusion — no capital-gains tax.</>}
@@ -372,8 +372,8 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
         </div>
         {home && <SellHouseControl p={p} item={item} home={home} />}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <button className="wf-tab" onClick={() => setShowAdv(!showAdv)} style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 6, padding: 0, border: 'none', background: 'none', fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink2, cursor: 'pointer' }}>
-            <span style={{ fontFamily: WF.mono, fontSize: 10 }}>{showAdv ? '▾' : '▸'}</span>
+          <button className="wf-tab" onClick={() => setShowAdv(!showAdv)} style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 6, padding: 0, border: 'none', background: 'none', fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink2, cursor: 'pointer' }}>
+            <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10) }}>{showAdv ? '▾' : '▸'}</span>
             Advanced — return & volatility
           </button>
           {showAdv && (
@@ -382,14 +382,14 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
                 <Eyebrow>total return</Eyebrow>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <PctCell value={item.growth || 0} onChange={(v) => p.update(item.id, { growth: v })} w={70} />
-                  <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>per year</span>
+                  <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>per year</span>
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <Eyebrow>volatility</Eyebrow>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <PctCell value={volOf(item)} onChange={(v) => p.update(item.id, { vol: v })} w={70} />
-                  <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>swing / yr</span>
+                  <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>swing / yr</span>
                 </div>
               </div>
               {home && (
@@ -404,7 +404,7 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
                         onClick={() => setHome({ monthlyInflation: !home.monthlyInflation })}
                       />
                       {home.monthlyInflation && home.monthly > 0 && (
-                        <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>
+                        <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>
                           {fmtShort(home.monthly * 12)}/yr now
                           {' → '}
                           {fmtShort(Math.round(home.monthly * 12 * Math.pow(1 + (plan.inflation || 0.025), 10)))}/yr in {START_YEAR + 10}
@@ -423,7 +423,7 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
                       <PctCell
                         value={item.dividendYield != null ? item.dividendYield : (item.assetType === 'us-stocks' ? 0.015 : 0)}
                         onChange={(v) => p.update(item.id, { dividendYield: Math.max(0, v) })} w={70} />
-                      <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>per year</span>
+                      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>per year</span>
                     </div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -432,7 +432,7 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
                       <PctCell
                         value={item.dividendYieldOrd != null ? item.dividendYieldOrd : 0}
                         onChange={(v) => p.update(item.id, { dividendYieldOrd: Math.max(0, v) })} w={70} />
-                      <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>per year</span>
+                      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>per year</span>
                     </div>
                   </div>
                   <Anno style={{ width: '100%', marginTop: 2 }}>Qualified dividends taxed at preferential rates (20% + NIIT); ordinary at income rates. Both are generated on top of price appreciation.</Anno>
@@ -445,15 +445,15 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
           <div style={{ border: `1.5px solid ${WF.ink}`, borderRadius: 3, padding: '13px 14px', background: WF.paper, display: 'flex', flexDirection: 'column', gap: 9 }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <ChainIcon size={14} />
-              <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, color: WF.ink }}>Other items use this value</span>
+              <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, color: WF.ink }}>Other items use this value</span>
             </span>
             {refBy.map((r) => (
               <div key={r.id} className="pr-hv" onClick={() => onNavigate && onNavigate(r.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, cursor: 'pointer' }}>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  <span style={{ fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink }}>{r.label}</span>
-                  <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>{(r.link.rate * 100).toFixed(1).replace(/\.0$/, '')}% of this value</span>
+                  <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink }}>{r.label}</span>
+                  <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>{(r.link.rate * 100).toFixed(1).replace(/\.0$/, '')}% of this value</span>
                 </span>
-                <span style={{ fontFamily: WF.sans, fontSize: 13, fontWeight: 700, color: WF.ink, fontVariantNumeric: 'tabular-nums' }}>{fmtShort(annualOf(plan, r, START_YEAR + 4))}<span style={{ fontSize: 10, fontWeight: 500, color: WF.ink3 }}>/yr</span></span>
+                <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), fontWeight: 700, color: WF.ink, fontVariantNumeric: 'tabular-nums' }}>{fmtShort(annualOf(plan, r, START_YEAR + 4))}<span style={{ fontSize: WF.fs(10), fontWeight: 500, color: WF.ink3 }}>/yr</span></span>
               </div>
             ))}
             <Anno>change the value above and these recalculate instantly — no need to touch them.</Anno>
@@ -484,7 +484,7 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
       {linked ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
           {!refItem && <ErrNote>the item this was linked to no longer exists — pick another source below, or switch back to setting the amount yourself.</ErrNote>}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontFamily: WF.sans, fontSize: 13.5, color: WF.ink2, padding: '12px 14px', border: `1px solid ${WF.line}`, borderRadius: 3, background: WF.paper }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontFamily: WF.sans, fontSize: WF.fs(13.5), color: WF.ink2, padding: '12px 14px', border: `1px solid ${WF.line}`, borderRadius: 3, background: WF.paper }}>
             <span style={{ fontWeight: 700, color: WF.ink }}>{item.label.trim() || '(unnamed)'}</span>
             <span style={{ color: WF.ink3 }}>is</span>
             <PctCell value={item.link.rate} onChange={(v) => p.setLink(item.id, { rate: v })} />
@@ -496,17 +496,17 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
           {refItem && (
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 18, border: `1.5px solid ${WF.ink}`, borderRadius: 3, padding: '14px 16px', background: WF.paper, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <Eyebrow style={{ fontSize: 8.5 }}>{sampleYear === START_YEAR ? 'right now that’s' : `from ${sampleYear} that’s`}</Eyebrow>
-                <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: 25, letterSpacing: -0.6, color: WF.ink, lineHeight: 1 }}>{fmtShort(nowAmt)}<span style={{ fontSize: 13, fontWeight: 500, color: WF.ink3 }}>/yr</span></span>
-                <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>{refItem.label} {fmtShort(nowVal)} × {(rate * 100).toFixed(1).replace(/\.0$/, '')}%</span>
+                <Eyebrow style={{ fontSize: WF.fs(8.5) }}>{sampleYear === START_YEAR ? 'right now that’s' : `from ${sampleYear} that’s`}</Eyebrow>
+                <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: WF.fs(25), letterSpacing: -0.6, color: WF.ink, lineHeight: 1 }}>{fmtShort(nowAmt)}<span style={{ fontSize: WF.fs(13), fontWeight: 500, color: WF.ink3 }}>/yr</span></span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>{refItem.label} {fmtShort(nowVal)} × {(rate * 100).toFixed(1).replace(/\.0$/, '')}%</span>
               </div>
               {phases.length > 0 && <div style={{ width: 1, alignSelf: 'stretch', background: WF.line }} />}
               <div style={{ display: 'flex', gap: 18 }}>
                 {phases.map((ph, i) => (
                   <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>{ph.year}</span>
-                    <span style={{ fontFamily: WF.sans, fontSize: 13, fontWeight: 600, color: WF.ink }}>{fmtShort(ph.amt)}/yr</span>
-                    <span style={{ fontFamily: WF.mono, fontSize: 8.5, color: WF.ink3 }}>{ph.note}</span>
+                    <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>{ph.year}</span>
+                    <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), fontWeight: 600, color: WF.ink }}>{fmtShort(ph.amt)}/yr</span>
+                    <span style={{ fontFamily: WF.mono, fontSize: WF.fs(8.5), color: WF.ink3 }}>{ph.note}</span>
                   </div>
                 ))}
               </div>
@@ -516,7 +516,7 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
           {refItem && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', border: `1px solid ${WF.line}`, borderRadius: 3, background: WF.paper }}>
               <ChainIcon size={14} />
-              <span style={{ fontFamily: WF.sans, fontSize: 11.5, color: WF.ink2 }}>Linked to <button className="wf-tab" onClick={() => onNavigate && onNavigate(refItem.id)} style={{ font: 'inherit', fontWeight: 700, color: WF.ink, background: 'none', border: 'none', borderBottom: `1px solid ${WF.ink}`, padding: 0, cursor: 'pointer' }}>{refItem.label} ↗</button>. Edit it under <strong style={{ color: WF.ink }}>Your money</strong> and this updates automatically.</span>
+              <span style={{ fontFamily: WF.sans, fontSize: WF.fs(11.5), color: WF.ink2 }}>Linked to <button className="wf-tab" onClick={() => onNavigate && onNavigate(refItem.id)} style={{ font: 'inherit', fontWeight: 700, color: WF.ink, background: 'none', border: 'none', borderBottom: `1px solid ${WF.ink}`, padding: 0, cursor: 'pointer' }}>{refItem.label} ↗</button>. Edit it under <strong style={{ color: WF.ink }}>Your money</strong> and this updates automatically.</span>
             </div>
           )}
         </div>
@@ -548,8 +548,8 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
       {item.section === 'income' && !linked && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <button className="wf-tab" onClick={() => setShowAdv(!showAdv)}
-            style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 6, padding: 0, border: 'none', background: 'none', fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink2, cursor: 'pointer' }}>
-            <span style={{ fontFamily: WF.mono, fontSize: 10 }}>{showAdv ? '▾' : '▸'}</span>
+            style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 6, padding: 0, border: 'none', background: 'none', fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink2, cursor: 'pointer' }}>
+            <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10) }}>{showAdv ? '▾' : '▸'}</span>
             Advanced — savings allocation
           </button>
           {showAdv && <IncomeDistributionPanel item={item} p={p} plan={plan} />}
@@ -596,7 +596,7 @@ function AddItemForm({ section, p, onClose, onAdded }) {
 
   return (
     <div style={{ marginTop: 8, border: `1.5px solid ${WF.ink}`, borderRadius: 3, background: WF.fill, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <span style={{ fontFamily: WF.sans, fontSize: 13, fontWeight: 600, color: WF.ink }}>Add a new {section === 'asset' ? 'holding' : section}</span>
+      <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), fontWeight: 600, color: WF.ink }}>Add a new {section === 'asset' ? 'holding' : section}</span>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
         {isAsset && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -618,7 +618,7 @@ function AddItemForm({ section, p, onClose, onAdded }) {
           <Eyebrow>{isHome ? 'purchase price' : isAsset ? 'value' : 'amount'}</Eyebrow>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <NumCell value={amount} onChange={setAmount} w={104} strong />
-            <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>{unit}</span>
+            <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>{unit}</span>
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -643,7 +643,7 @@ function AddItemForm({ section, p, onClose, onAdded }) {
           </div>
         )}
       </div>
-      {err && <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink }}>! give it a name first</span>}
+      {err && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink }}>! give it a name first</span>}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', gap: 4 }}>
           <Btn onClick={onClose}>Cancel</Btn>

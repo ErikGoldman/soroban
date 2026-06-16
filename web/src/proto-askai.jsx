@@ -267,25 +267,25 @@ function AskAI({ onApply, kidYears, city }) {
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') run(); else if (e.key === 'Escape') e.target.blur(); }}
             placeholder=""
-            style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', fontFamily: WF.sans, fontSize: 13.5, color: WF.ink }} />
+            style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', fontFamily: WF.sans, fontSize: WF.fs(13.5), color: WF.ink }} />
           {empty && (
             <span style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none',
-              fontFamily: WF.sans, fontSize: 13.5, color: WF.ink3, whiteSpace: 'nowrap', overflow: 'hidden', maxWidth: '100%',
+              fontFamily: WF.sans, fontSize: WF.fs(13.5), color: WF.ink3, whiteSpace: 'nowrap', overflow: 'hidden', maxWidth: '100%',
               opacity: phVis ? 1 : 0, transition: 'opacity 0.35s ease' }}>
               {placeholder}
             </span>
           )}
         </div>
-        <button className={empty ? '' : 'wf-tab'} onClick={empty ? undefined : () => run()} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 13px', border: `1.5px solid ${WF.ink}`, borderRadius: 3, background: WF.ink, color: WF.paper, fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, cursor: empty ? 'not-allowed' : 'pointer', opacity: empty ? 0.4 : 1, transition: 'background .15s' }}>
+        <button className={empty ? '' : 'wf-tab'} onClick={empty ? undefined : () => run()} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 13px', border: `1.5px solid ${WF.ink}`, borderRadius: 3, background: WF.ink, color: WF.paper, fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, cursor: empty ? 'not-allowed' : 'pointer', opacity: empty ? 0.4 : 1, transition: 'background .15s' }}>
           {phase === 'thinking' ? 'Reading…' : 'Apply'}
         </button>
       </div>
 
       {phase === 'idle' &&
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: boxHovered ? '0 12px 6px' : '0 12px 0', flexWrap: 'wrap', maxHeight: boxHovered ? 60 : 0, overflow: 'hidden', opacity: boxHovered ? 1 : 0, transition: 'max-height .2s ease, opacity .15s ease, padding .2s ease' }}>
-          <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>TRY:</span>
+          <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>TRY:</span>
           {P_EXAMPLES.slice(0, 2).map((ex) =>
-        <button key={ex} className="wf-tab wf-try-btn" onClick={() => run(ex)} style={{ padding: '5px 10px', border: `1px solid ${WF.line}`, borderRadius: '999px', appearance: 'none', WebkitAppearance: 'none', background: WF.paper, fontFamily: WF.sans, fontSize: 11.5, color: WF.ink2, cursor: 'pointer' }}>{ex}</button>
+        <button key={ex} className="wf-tab wf-try-btn" onClick={() => run(ex)} style={{ padding: '5px 10px', border: `1px solid ${WF.line}`, borderRadius: '999px', appearance: 'none', WebkitAppearance: 'none', background: WF.paper, fontFamily: WF.sans, fontSize: WF.fs(11.5), color: WF.ink2, cursor: 'pointer' }}>{ex}</button>
         )}
         </div>
       }
@@ -295,18 +295,18 @@ function AskAI({ onApply, kidYears, city }) {
       <div style={{ borderTop: `1px solid ${WF.line2}`, background: WF.fill, padding: '13px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           <ErrNote>couldn’t turn that into plan items. try mentioning concrete things — kids &amp; childcare, or buying a house.</ErrNote>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>these work:</span>
+            <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>these work:</span>
             {P_EXAMPLES.map((ex) =>
-          <button key={ex} className="wf-tab wf-try-btn" onClick={() => run(ex)} style={{ padding: '5px 10px', border: `1px solid ${WF.line}`, borderRadius: '999px', appearance: 'none', WebkitAppearance: 'none', background: WF.paper, fontFamily: WF.sans, fontSize: 11.5, color: WF.ink2, cursor: 'pointer' }}>{ex}</button>
+          <button key={ex} className="wf-tab wf-try-btn" onClick={() => run(ex)} style={{ padding: '5px 10px', border: `1px solid ${WF.line}`, borderRadius: '999px', appearance: 'none', WebkitAppearance: 'none', background: WF.paper, fontFamily: WF.sans, fontSize: WF.fs(11.5), color: WF.ink2, cursor: 'pointer' }}>{ex}</button>
           )}
-            <button className="wf-tab" onClick={reset} style={{ marginLeft: 'auto', padding: '5px 10px', border: 'none', background: 'none', fontFamily: WF.mono, fontSize: 10, color: WF.ink3, cursor: 'pointer', textDecoration: 'underline' }}>dismiss</button>
+            <button className="wf-tab" onClick={reset} style={{ marginLeft: 'auto', padding: '5px 10px', border: 'none', background: 'none', fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3, cursor: 'pointer', textDecoration: 'underline' }}>dismiss</button>
           </div>
         </div>
       }
 
       {phase === 'success' &&
       <div style={{ borderTop: `1px solid ${WF.line2}`, background: '#CBFF37', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10, animation: 'successSlideIn .25s ease' }}>
-        <span style={{ fontFamily: WF.sans, fontSize: 13.5, fontWeight: 600, color: '#1b1b1d' }}>Added to your plan</span>
+        <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13.5), fontWeight: 600, color: '#1b1b1d' }}>Added to your plan</span>
         <svg style={{ flexShrink: 0, animation: 'checkPop .4s .1s cubic-bezier(.17,.67,.35,1.3) both' }} width="16" height="13" viewBox="0 0 16 13" fill="none" stroke="#1b1b1d" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1.5 6.5 5.5 10.5 14.5 1.5" /></svg>
       </div>
       }
@@ -316,24 +316,24 @@ function AskAI({ onApply, kidYears, city }) {
           {result.answer &&
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', border: `1px solid ${WF.line}`, borderRadius: 3, background: WF.paper }}>
             <Sparkle size={13} color={WF.ink2} />
-            <span style={{ fontFamily: WF.sans, fontSize: 13, lineHeight: 1.5, color: WF.ink }}>{result.answer}</span>
+            <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), lineHeight: 1.5, color: WF.ink }}>{result.answer}</span>
           </div>
           }
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Sparkle size={13} color={WF.ink2} />
-              <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, color: WF.ink }}>{result.answer ? 'Add it to your plan' : 'Soroban will add'}</span>
-              <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>— {result.summary}</span>
+              <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, color: WF.ink }}>{result.answer ? 'Add it to your plan' : 'Soroban will add'}</span>
+              <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>— {result.summary}</span>
             </span>
-            <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>{result.rows.length} items</span>
+            <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>{result.rows.length} items</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 0, border: `1px solid ${WF.line}`, borderRadius: 3, background: WF.paper, overflow: 'hidden' }}>
             {result.rows.map((r, i) =>
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderBottom: i < result.rows.length - 1 ? `1px solid ${WF.line2}` : 'none' }}>
                 <KindMark kind={r.kind} />
-                <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, color: WF.ink, width: 132, flexShrink: 0 }}>{r.label}</span>
-                <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink2 }}>{r.detail}</span>
-                <span style={{ marginLeft: 'auto', fontFamily: WF.mono, fontSize: 8.5, letterSpacing: 0.4, textTransform: 'uppercase', color: WF.ink3, border: `1px solid ${WF.line}`, borderRadius: 2, padding: '1px 6px' }}>{r.kind}</span>
+                <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, color: WF.ink, width: 132, flexShrink: 0 }}>{r.label}</span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink2 }}>{r.detail}</span>
+                <span style={{ marginLeft: 'auto', fontFamily: WF.mono, fontSize: WF.fs(8.5), letterSpacing: 0.4, textTransform: 'uppercase', color: WF.ink3, border: `1px solid ${WF.line}`, borderRadius: 2, padding: '1px 6px' }}>{r.kind}</span>
               </div>
           )}
           </div>

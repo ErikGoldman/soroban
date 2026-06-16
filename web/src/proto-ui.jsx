@@ -42,7 +42,7 @@ function YearCell({ value, onChange, w = 62 }) {
         if (e.key === 'ArrowUp') { e.preventDefault(); const n = Math.min(P_RETIRE, (parseInt(draft, 10) || START_YEAR) + 1); setDraft(String(n)); onChange(n); }
         if (e.key === 'ArrowDown') { e.preventDefault(); const n = Math.max(START_YEAR, (parseInt(draft, 10) || START_YEAR) - 1); setDraft(String(n)); onChange(n); }
       }}
-      style={{ width: w, height: 33, boxSizing: 'border-box', border: `1px solid ${foc ? WF.ink : WF.line}`, borderRadius: 2, padding: '0 8px', fontFamily: WF.mono, fontSize: 11.5, color: WF.ink, textAlign: 'center', outline: 'none', background: WF.paper }} />
+      style={{ width: w, height: 33, boxSizing: 'border-box', border: `1px solid ${foc ? WF.ink : WF.line}`, borderRadius: 2, padding: '0 8px', fontFamily: WF.mono, fontSize: WF.fs(11.5), color: WF.ink, textAlign: 'center', outline: 'none', background: WF.paper }} />
   );
 }
 function PctCell({ value, onChange, w = 64 }) {
@@ -61,29 +61,29 @@ function PctCell({ value, onChange, w = 64 }) {
         onBlur={(e) => { setFoc(false); commit(e.target.value); }}
         onChange={(e) => setDraft(e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1'))}
         onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-        style={{ border: 'none', outline: 'none', width: '100%', minWidth: 0, background: 'transparent', padding: 0, fontFamily: WF.mono, fontSize: 11.5, color: WF.ink, textAlign: 'right' }} />
-      <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink3 }}>%</span>
+        style={{ border: 'none', outline: 'none', width: '100%', minWidth: 0, background: 'transparent', padding: 0, fontFamily: WF.mono, fontSize: WF.fs(11.5), color: WF.ink, textAlign: 'right' }} />
+      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink3 }}>%</span>
     </span>
   );
 }
 function MonthSelect({ value, onChange }) {
   return (
     <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', border: `1px solid ${WF.line}`, borderRadius: 2, height: 33, boxSizing: 'border-box', background: WF.paper }}>
-      <select value={value || 0} onChange={(e) => onChange(+e.target.value)} style={{ appearance: 'none', WebkitAppearance: 'none', MozAppearance: 'none', border: 'none', outline: 'none', background: 'transparent', fontFamily: WF.mono, fontSize: 11.5, color: WF.ink, cursor: 'pointer', padding: '0 20px 0 8px', height: '100%' }}>
+      <select value={value || 0} onChange={(e) => onChange(+e.target.value)} style={{ appearance: 'none', WebkitAppearance: 'none', MozAppearance: 'none', border: 'none', outline: 'none', background: 'transparent', fontFamily: WF.mono, fontSize: WF.fs(11.5), color: WF.ink, cursor: 'pointer', padding: '0 20px 0 8px', height: '100%' }}>
         {MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
       </select>
-      <span className="wf-caret" style={{ position: 'absolute', right: 6, fontFamily: WF.mono, fontSize: 9, color: WF.ink3, pointerEvents: 'none' }}>▾</span>
+      <span className="wf-caret" style={{ position: 'absolute', right: 6, fontFamily: WF.mono, fontSize: WF.fs(9), color: WF.ink3, pointerEvents: 'none' }}>▾</span>
     </span>
   );
 }
 function RefSelect({ value, options, onChange, placeholder }) {
   return (
     <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', border: `1px solid ${WF.line}`, borderRadius: 2, padding: '0 24px 0 9px', height: 33, boxSizing: 'border-box', background: WF.paper }}>
-      <select value={value || ''} onChange={(e) => onChange(e.target.value)} style={{ appearance: 'none', border: 'none', outline: 'none', background: 'transparent', fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink, cursor: 'pointer' }}>
+      <select value={value || ''} onChange={(e) => onChange(e.target.value)} style={{ appearance: 'none', border: 'none', outline: 'none', background: 'transparent', fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink, cursor: 'pointer' }}>
         {placeholder && <option value="" disabled>{placeholder}</option>}
         {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
       </select>
-      <span className="wf-caret" style={{ position: 'absolute', right: 8, fontFamily: WF.mono, fontSize: 10, color: WF.ink3, pointerEvents: 'none' }}>▾</span>
+      <span className="wf-caret" style={{ position: 'absolute', right: 8, fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3, pointerEvents: 'none' }}>▾</span>
     </span>
   );
 }
@@ -92,7 +92,7 @@ function TextInput({ value, onChange, placeholder, autoFocus, error, onKeyDown, 
   return (
     <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoFocus={autoFocus} onKeyDown={onKeyDown}
       onFocus={(e) => { setFoc(true); if (onFocus) onFocus(e); }} onBlur={() => setFoc(false)}
-      style={{ width: '100%', boxSizing: 'border-box', border: `1px solid ${(error || foc) ? WF.ink : WF.line}`, boxShadow: error ? `0 0 0 2px ${WF.fill2}` : 'none', borderRadius: 2, padding: '8px 10px', fontFamily: WF.sans, fontSize: 13, color: WF.ink, outline: 'none', background: WF.paper, ...style }} />
+      style={{ width: '100%', boxSizing: 'border-box', border: `1px solid ${(error || foc) ? WF.ink : WF.line}`, boxShadow: error ? `0 0 0 2px ${WF.fill2}` : 'none', borderRadius: 2, padding: '8px 10px', fontFamily: WF.sans, fontSize: WF.fs(13), color: WF.ink, outline: 'none', background: WF.paper, ...style }} />
   );
 }
 
@@ -113,7 +113,7 @@ function Tag({ children, dark, icon }) {
   return (
     <span onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
       className="wf-tag"
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: WF.mono, fontSize: 9, letterSpacing: 0.3, padding: icon ? '2px 7px 2px 5px' : '2px 6px', border: `1px solid ${border}`, borderRadius: 2, background: dark ? WF.ink : WF.paper, color, transition: 'color .12s, border-color .12s', cursor: 'default', whiteSpace: 'nowrap' }}>
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: WF.mono, fontSize: WF.fs(9), letterSpacing: 0.3, padding: icon ? '2px 7px 2px 5px' : '2px 6px', border: `1px solid ${border}`, borderRadius: 2, background: dark ? WF.ink : WF.paper, color, transition: 'color .12s, border-color .12s', cursor: 'default', whiteSpace: 'nowrap' }}>
       {icon}{children}
     </span>
   );
@@ -142,7 +142,7 @@ function ItemTags({ item }) {
 function LinkChip({ plan, item }) {
   const ref = plan.items.find((i) => i.id === item.link.ref);
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: WF.mono, fontSize: 10.5, color: WF.ink2 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink2 }}>
       <span style={{ color: WF.ink3 }}>=</span>
       <span style={{ color: WF.ink, fontWeight: 600 }}>{(item.link.rate * 100).toFixed(1).replace(/\.0$/, '')}%</span>
       <span style={{ color: WF.ink3 }}>of</span>
@@ -156,9 +156,9 @@ function ChoiceCard({ active, onClick, title, desc, icon, disabled, disabledNote
       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ width: 15, height: 15, borderRadius: '50%', border: `1.5px solid ${active ? WF.ink : WF.line}`, display: 'grid', placeItems: 'center', flexShrink: 0 }}>{active && <span style={{ width: 7, height: 7, borderRadius: '50%', background: WF.ink }} />}</span>
         {icon && <ChainIcon size={13} />}
-        <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, color: WF.ink }}>{title}</span>
+        <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, color: WF.ink }}>{title}</span>
       </span>
-      <span style={{ fontFamily: WF.sans, fontSize: 11, color: WF.ink2, lineHeight: 1.4, paddingLeft: 23 }}>{disabled && disabledNote ? disabledNote : desc}</span>
+      <span style={{ fontFamily: WF.sans, fontSize: WF.fs(11), color: WF.ink2, lineHeight: 1.4, paddingLeft: 23 }}>{disabled && disabledNote ? disabledNote : desc}</span>
     </button>
   );
 }
@@ -167,8 +167,8 @@ function ChoiceCard({ active, onClick, title, desc, icon, disabled, disabledNote
 function ErrNote({ children, style }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', border: `1px solid ${WF.ink}`, borderRadius: 2, background: WF.fill, ...style }}>
-      <span style={{ width: 14, height: 14, flexShrink: 0, border: `1.5px solid ${WF.ink}`, borderRadius: '50%', display: 'grid', placeItems: 'center', fontFamily: WF.mono, fontSize: 9.5, fontWeight: 700, color: WF.ink, lineHeight: 1 }}>!</span>
-      <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink2, lineHeight: 1.45 }}>{children}</span>
+      <span style={{ width: 14, height: 14, flexShrink: 0, border: `1.5px solid ${WF.ink}`, borderRadius: '50%', display: 'grid', placeItems: 'center', fontFamily: WF.mono, fontSize: WF.fs(9.5), fontWeight: 700, color: WF.ink, lineHeight: 1 }}>!</span>
+      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink2, lineHeight: 1.45 }}>{children}</span>
     </div>
   );
 }
@@ -177,10 +177,10 @@ function ErrNote({ children, style }) {
 function Toast({ toast, onClose }) {
   if (!toast) return null;
   return (
-    <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 90, display: 'flex', alignItems: 'center', gap: 14, background: WF.ink, color: WF.paper, padding: '11px 16px', borderRadius: 3, boxShadow: '0 12px 32px rgba(0,0,0,0.28)', fontFamily: WF.sans, fontSize: 12.5 }}>
+    <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 90, display: 'flex', alignItems: 'center', gap: 14, background: WF.ink, color: WF.paper, padding: '11px 16px', borderRadius: 3, boxShadow: '0 12px 32px rgba(0,0,0,0.28)', fontFamily: WF.sans, fontSize: WF.fs(12.5) }}>
       <span>{toast.msg}</span>
-      {toast.undo && <button onClick={toast.undo} style={{ background: 'none', border: 'none', borderBottom: `1px solid ${WF.paper}`, color: WF.paper, fontFamily: WF.sans, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Undo</button>}
-      <button onClick={onClose} style={{ background: 'none', border: 'none', color: WF.ink3, cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1 }}>×</button>
+      {toast.undo && <button onClick={toast.undo} style={{ background: 'none', border: 'none', borderBottom: `1px solid ${WF.paper}`, color: WF.paper, fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 700, cursor: 'pointer', padding: 0 }}>Undo</button>}
+      <button onClick={onClose} style={{ background: 'none', border: 'none', color: WF.ink3, cursor: 'pointer', fontSize: WF.fs(14), padding: 0, lineHeight: 1 }}>×</button>
     </div>
   );
 }
@@ -203,9 +203,9 @@ function ModalHead({ eyebrow, title, onClose }) {
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
-        <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: 18, color: WF.ink }}>{title}</span>
+        <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: WF.fs(18), color: WF.ink }}>{title}</span>
       </div>
-      <button className="wf-tab" onClick={onClose} style={{ width: 26, height: 26, border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, color: WF.ink2, cursor: 'pointer', fontSize: 16, lineHeight: 1 }}>×</button>
+      <button className="wf-tab" onClick={onClose} style={{ width: 26, height: 26, border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, color: WF.ink2, cursor: 'pointer', fontSize: WF.fs(16), lineHeight: 1 }}>×</button>
     </div>
   );
 }
@@ -226,17 +226,17 @@ function ProfileMenu({ onReset, onClear }) {
         <span style={{ width: 29, height: 29, borderRadius: '50%', border: `1.5px solid ${WF.ink}`, background: WF.fill, overflow: 'hidden', display: 'block' }}>
           <svg width="27" height="27" viewBox="0 0 28 28"><circle cx="14" cy="11" r="4.4" fill={WF.ink3} /><path d="M5 24c0-4.5 4-7.5 9-7.5s9 3 9 7.5" fill={WF.ink3} /></svg>
         </span>
-        <span className="wf-caret" style={{ fontFamily: WF.mono, fontSize: 9, color: WF.ink3 }}>▾</span>
+        <span className="wf-caret" style={{ fontFamily: WF.mono, fontSize: WF.fs(9), color: WF.ink3 }}>▾</span>
       </button>
       {open && <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />}
       {open && (
         <div style={{ position: 'absolute', top: 38, right: 0, width: 186, background: WF.paper, border: `1.5px solid ${WF.ink}`, borderRadius: 3, boxShadow: '0 12px 30px rgba(0,0,0,0.16)', zIndex: 40, overflow: 'hidden' }}>
           <div style={{ padding: '11px 13px', borderBottom: `1px solid ${WF.line2}` }}>
-            <div style={{ fontFamily: WF.sans, fontSize: 12, fontWeight: 600, color: WF.ink }}>Alex Stone</div>
-            <div style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>alex@email.com</div>
+            <div style={{ fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, color: WF.ink }}>Alex Stone</div>
+            <div style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>alex@email.com</div>
           </div>
           {rows.map((r) => (
-            <div key={r.t} className="pr-hv" onClick={act(r.fn)} style={{ padding: '9px 13px', fontFamily: WF.sans, fontSize: 12, fontWeight: r.top ? 600 : 500, color: WF.ink2, cursor: 'pointer', borderTop: r.top ? `1px solid ${WF.line2}` : 'none' }}>{r.t}</div>
+            <div key={r.t} className="pr-hv" onClick={act(r.fn)} style={{ padding: '9px 13px', fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: r.top ? 600 : 500, color: WF.ink2, cursor: 'pointer', borderTop: r.top ? `1px solid ${WF.line2}` : 'none' }}>{r.t}</div>
           ))}
         </div>
       )}

@@ -23,10 +23,10 @@ const PCT_BLURB = {
 function BkRow({ label, value, sub, dim, strong }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, padding: '5px 0', borderBottom: `1px solid ${WF.line2}` }}>
-      <span style={{ fontFamily: WF.sans, fontSize: 12.5, color: dim ? WF.ink3 : WF.ink, fontWeight: strong ? 600 : 400, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), color: dim ? WF.ink3 : WF.ink, fontWeight: strong ? 600 : 400, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
       <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexShrink: 0 }}>
-        {sub && <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>{sub}</span>}
-        <span style={{ fontFamily: WF.mono, fontSize: 12, fontWeight: strong ? 700 : 500, color: dim ? WF.ink3 : WF.ink, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
+        {sub && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>{sub}</span>}
+        <span style={{ fontFamily: WF.mono, fontSize: WF.fs(12), fontWeight: strong ? 700 : 500, color: dim ? WF.ink3 : WF.ink, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
       </span>
     </div>
   );
@@ -38,10 +38,10 @@ function BkSection({ title, count, children, empty }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <Eyebrow>{title}</Eyebrow>
-        {count != null && <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>{count}</span>}
+        {count != null && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>{count}</span>}
       </div>
       {empty
-        ? <div style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink3, padding: '5px 0' }}>{empty}</div>
+        ? <div style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink3, padding: '5px 0' }}>{empty}</div>
         : <div>{children}</div>}
     </div>
   );
@@ -72,8 +72,8 @@ function BreakdownModal({ pctKey, rows, onClose, initialYear }) {
         title={PCT_LABELS[pctKey] || 'Percentile path'}
         onClose={onClose} />
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginTop: -6 }}>
-        <div style={{ fontFamily: WF.sans, fontSize: 12.5, color: WF.ink2, lineHeight: 1.5 }}>
-          {PCT_BLURB[pctKey] || ''} <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>One representative simulated path — taxes, market returns and home costs from the engine.</span>
+        <div style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), color: WF.ink2, lineHeight: 1.5 }}>
+          {PCT_BLURB[pctKey] || ''} <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>One representative simulated path — taxes, market returns and home costs from the engine.</span>
         </div>
         {valid && (
           <button
@@ -88,7 +88,7 @@ function BreakdownModal({ pctKey, rows, onClose, initialYear }) {
               a.click();
               URL.revokeObjectURL(url);
             }}
-            style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, padding: '0 9px', height: 26, border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, fontFamily: WF.mono, fontSize: 10, color: WF.ink2, cursor: 'pointer', letterSpacing: 0.3, transition: 'border-color .12s, color .12s' }}
+            style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, padding: '0 9px', height: 26, border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink2, cursor: 'pointer', letterSpacing: 0.3, transition: 'border-color .12s, color .12s' }}
             onMouseEnter={(e) => { e.currentTarget.style.borderColor = WF.ink; e.currentTarget.style.color = WF.ink; }}
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = WF.line; e.currentTarget.style.color = WF.ink2; }}
           >
@@ -104,7 +104,7 @@ function BreakdownModal({ pctKey, rows, onClose, initialYear }) {
       <Rule />
 
       {!valid ?
-        <div style={{ fontFamily: WF.mono, fontSize: 11, color: WF.ink3, padding: '24px 0', textAlign: 'center' }}>
+        <div style={{ fontFamily: WF.mono, fontSize: WF.fs(11), color: WF.ink3, padding: '24px 0', textAlign: 'center' }}>
           No detailed path is available for this line yet — adjust the plan and try again.
         </div> :
         <div style={{ display: 'flex', gap: 16, height: 'min(540px, 64vh)' }}>
@@ -121,10 +121,10 @@ function BreakdownModal({ pctKey, rows, onClose, initialYear }) {
                 <button key={r.year} ref={on ? selRef : null} className="wf-tab" onClick={() => setSel(i)}
                   style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 11px', border: 'none', borderBottom: `1px solid ${WF.line2}`, background: on ? WF.ink : 'transparent', cursor: 'pointer' }}>
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, color: on ? WF.paper : WF.ink, fontVariantNumeric: 'tabular-nums' }}>{r.year}</span>
-                    <span style={{ fontFamily: WF.mono, fontSize: 9, color: on ? WF.paper : WF.ink3, opacity: on ? 0.75 : 1 }}>age {r.age}{r.sales.length ? ' · sold' : ''}</span>
+                    <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, color: on ? WF.paper : WF.ink, fontVariantNumeric: 'tabular-nums' }}>{r.year}</span>
+                    <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9), color: on ? WF.paper : WF.ink3, opacity: on ? 0.75 : 1 }}>age {r.age}{r.sales.length ? ' · sold' : ''}</span>
                   </span>
-                  <span style={{ fontFamily: WF.mono, fontSize: 11, fontWeight: 600, color: on ? WF.paper : WF.ink2, fontVariantNumeric: 'tabular-nums' }}>{fmtShort(r.endAssets)}</span>
+                  <span style={{ fontFamily: WF.mono, fontSize: WF.fs(11), fontWeight: 600, color: on ? WF.paper : WF.ink2, fontVariantNumeric: 'tabular-nums' }}>{fmtShort(r.endAssets)}</span>
                 </button>
               );
             })}
@@ -142,8 +142,8 @@ function BreakdownModal({ pctKey, rows, onClose, initialYear }) {
                 { k: 'tax paid', v: d.taxPaid > 0.5 ? fmtMoney(d.taxPaid) : '—' },
               ].map((s) => (
                 <div key={s.k} style={{ background: WF.paper, padding: '9px 11px', display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  <Eyebrow style={{ fontSize: 8.5 }}>{s.k}</Eyebrow>
-                  <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: 15, color: WF.ink, letterSpacing: -0.3, fontVariantNumeric: 'tabular-nums' }}>{s.v}</span>
+                  <Eyebrow style={{ fontSize: WF.fs(8.5) }}>{s.k}</Eyebrow>
+                  <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: WF.fs(15), color: WF.ink, letterSpacing: -0.3, fontVariantNumeric: 'tabular-nums' }}>{s.v}</span>
                 </div>
               ))}
             </div>
@@ -151,18 +151,18 @@ function BreakdownModal({ pctKey, rows, onClose, initialYear }) {
             {/* assets: starting $, this year's return, ending $ */}
             <BkSection title={`Holdings · ${d.year}`} empty={d.assets.length ? null : 'no holdings tracked this year'}>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 0, paddingBottom: 3 }}>
-                <span style={{ fontFamily: WF.mono, fontSize: 8.5, color: WF.ink3, width: 96, textAlign: 'right' }}>START</span>
-                <span style={{ fontFamily: WF.mono, fontSize: 8.5, color: WF.ink3, width: 110, textAlign: 'right' }}>RETURN</span>
-                <span style={{ fontFamily: WF.mono, fontSize: 8.5, color: WF.ink3, width: 96, textAlign: 'right' }}>END</span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(8.5), color: WF.ink3, width: 96, textAlign: 'right' }}>START</span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(8.5), color: WF.ink3, width: 110, textAlign: 'right' }}>RETURN</span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(8.5), color: WF.ink3, width: 96, textAlign: 'right' }}>END</span>
               </div>
               {d.assets.map((a) => (
                 <div key={a.name} style={{ display: 'flex', alignItems: 'baseline', gap: 0, padding: '5px 0', borderBottom: `1px solid ${WF.line2}` }}>
-                  <span style={{ flex: 1, minWidth: 0, fontFamily: WF.sans, fontSize: 12.5, color: WF.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
-                  <span style={{ width: 96, textAlign: 'right', fontFamily: WF.mono, fontSize: 11.5, color: WF.ink2, fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(a.start)}</span>
-                  <span style={{ width: 110, textAlign: 'right', fontFamily: WF.mono, fontSize: 11, color: a.retAmt < -0.5 ? WF.ink : WF.ink2, fontVariantNumeric: 'tabular-nums' }}>
+                  <span style={{ flex: 1, minWidth: 0, fontFamily: WF.sans, fontSize: WF.fs(12.5), color: WF.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                  <span style={{ width: 96, textAlign: 'right', fontFamily: WF.mono, fontSize: WF.fs(11.5), color: WF.ink2, fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(a.start)}</span>
+                  <span style={{ width: 110, textAlign: 'right', fontFamily: WF.mono, fontSize: WF.fs(11), color: a.retAmt < -0.5 ? WF.ink : WF.ink2, fontVariantNumeric: 'tabular-nums' }}>
                     {Math.abs(a.retAmt) < 0.5 ? '—' : fmtSigned(a.retAmt) + (a.retPct ? '  ' + (a.retPct > 0 ? '+' : '−') + Math.abs(a.retPct).toFixed(1) + '%' : '')}
                   </span>
-                  <span style={{ width: 96, textAlign: 'right', fontFamily: WF.mono, fontSize: 11.5, fontWeight: 600, color: WF.ink, fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(a.end)}</span>
+                  <span style={{ width: 96, textAlign: 'right', fontFamily: WF.mono, fontSize: WF.fs(11.5), fontWeight: 600, color: WF.ink, fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(a.end)}</span>
                 </div>
               ))}
             </BkSection>

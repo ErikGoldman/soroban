@@ -174,9 +174,9 @@ function FamilyBand({ family, setFamily, p, onToast }) {
   if (hidden) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px 8px 23px', background: `${WF.fill}88`, borderBottom: `1px solid ${WF.line2}` }}>
-        <span style={{ fontFamily: WF.sans, fontSize: 13, fontWeight: 700, color: WF.ink }}>Children</span>
-        {family.count > 0 && <span style={{ fontFamily: WF.mono, fontSize: 11, color: WF.ink3 }}>{family.count}</span>}
-        <button onClick={() => setHidden(false)} style={{ ...btnBase, marginLeft: 'auto', background: 'none', fontFamily: WF.mono, fontSize: 11, fontWeight: 700, color: WF.ink2, letterSpacing: 0.3 }}>SHOW</button>
+        <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), fontWeight: 700, color: WF.ink }}>Children</span>
+        {family.count > 0 && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(11), color: WF.ink3 }}>{family.count}</span>}
+        <button onClick={() => setHidden(false)} style={{ ...btnBase, marginLeft: 'auto', background: 'none', fontFamily: WF.mono, fontSize: WF.fs(11), fontWeight: 700, color: WF.ink2, letterSpacing: 0.3 }}>SHOW</button>
       </div>
     );
   }
@@ -185,34 +185,34 @@ function FamilyBand({ family, setFamily, p, onToast }) {
     <div style={{ marginBottom: 0 }}>
       {/* ── configurator band ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 14px 10px 23px', background: `${WF.fill}88`, borderBottom: `1px solid ${WF.line2}`, flexWrap: 'wrap' }}>
-        <span style={{ fontFamily: WF.sans, fontSize: 13, fontWeight: 700, color: WF.ink, flexShrink: 0 }}>Children</span>
+        <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), fontWeight: 700, color: WF.ink, flexShrink: 0 }}>Children</span>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <button onClick={() => adjustCount(-1)} className="btn-circle" style={{ ...btnBase, width: 21, height: 21, border: `1.5px solid ${WF.line}`, background: WF.paper, fontSize: 14, color: WF.ink }}>–</button>
-          <span style={{ fontFamily: WF.sans, fontSize: 18, fontWeight: 700, color: WF.ink, minWidth: 16, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{family.count}</span>
-          <button onClick={() => adjustCount(1)} className="btn-circle" style={{ ...btnBase, width: 21, height: 21, border: `1.5px solid ${WF.ink}`, background: WF.ink, fontSize: 14, color: WF.paper }}>+</button>
+          <button onClick={() => adjustCount(-1)} className="btn-circle" style={{ ...btnBase, width: 21, height: 21, border: `1.5px solid ${WF.line}`, background: WF.paper, fontSize: WF.fs(14), color: WF.ink }}>–</button>
+          <span style={{ fontFamily: WF.sans, fontSize: WF.fs(18), fontWeight: 700, color: WF.ink, minWidth: 16, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{family.count}</span>
+          <button onClick={() => adjustCount(1)} className="btn-circle" style={{ ...btnBase, width: 21, height: 21, border: `1.5px solid ${WF.ink}`, background: WF.ink, fontSize: WF.fs(14), color: WF.paper }}>+</button>
         </div>
 
         {family.count > 0 && <>
           <div style={{ width: 1, height: 20, background: WF.line, flexShrink: 0 }} />
           {family.years.slice(0, family.count).map((yr, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
-              <span style={{ fontFamily: WF.mono, fontSize: 11.5, color: WF.ink2 }}>Child {i + 1} →</span>
+              <span style={{ fontFamily: WF.mono, fontSize: WF.fs(11.5), color: WF.ink2 }}>Child {i + 1} →</span>
               <YearCell value={yr} onChange={(v) => setChildYear(i, v)} w={62} />
             </div>
           ))}
         </>}
 
-        <button onClick={() => setHidden(true)} style={{ ...btnBase, marginLeft: 'auto', background: 'none', fontFamily: WF.mono, fontSize: 11, fontWeight: 700, color: WF.ink2, letterSpacing: 0.3 }}>HIDE</button>
+        <button onClick={() => setHidden(true)} style={{ ...btnBase, marginLeft: 'auto', background: 'none', fontFamily: WF.mono, fontSize: WF.fs(11), fontWeight: 700, color: WF.ink2, letterSpacing: 0.3 }}>HIDE</button>
       </div>
 
       {/* ── suggestions bar ── */}
       {visibleSuggestions.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px 8px 23px', borderBottom: `1px solid ${WF.line2}`, flexWrap: 'wrap', background: `${WF.fill}88` }}>
-          <span style={{ fontFamily: WF.mono, fontSize: 9, color: WF.ink3, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0 }}>Suggested</span>
+          <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9), color: WF.ink3, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0 }}>Suggested</span>
           {visibleSuggestions.map((s) => (
             <button key={s.key} className="wf-tab wf-try-btn" onClick={() => addSuggestion(s)}
-              style={{ padding: '5px 10px', border: `1px solid ${WF.line}`, borderRadius: '999px', appearance: 'none', WebkitAppearance: 'none', background: WF.paper, fontFamily: WF.sans, fontSize: 11.5, color: WF.ink2, cursor: 'pointer' }}>
+              style={{ padding: '5px 10px', border: `1px solid ${WF.line}`, borderRadius: '999px', appearance: 'none', WebkitAppearance: 'none', background: WF.paper, fontFamily: WF.sans, fontSize: WF.fs(11.5), color: WF.ink2, cursor: 'pointer' }}>
               + {s.label}
             </button>
           ))}

@@ -16,6 +16,7 @@ const WF = {
   accent: '#1b1b1d',
   sans: 'system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif',
   mono: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+  fs: (px) => `calc(${px}px * var(--wf-text-scale))`,
 };
 
 // one-time CSS for range inputs + hatch + caret
@@ -36,7 +37,7 @@ if (typeof document !== 'undefined' && !document.getElementById('wf-styles')) {
 // ── Annotation: monospace grey caption, optionally with a // prefix ──
 function Anno({ children, style }) {
   return (
-    <div style={{ fontFamily: WF.mono, fontSize: 10.5, lineHeight: 1.45, color: WF.ink3, letterSpacing: 0.1, ...style }}>
+    <div style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), lineHeight: 1.45, color: WF.ink3, letterSpacing: 0.1, ...style }}>
       {children}
     </div>
   );
@@ -48,7 +49,7 @@ function Hatch({ label, w = '100%', h = 80, style }) {
     <div className="wf-hatch" style={{
       width: w, height: h, border: `1px dashed ${WF.line}`, display: 'flex',
       alignItems: 'center', justifyContent: 'center', color: WF.ink3,
-      fontFamily: WF.mono, fontSize: 10, textTransform: 'lowercase', letterSpacing: 0.3, ...style,
+      fontFamily: WF.mono, fontSize: WF.fs(10), textTransform: 'lowercase', letterSpacing: 0.3, ...style,
     }}>{label}</div>
   );
 }
@@ -57,9 +58,9 @@ function Hatch({ label, w = '100%', h = 80, style }) {
 function Stat({ label, value, sub, emph }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-      <div style={{ fontFamily: WF.mono, fontSize: 9.5, letterSpacing: 0.6, textTransform: 'uppercase', color: WF.ink3 }}>{label}</div>
-      <div style={{ fontFamily: WF.sans, fontWeight: 600, fontSize: emph ? 28 : 21, color: WF.ink, lineHeight: 1, letterSpacing: -0.5, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
-      {sub && <div style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink2 }}>{sub}</div>}
+      <div style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), letterSpacing: 0.6, textTransform: 'uppercase', color: WF.ink3 }}>{label}</div>
+      <div style={{ fontFamily: WF.sans, fontWeight: 600, fontSize: WF.fs(emph ? 28 : 21), color: WF.ink, lineHeight: 1, letterSpacing: -0.5, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+      {sub && <div style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink2 }}>{sub}</div>}
     </div>
   );
 }
@@ -76,7 +77,7 @@ function Seg({ options, value, onChange, size = 'md', grow }) {
         const active = val === value;
         return (
           <button key={val} className="wf-tab" onClick={() => onChange && onChange(val)} style={{
-            flex: grow ? 1 : 'none', padding: '0 10px', height: '100%', fontFamily: WF.sans, fontSize: 12, fontWeight: active ? 600 : 500,
+            flex: grow ? 1 : 'none', padding: '0 10px', height: '100%', fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: active ? 600 : 500,
             border: 'none', borderLeft: i ? `1px solid ${WF.line}` : 'none',
             background: active ? WF.ink : WF.paper, color: active ? WF.paper : WF.ink2, cursor: 'pointer',
             whiteSpace: 'nowrap', transition: 'background .12s,color .12s',
@@ -94,7 +95,7 @@ function Btn({ children, kind = 'ghost', size = 'md', onClick, style }) {
   const fill = kind === 'solid';
   return (
     <button onClick={onClick} className="wf-tab" style={{
-      height: h, padding: pad, boxSizing: 'border-box', fontFamily: WF.sans, fontSize: size === 'sm' ? 11.5 : 12.5, fontWeight: 600,
+      height: h, padding: pad, boxSizing: 'border-box', fontFamily: WF.sans, fontSize: WF.fs(size === 'sm' ? 11.5 : 12.5), fontWeight: 600,
       border: fill ? `1.5px solid ${WF.ink}` : `1px solid ${WF.ink}`, borderRadius: 2, background: fill ? WF.ink : WF.paper,
       color: fill ? WF.paper : WF.ink, cursor: 'pointer', whiteSpace: 'nowrap', letterSpacing: 0.1, display: 'inline-flex', alignItems: 'center', ...style,
     }}>{children}</button>
@@ -105,12 +106,12 @@ function Btn({ children, kind = 'ghost', size = 'md', onClick, style }) {
 function Field({ label, value, sub, w = '100%', tabular }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, width: w }}>
-      {label && <span style={{ fontFamily: WF.mono, fontSize: 9.5, letterSpacing: 0.4, textTransform: 'uppercase', color: WF.ink3 }}>{label}</span>}
+      {label && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), letterSpacing: 0.4, textTransform: 'uppercase', color: WF.ink3 }}>{label}</span>}
       <span style={{
         border: `1px solid ${WF.line}`, borderRadius: 2, padding: '7px 9px', minHeight: 16, background: WF.paper,
-        fontFamily: tabular ? WF.mono : WF.sans, fontSize: 12.5, color: value ? WF.ink : WF.ink3,
+        fontFamily: tabular ? WF.mono : WF.sans, fontSize: WF.fs(12.5), color: value ? WF.ink : WF.ink3,
         fontVariantNumeric: 'tabular-nums', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
-      }}>{value || 'placeholder'}{sub && <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>{sub}</span>}</span>
+      }}>{value || 'placeholder'}{sub && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>{sub}</span>}</span>
     </label>
   );
 }
@@ -122,7 +123,7 @@ function Check({ checked, label, onClick }) {
       <span style={{ width: 15, height: 15, flexShrink: 0, border: `1.5px solid ${WF.ink}`, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', background: checked ? WF.ink : WF.paper }}>
         {checked && <svg width="9" height="7" viewBox="0 0 9 7" fill="none" stroke={WF.paper} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 3.5 3.5 6 8 1" /></svg>}
       </span>
-      <span style={{ fontFamily: WF.sans, fontSize: 12, color: WF.ink2 }}>{label}</span>
+      <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12), color: WF.ink2 }}>{label}</span>
     </button>
   );
 }
@@ -135,13 +136,13 @@ function WChrome({ tab, tabs = ['Dashboard', 'Plan', 'Compare'], compact }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: compact ? 10 : 18, padding: compact ? '0 0 0 0' : '0 0 0 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ width: compact ? 18 : 22, height: compact ? 18 : 22, border: `1.5px solid ${WF.ink}`, borderRadius: 3, display: 'grid', placeItems: 'center', fontFamily: WF.mono, fontSize: compact ? 11 : 13, fontWeight: 700, color: WF.ink }}>S</div>
-        {!compact && <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: 14, letterSpacing: -0.2, color: WF.ink }}>Soroban</span>}
+        <div style={{ width: compact ? 18 : 22, height: compact ? 18 : 22, border: `1.5px solid ${WF.ink}`, borderRadius: 3, display: 'grid', placeItems: 'center', fontFamily: WF.mono, fontSize: WF.fs(compact ? 11 : 13), fontWeight: 700, color: WF.ink }}>S</div>
+        {!compact && <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: WF.fs(14), letterSpacing: -0.2, color: WF.ink }}>Soroban</span>}
       </div>
       {!compact && (
         <div style={{ display: 'flex', gap: 2, marginLeft: 6 }}>
           {tabs.map((t) => (
-            <span key={t} style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: t === tab ? 600 : 500, color: t === tab ? WF.ink : WF.ink3, padding: '4px 2px', borderBottom: t === tab ? `2px solid ${WF.ink}` : '2px solid transparent' }}>{t}</span>
+            <span key={t} style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: t === tab ? 600 : 500, color: t === tab ? WF.ink : WF.ink3, padding: '4px 2px', borderBottom: t === tab ? `2px solid ${WF.ink}` : '2px solid transparent' }}>{t}</span>
           ))}
         </div>
       )}
@@ -156,7 +157,7 @@ function Panel({ children, style, pad = 16 }) {
 
 // ── Small caption/eyebrow ──
 function Eyebrow({ children, style }) {
-  return <div style={{ fontFamily: WF.mono, fontSize: 9.5, letterSpacing: 0.8, textTransform: 'uppercase', color: WF.ink3, ...style }}>{children}</div>;
+  return <div style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), letterSpacing: 0.8, textTransform: 'uppercase', color: WF.ink3, ...style }}>{children}</div>;
 }
 
 // parse "300k" → 300000, "1.5m" → 1500000, "2b" → 2000000000, else parse as plain int
@@ -211,7 +212,7 @@ function NumCell({ value, onChange, w = 82, strong, align = 'right' }) {
       border: `1px solid ${foc ? WF.ink : WF.line}`, borderRadius: 2, padding: '0 7px', width: w, height: 33,
       background: WF.paper, boxShadow: foc ? `0 0 0 2px ${WF.fill2}` : 'none',
     }}>
-      <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink3 }}>$</span>
+      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink3 }}>$</span>
       <input
         ref={inputRef}
         value={foc ? draft : Number(value || 0).toLocaleString()}
@@ -227,7 +228,7 @@ function NumCell({ value, onChange, w = 82, strong, align = 'right' }) {
           }
         }}
         style={{ border: 'none', outline: 'none', width: '100%', minWidth: 0, background: 'transparent', padding: 0,
-          fontFamily: WF.mono, fontSize: strong ? 12.5 : 11.5, fontWeight: strong ? 600 : 400, color: WF.ink, textAlign: align }}
+          fontFamily: WF.mono, fontSize: WF.fs(strong ? 12.5 : 11.5), fontWeight: strong ? 600 : 400, color: WF.ink, textAlign: align }}
       />
     </span>
   );
@@ -243,7 +244,7 @@ function ViewSwitch({ value, onChange, options = [{ value: 'graph', label: 'Grap
           <button key={o.value} className="wf-tab" onClick={() => onChange(o.value)} style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 2,
             border: `1.5px solid ${active ? WF.ink : WF.line}`, background: active ? WF.ink : WF.paper,
-            color: active ? WF.paper : WF.ink2, fontFamily: WF.sans, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            color: active ? WF.paper : WF.ink2, fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 600, cursor: 'pointer',
           }}>
             <span style={{ width: 12, height: 10, display: 'inline-grid', placeItems: 'center' }}>
               {o.value === 'graph'

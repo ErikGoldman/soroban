@@ -1,5 +1,23 @@
 /* ── Global resets ─────────────────────────────────────────────────────── */
-html, body { margin: 0; padding: 0; background: #ffffff; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #ffffff;
+  --wf-text-scale: 1;
+}
+
+@media (min-width: 1440px) {
+  html, body { --wf-text-scale: 1.08; }
+}
+
+@media (min-width: 1920px) {
+  html, body { --wf-text-scale: 1.16; }
+}
+
+@media (min-width: 2560px) {
+  html, body { --wf-text-scale: 1.22; }
+}
+
 * { box-sizing: border-box; }
 ::selection { background: #CBFF37; color: #000; }
 
@@ -11,9 +29,8 @@ button.wf-try-btn { transition: background .12s, color .12s, border-color .12s; 
 button.wf-try-btn:hover { background: #1b1b1d !important; color: #fff !important; border-color: #1b1b1d !important; }
 
 /* ── Monospace overrides ─────────────────────────────────────────────── */
-[style*="ui-monospace"] { text-transform: uppercase; font-size: 11px !important; }
-.wf-tag { font-size: 9px !important; }
-.wf-caret { font-size: 14px !important; line-height: 1; }
+[style*="ui-monospace"] { text-transform: uppercase; }
+.wf-caret { line-height: 1; }
 
 /* ── Range inputs (wf-kit) ───────────────────────────────────────────── */
 .wf-range {

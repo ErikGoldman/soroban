@@ -515,36 +515,36 @@ function PreviewPane({ items, label }) {
   return (
     <div style={{ padding: '36px 34px', background: WF.fill, display: 'flex', flexDirection: 'column', gap: 16, overflow: 'auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontFamily: WF.mono, fontSize: 9.5, letterSpacing: 0.5, textTransform: 'uppercase', color: WF.ink3 }}>{label || 'we’ll draft this — preview'}</span>
-        <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>{count ? `${count} item${count === 1 ? '' : 's'} · editable` : 'waiting for input'}</span>
+        <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), letterSpacing: 0.5, textTransform: 'uppercase', color: WF.ink3 }}>{label || 'we’ll draft this — preview'}</span>
+        <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>{count ? `${count} item${count === 1 ? '' : 's'} · editable` : 'waiting for input'}</span>
       </div>
       {!count ?
       <div className="wf-hatch" style={{ flex: 1, border: `1px dashed ${WF.line}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, textAlign: 'center', padding: 30 }}>
           <Sparkle size={20} color={WF.ink3} />
-          <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink3, maxWidth: 220, lineHeight: 1.6 }}>as you describe your life, the items we detect will appear here</span>
+          <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink3, maxWidth: 220, lineHeight: 1.6 }}>as you describe your life, the items we detect will appear here</span>
         </div> :
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {groups.map((g) =>
         <div key={g.sec} style={{ background: WF.paper, border: `1px solid ${WF.line}` }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 13px', borderBottom: `1px solid ${WF.line2}` }}>
-                <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 700, color: WF.ink }}>{g.title}</span>
-                <span style={{ fontFamily: WF.mono, fontSize: 9, color: WF.ink3 }}>{g.rows.length} item{g.rows.length === 1 ? '' : 's'}</span>
+                <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 700, color: WF.ink }}>{g.title}</span>
+                <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9), color: WF.ink3 }}>{g.rows.length} item{g.rows.length === 1 ? '' : 's'}</span>
               </div>
               {g.rows.map((it, i) =>
           <div key={it.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 13px', borderTop: i ? `1px solid ${WF.line2}` : 'none' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ width: 5, height: 5, borderRadius: 5, background: WF.ink3 }} />
-                    <span style={{ fontFamily: WF.sans, fontSize: 12.5, color: WF.ink }}>{it.label}</span>
+                    <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), color: WF.ink }}>{it.label}</span>
                   </span>
-                  <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink2 }}>{previewVal(it)}</span>
+                  <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink2 }}>{previewVal(it)}</span>
                 </div>
           )}
             </div>
         )}
         </div>
       }
-      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 9, fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>
+      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 9, fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>
         <svg width="64" height="22" viewBox="0 0 64 22" fill="none" stroke={WF.ink2} strokeWidth="1.6" strokeLinecap="round"><path d="M2 20C14 20 16 4 30 4s18 10 32 2" /></svg>
         <span style={{ textTransform: 'none' }}>a net-worth projection appears the moment you draft</span>
       </div>
@@ -591,8 +591,8 @@ function IntroHeader({ step }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 24px', borderBottom: `1px solid ${WF.line}`, flexShrink: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-        <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: 18, letterSpacing: -0.2, color: WF.ink }}>Soroban</span>
-        <span style={{ fontFamily: WF.mono, fontSize: 9, color: WF.ink3, letterSpacing: 0.5, textTransform: 'uppercase' }}>beta</span>
+        <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: WF.fs(18), letterSpacing: -0.2, color: WF.ink }}>Soroban</span>
+        <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9), color: WF.ink3, letterSpacing: 0.5, textTransform: 'uppercase' }}>beta</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {[0, 1].map((i) => <span key={i} style={{ width: i === step ? 18 : 7, height: 7, borderRadius: 4, background: i <= step ? WF.ink : WF.line, transition: 'all .2s' }} />)}
@@ -608,7 +608,7 @@ function QField({ q, value, onChange }) {
     return (
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
         {q.options.map((c) => {const on = value === c;return (
-            <button key={c} className="wf-tab" onMouseEnter={() => setHov(c)} onMouseLeave={() => setHov((h) => h === c ? null : h)} onClick={() => onChange(c)} style={{ fontFamily: WF.sans, fontSize: 11.5, color: on ? WF.paper : WF.ink2, background: on ? WF.ink : hov === c ? WF.fill : WF.paper, border: `1px solid ${on || hov === c ? WF.ink : WF.line}`, padding: '5px 11px', cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none' }}>{c}</button>);
+            <button key={c} className="wf-tab" onMouseEnter={() => setHov(c)} onMouseLeave={() => setHov((h) => h === c ? null : h)} onClick={() => onChange(c)} style={{ fontFamily: WF.sans, fontSize: WF.fs(11.5), color: on ? WF.paper : WF.ink2, background: on ? WF.ink : hov === c ? WF.fill : WF.paper, border: `1px solid ${on || hov === c ? WF.ink : WF.line}`, padding: '5px 11px', cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none' }}>{c}</button>);
         })}
       </div>);
 
@@ -618,8 +618,8 @@ function QField({ q, value, onChange }) {
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
         <input type="text" inputMode="numeric" value={value} placeholder={String(q.suggested)}
         onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, '').slice(0, 3))}
-        style={{ width: 70, textAlign: 'center', border: `1.5px solid ${WF.ink}`, padding: '9px 6px', fontFamily: WF.mono, fontSize: 16, fontWeight: 700, color: WF.ink, outline: 'none', background: WF.paper }} />
-        <span style={{ fontFamily: WF.sans, fontSize: 14, color: WF.ink2 }}>years old</span>
+        style={{ width: 70, textAlign: 'center', border: `1.5px solid ${WF.ink}`, padding: '9px 6px', fontFamily: WF.mono, fontSize: WF.fs(16), fontWeight: 700, color: WF.ink, outline: 'none', background: WF.paper }} />
+        <span style={{ fontFamily: WF.sans, fontSize: WF.fs(14), color: WF.ink2 }}>years old</span>
       </div>);
 
   }
@@ -627,16 +627,16 @@ function QField({ q, value, onChange }) {
     return (
       <input type="text" inputMode="numeric" value={value} placeholder={String(q.suggested)}
       onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
-      style={{ width: 110, textAlign: 'left', border: `1.5px solid ${WF.ink}`, padding: '9px 11px', fontFamily: WF.mono, fontSize: 14, fontWeight: 600, color: WF.ink, outline: 'none', background: WF.paper }} />);
+      style={{ width: 110, textAlign: 'left', border: `1.5px solid ${WF.ink}`, padding: '9px 11px', fontFamily: WF.mono, fontSize: WF.fs(14), fontWeight: 600, color: WF.ink, outline: 'none', background: WF.paper }} />);
 
   }
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: `1.5px solid ${WF.ink}`, padding: '0 11px', height: 40, width: 240, background: WF.paper }}>
-      <span style={{ fontFamily: WF.mono, fontSize: 13, color: WF.ink3 }}>$</span>
+      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(13), color: WF.ink3 }}>$</span>
       <input type="text" inputMode="numeric" value={value ? Number(value).toLocaleString() : ''} placeholder={Number(q.suggested).toLocaleString()}
       onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, ''))}
-      style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: WF.mono, fontSize: 14, fontWeight: 600, color: WF.ink, padding: 0 }} />
-      {q.unit && <span style={{ fontFamily: WF.mono, fontSize: 12, color: WF.ink3 }}>{q.unit}</span>}
+      style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: WF.mono, fontSize: WF.fs(14), fontWeight: 600, color: WF.ink, padding: 0 }} />
+      {q.unit && <span style={{ fontFamily: WF.mono, fontSize: WF.fs(12), color: WF.ink3 }}>{q.unit}</span>}
     </div>);
 
 }
@@ -666,12 +666,12 @@ function CityCombo({ value, onChange }) {
           else if (e.key === 'Enter') { if (open && list[hi]) { e.preventDefault(); pick(list[hi]); } }
           else if (e.key === 'Escape') setOpen(false);
         }}
-        style={{ width: '100%', boxSizing: 'border-box', height: 40, border: `1.5px solid ${value ? WF.ink : WF.line}`, padding: '0 34px 0 11px', fontFamily: WF.sans, fontSize: 14, fontWeight: 400, color: WF.ink, outline: 'none', background: WF.paper, ...chevron }} />
+        style={{ width: '100%', boxSizing: 'border-box', height: 40, border: `1.5px solid ${value ? WF.ink : WF.line}`, padding: '0 34px 0 11px', fontFamily: WF.sans, fontSize: WF.fs(14), fontWeight: 400, color: WF.ink, outline: 'none', background: WF.paper, ...chevron }} />
       {open && list.length > 0 && (
         <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, maxHeight: 224, overflowY: 'auto', background: WF.paper, border: `1.5px solid ${WF.ink}`, zIndex: 30, boxShadow: '0 6px 22px rgba(0,0,0,0.10)' }}>
           {list.map((c, i) => (
             <div key={c} onMouseDown={(e) => { e.preventDefault(); pick(c); }} onMouseEnter={() => setHi(i)}
-              style={{ padding: '8px 11px', fontFamily: WF.sans, fontSize: 13.5, color: WF.ink, cursor: 'pointer', background: i === hi ? WF.fill : WF.paper }}>{c}</div>
+              style={{ padding: '8px 11px', fontFamily: WF.sans, fontSize: WF.fs(13.5), color: WF.ink, cursor: 'pointer', background: i === hi ? WF.fill : WF.paper }}>{c}</div>
           ))}
         </div>
       )}
@@ -726,46 +726,46 @@ function IntroIntake({ onDraft, onSkip, embedded, initialText, initialAge, initi
         <div style={{ width: '100%', maxWidth: 740, padding: embedded ? '6px 0 4px' : '40px 44px', display: 'flex', flexDirection: 'column', gap: 18 }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 22, alignItems: 'flex-start', padding: '2px 0 2px' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-              <span style={{ fontFamily: WF.sans, fontSize: 13.5, fontWeight: 600, color: WF.ink }}>How old are you today?<span style={{ color: '#c0392b', marginLeft: 2 }}>*</span></span>
+              <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13.5), fontWeight: 600, color: WF.ink }}>How old are you today?<span style={{ color: '#c0392b', marginLeft: 2 }}>*</span></span>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
                 <input type="text" inputMode="numeric" value={age} placeholder="32"
                 onChange={(e) => setAge(e.target.value.replace(/[^0-9]/g, '').slice(0, 3))}
-                style={{ width: 70, height: 40, boxSizing: 'border-box', textAlign: 'left', border: `1.5px solid ${age ? WF.ink : WF.line}`, padding: '0 11px', fontFamily: WF.sans, fontSize: 14, fontWeight: 400, color: WF.ink, outline: 'none', background: WF.paper }} />
-                <span style={{ fontFamily: WF.sans, fontSize: 14, color: WF.ink2 }}>years old</span>
+                style={{ width: 70, height: 40, boxSizing: 'border-box', textAlign: 'left', border: `1.5px solid ${age ? WF.ink : WF.line}`, padding: '0 11px', fontFamily: WF.sans, fontSize: WF.fs(14), fontWeight: 400, color: WF.ink, outline: 'none', background: WF.paper }} />
+                <span style={{ fontFamily: WF.sans, fontSize: WF.fs(14), color: WF.ink2 }}>years old</span>
               </div>
             </label>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-              <span style={{ fontFamily: WF.sans, fontSize: 13.5, fontWeight: 600, color: WF.ink }}>Where do you live?<span style={{ color: '#c0392b', marginLeft: 2 }}>*</span></span>
+              <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13.5), fontWeight: 600, color: WF.ink }}>Where do you live?<span style={{ color: '#c0392b', marginLeft: 2 }}>*</span></span>
               <CityCombo value={city} onChange={setCity} />
             </label>
           </div>
           <div style={{ border: `1.5px solid ${WF.ink}`, padding: '13px 15px', minHeight: 200, display: 'flex', flexDirection: 'column', gap: 9, background: WF.paper, boxShadow: '0 0 0 3px ' + WF.fill2 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <Sparkle size={13} />
-              <span style={{ fontFamily: WF.mono, fontSize: 9.5, letterSpacing: 0.5, textTransform: 'uppercase', color: WF.ink3 }}>describe your situation</span>
+              <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), letterSpacing: 0.5, textTransform: 'uppercase', color: WF.ink3 }}>describe your situation</span>
             </div>
             <textarea ref={ref} value={text} onChange={(e) => setText(e.target.value)} autoFocus
             placeholder="Start typing… e.g. “I make $9k/month, rent is $2,800, I have $40k saved and want to buy a place in 5 years.”"
-            style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', background: 'transparent', fontFamily: WF.sans, fontSize: 14.5, lineHeight: 1.6, color: WF.ink, padding: 0 }} />
+            style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', background: 'transparent', fontFamily: WF.sans, fontSize: WF.fs(14.5), lineHeight: 1.6, color: WF.ink, padding: 0 }} />
             <div style={{ display: 'flex', justifyContent: 'flex-start', paddingTop: 4 }}>
-              <button onClick={() => {const ta = ref.current;if (ta) {ta.focus();ta.select();if (!document.execCommand('insertText', false, INTRO_EXAMPLE)) setText(INTRO_EXAMPLE);} else setText(INTRO_EXAMPLE);}} style={{ fontFamily: WF.sans, fontSize: 12, color: WF.ink3, cursor: 'pointer', background: 'none', border: 'none', padding: 0, textDecoration: 'underline', textUnderlineOffset: 2 }}>Paste an example</button>
+              <button onClick={() => {const ta = ref.current;if (ta) {ta.focus();ta.select();if (!document.execCommand('insertText', false, INTRO_EXAMPLE)) setText(INTRO_EXAMPLE);} else setText(INTRO_EXAMPLE);}} style={{ fontFamily: WF.sans, fontSize: WF.fs(12), color: WF.ink3, cursor: 'pointer', background: 'none', border: 'none', padding: 0, textDecoration: 'underline', textUnderlineOffset: 2 }}>Paste an example</button>
             </div>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-            <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3, alignSelf: 'center', marginRight: 2, textTransform: 'uppercase' }}>or add a detail:</span>
+            <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3, alignSelf: 'center', marginRight: 2, textTransform: 'uppercase' }}>or add a detail:</span>
             {introChips(city).map((c) =>
-            <button key={c.label} className="wf-tab wf-try-btn" onClick={() => addChip(c.add)} style={{ fontFamily: WF.sans, fontSize: 11.5, color: WF.ink2, border: `1px solid ${WF.line}`, padding: '5px 11px', cursor: 'pointer', background: WF.paper, appearance: 'none', WebkitAppearance: 'none' }}>{c.label}</button>
+            <button key={c.label} className="wf-tab wf-try-btn" onClick={() => addChip(c.add)} style={{ fontFamily: WF.sans, fontSize: WF.fs(11.5), color: WF.ink2, border: `1px solid ${WF.line}`, padding: '5px 11px', cursor: 'pointer', background: WF.paper, appearance: 'none', WebkitAppearance: 'none' }}>{c.label}</button>
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 'auto', paddingTop: 6 }}>
             <span style={{ flex: 1 }} />
             {!ready && (text.trim().length > 12) && (!ageOk || !city) && (
-            <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: '#c0392b', marginRight: 4 }}>
+            <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: '#c0392b', marginRight: 4 }}>
               {(!ageOk && !city) ? 'Age and city are required' : !ageOk ? 'Age is required' : 'City is required'}
             </span>
             )}
             <button onClick={ready ? draft : undefined}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 9, height: 42, padding: '0 20px', border: `1.5px solid ${WF.ink}`, background: WF.ink, color: WF.paper, fontFamily: WF.sans, fontSize: 14, fontWeight: 700, cursor: ready ? 'pointer' : 'not-allowed', opacity: ready ? 1 : 0.4 }}>
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 9, height: 42, padding: '0 20px', border: `1.5px solid ${WF.ink}`, background: WF.ink, color: WF.paper, fontFamily: WF.sans, fontSize: WF.fs(14), fontWeight: 700, cursor: ready ? 'pointer' : 'not-allowed', opacity: ready ? 1 : 0.4 }}>
               <Sparkle size={14} color={WF.paper} /> Draft my plan
             </button>
           </div>

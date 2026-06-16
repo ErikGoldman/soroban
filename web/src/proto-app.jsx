@@ -71,12 +71,12 @@ function SimLoading({ err }) {
   return (
     <div style={{ height: '100%', border: `1px dashed ${WF.line}`, borderRadius: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 9, background: WF.paper, boxSizing: 'border-box' }}>
       {err ?
-      <span style={{ fontFamily: WF.mono, fontSize: 11, color: WF.ink }}>! the simulation engine failed to load — check the console and reload</span> :
+      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(11), color: WF.ink }}>! the simulation engine failed to load — check the console and reload</span> :
 
       <React.Fragment>
           <style>{`@keyframes simPulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }`}</style>
-          <span style={{ fontFamily: WF.sans, fontSize: 14.5, fontWeight: 600, color: WF.ink2, animation: 'simPulse 1.4s ease-in-out infinite' }}>Running {ENGINE_ATTEMPTS} market simulations…</span>
-          <span style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3 }}>taxes · volatility · mortgages — computed by the real engine</span>
+          <span style={{ fontFamily: WF.sans, fontSize: WF.fs(14.5), fontWeight: 600, color: WF.ink2, animation: 'simPulse 1.4s ease-in-out infinite' }}>Running {ENGINE_ATTEMPTS} market simulations…</span>
+          <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>taxes · volatility · mortgages — computed by the real engine</span>
         </React.Fragment>
       }
     </div>);
@@ -90,8 +90,8 @@ function CondensedBar({ series, plan, onExpand, nwMode, showNwToggle }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '10px 14px', background: WF.paper }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0 }}>
-        <Eyebrow style={{ fontSize: 8.5 }}>{lbl} · age {last.age}</Eyebrow>
-        <FlipNum value={fmtMoney(last.nw)} style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: 21, letterSpacing: -0.5, color: WF.ink, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }} />
+        <Eyebrow style={{ fontSize: WF.fs(8.5) }}>{lbl} · age {last.age}</Eyebrow>
+        <FlipNum value={fmtMoney(last.nw)} style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: WF.fs(21), letterSpacing: -0.5, color: WF.ink, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }} />
       </div>
       <div style={{ width: 1, height: 30, background: WF.line2, flexShrink: 0 }} />
       <MiniNW series={series} plan={plan} h={44} />
@@ -132,7 +132,7 @@ function HeadlineP({ series, age, onAge, nwMode, showNwToggle }) {
     onAge(next);
   };
   return (
-    <p style={{ margin: '8px 0', fontFamily: WF.sans, fontSize: 28, fontWeight: 400, letterSpacing: -0.5, color: WF.ink, lineHeight: 1.2, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0 6px' }}>
+    <p style={{ margin: '8px 0', fontFamily: WF.sans, fontSize: WF.fs(28), fontWeight: 400, letterSpacing: -0.5, color: WF.ink, lineHeight: 1.2, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0 6px' }}>
       <span>At age</span>
       <span
         onMouseEnter={() => setHovered(true)}
@@ -189,7 +189,7 @@ function FullViz({ plan, series, onMilestoneDrag, horizon, setHorizon, sim, canU
         return (
           <button key={key} className="wf-tab" onClick={() => setNwMode && setNwMode(key)}
             title={key === 'liquid' ? "Liquid net worth — excludes your house" : "Total net worth — includes your house"}
-            style={{ height: 24, padding: '0 9px', border: 'none', borderLeft: i === 0 ? 'none' : `1px solid ${WF.line}`, background: on ? WF.ink : 'transparent', color: on ? WF.paper : WF.ink2, fontFamily: WF.sans, fontSize: 11, fontWeight: on ? 600 : 500, cursor: 'pointer', letterSpacing: -0.1 }}>
+            style={{ height: 24, padding: '0 9px', border: 'none', borderLeft: i === 0 ? 'none' : `1px solid ${WF.line}`, background: on ? WF.ink : 'transparent', color: on ? WF.paper : WF.ink2, fontFamily: WF.sans, fontSize: WF.fs(11), fontWeight: on ? 600 : 500, cursor: 'pointer', letterSpacing: -0.1 }}>
             {label}
           </button>);
       })}
@@ -228,8 +228,8 @@ function EmptyPlan({ onRestore }) {
     <div className="wf-hatch" style={{ border: `1px dashed ${WF.line}`, borderRadius: 3, padding: '46px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
       <svg width="44" height="30" viewBox="0 0 44 30" fill="none" stroke={WF.ink3} strokeWidth="1.6"><path d="M2 27C10 27 12 5 22 5s12 14 20 14" strokeDasharray="3 4" /></svg>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
-        <span style={{ fontFamily: WF.sans, fontSize: 14, fontWeight: 700, color: WF.ink }}>Your plan is empty</span>
-        <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink3, maxWidth: 380, lineHeight: 1.55 }}>add income, expenses and holdings below — or describe your life in the box above — and your net-worth projection appears here</span>
+        <span style={{ fontFamily: WF.sans, fontSize: WF.fs(14), fontWeight: 700, color: WF.ink }}>Your plan is empty</span>
+        <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink3, maxWidth: 380, lineHeight: 1.55 }}>add income, expenses and holdings below — or describe your life in the box above — and your net-worth projection appears here</span>
       </div>
       <Btn size="sm" onClick={onRestore}>Restore demo plan</Btn>
     </div>);
@@ -252,7 +252,7 @@ function ConfirmDeleteModal({ confirm, plan, onCancel, onConfirm }) {
     <ModalShell onClose={onCancel} width={480}>
       <ModalHead eyebrow="delete item" title={`Delete “${item.label.trim() || '(unnamed)'}”?`} onClose={onCancel} />
       <Rule />
-      <span style={{ fontFamily: WF.sans, fontSize: 12.5, color: WF.ink2, lineHeight: 1.5 }}>
+      <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), color: WF.ink2, lineHeight: 1.5 }}>
         {deps.length === 1 ? 'One item is calculated from this value and will be deleted along with it.' : `${deps.length} items are calculated from this value and will be deleted along with it.`} This can’t be undone from here — use Undo if you change your mind.
       </span>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -264,9 +264,9 @@ function ConfirmDeleteModal({ confirm, plan, onCancel, onConfirm }) {
             <div key={r.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 11px', border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.fill }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <ChainIcon size={12} />
-                <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, color: WF.ink }}>{r.label}</span>
+                <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, color: WF.ink }}>{r.label}</span>
               </span>
-              <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink2 }}>{(r.link.rate * 100).toFixed(1).replace(/\.0$/, '')}% linked · {fmtShort(amt)}/yr</span>
+              <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink2 }}>{(r.link.rate * 100).toFixed(1).replace(/\.0$/, '')}% linked · {fmtShort(amt)}/yr</span>
             </div>);
 
         })}
@@ -531,12 +531,12 @@ function App() {
         <div style={{ borderBottom: `1px solid ${WF.line}`, background: WF.paper }}>
         <div style={{ maxWidth: 1148, margin: '0 auto', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <span style={{ fontFamily: WF.sans, fontWeight: 700, letterSpacing: -0.2, color: WF.ink, fontSize: "18px" }}>Soroban</span>
-            <span style={{ fontFamily: WF.mono, fontSize: 9, fontWeight: 400, color: WF.ink3, letterSpacing: 0.5, textTransform: 'uppercase' }}>beta</span>
+            <span style={{ fontFamily: WF.sans, fontWeight: 700, letterSpacing: -0.2, color: WF.ink, fontSize: WF.fs(18) }}>Soroban</span>
+            <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9), fontWeight: 400, color: WF.ink3, letterSpacing: 0.5, textTransform: 'uppercase' }}>beta</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <button className="wf-tab" title="Clear the plan and start over from the describe box" onClick={() => { const si = pdeep(p.items), se = pdeep(p.events); p.clearAll(); setOpenId(null); setToast({ msg: 'Cleared — describe your situation to start over', undo: () => { p.replaceItems(si, se); setToast(null); } }); }}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 10px', boxSizing: 'border-box', border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, fontFamily: WF.sans, fontSize: 12, fontWeight: 500, color: WF.ink2, cursor: 'pointer' }}>
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 10px', boxSizing: 'border-box', border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 500, color: WF.ink2, cursor: 'pointer' }}>
               <svg width="12" height="11" viewBox="0 0 13 11" fill="none" stroke={WF.ink2} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5.5H2M6 1.5l-4 4 4 4" /></svg>
               Welcome
             </button>
@@ -545,9 +545,9 @@ function App() {
             <div style={{ width: 1, height: 26, background: WF.line2 }} />
             <div style={{ position: 'relative' }}>
               <button className="wf-tab" onClick={() => setIoMenu((o) => !o)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 10px', boxSizing: 'border-box', border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, fontFamily: WF.sans, fontSize: 12, fontWeight: 500, color: WF.ink2, cursor: 'pointer' }}>
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 10px', boxSizing: 'border-box', border: `1px solid ${WF.line}`, borderRadius: 2, background: WF.paper, fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 500, color: WF.ink2, cursor: 'pointer' }}>
                 Import / Export
-                <span className="wf-caret" style={{ fontFamily: WF.mono, fontSize: 9, color: WF.ink3 }}>▾</span>
+                <span className="wf-caret" style={{ fontFamily: WF.mono, fontSize: WF.fs(9), color: WF.ink3 }}>▾</span>
               </button>
               {ioMenu && <div onClick={() => setIoMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 54 }} />}
               {ioMenu &&
@@ -555,13 +555,13 @@ function App() {
                   <div className="pr-hv" onClick={() => {setIoMenu(false);fileInputRef.current && fileInputRef.current.click();}}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', cursor: 'pointer' }}>
                     <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke={WF.ink2} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 7V1M2.5 4l3-3 3 3" /><path d="M1 9h9" /></svg>
-                    <span style={{ fontFamily: WF.sans, fontSize: 12, fontWeight: 500, color: WF.ink }}>Import JSON</span>
+                    <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 500, color: WF.ink }}>Import JSON</span>
                   </div>
                   <div style={{ height: 1, background: WF.line2 }} />
                   <div className="pr-hv" onClick={() => {setIoMenu(false);exportJSON();}}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', cursor: 'pointer' }}>
                     <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke={WF.ink2} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 4v6M2.5 7l3 3 3-3" /><path d="M1 1h9" /></svg>
-                    <span style={{ fontFamily: WF.sans, fontSize: 12, fontWeight: 500, color: WF.ink }}>Export JSON</span>
+                    <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12), fontWeight: 500, color: WF.ink }}>Export JSON</span>
                   </div>
                 </div>
                 }
@@ -577,27 +577,27 @@ function App() {
               {settingsOpen &&
                 <div style={{ position: 'absolute', top: 38, right: 0, width: 340, background: WF.paper, border: `1.5px solid ${WF.ink}`, borderRadius: 3, boxShadow: '0 12px 30px rgba(0,0,0,0.12)', zIndex: 55, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: 13, color: WF.ink }}>Settings</span>
+                    <span style={{ fontFamily: WF.sans, fontWeight: 700, fontSize: WF.fs(13), color: WF.ink }}>Settings</span>
                     <button className="wf-tab" title="Reset to default (2.5%)" onClick={() => p.setInflation(0.025)}
                     style={{ width: 22, height: 22, border: 'none', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, color: WF.ink, opacity: Math.abs(inflationPct - 2.5) > 0.05 ? 1 : 0.25 }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
                     </button>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                    <span style={{ fontFamily: WF.sans, fontSize: 12.5, color: WF.ink }}>Your age today</span>
+                    <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), color: WF.ink }}>Your age today</span>
                     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                       <input type="text" inputMode="numeric" value={p.plan.startAge}
                       onChange={(e) => {const d = e.target.value.replace(/[^0-9]/g, '').slice(0, 3);if (d === '') return;let v = parseInt(d, 10);if (v > 90) v = 90;p.setStartAge(v);if (v >= horizon) setHorizon(Math.min(v + 1, 100));}}
                       onBlur={() => {if (p.plan.startAge < 16) p.setStartAge(16);}}
-                      style={{ width: 52, textAlign: 'center', border: `1.5px solid ${WF.line}`, borderRadius: 2, padding: '6px 6px', fontFamily: WF.mono, fontSize: 13, fontWeight: 700, color: WF.ink, outline: 'none', background: WF.paper }} />
-                      <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink3 }}>yrs</span>
+                      style={{ width: 52, textAlign: 'center', border: `1.5px solid ${WF.line}`, borderRadius: 2, padding: '6px 6px', fontFamily: WF.mono, fontSize: WF.fs(13), fontWeight: 700, color: WF.ink, outline: 'none', background: WF.paper }} />
+                      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink3 }}>yrs</span>
                     </div>
                   </div>
                   <div style={{ height: 1, background: WF.line2 }} />
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                      <span style={{ fontFamily: WF.sans, fontSize: 12.5, color: WF.ink }}>Inflation rate</span>
-                      <span style={{ fontFamily: WF.mono, fontSize: 13, fontWeight: 700, color: WF.ink }}>{inflationPct.toFixed(1)}%</span>
+                      <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), color: WF.ink }}>Inflation rate</span>
+                      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(13), fontWeight: 700, color: WF.ink }}>{inflationPct.toFixed(1)}%</span>
                     </div>
                     <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
                       <div style={{ position: 'absolute', left: 0, right: 0, height: 2, background: WF.ink }} />
@@ -608,10 +608,10 @@ function App() {
                       <div style={{ position: 'absolute', left: `${inflationPct / 10 * 100}%`, transform: 'translateX(-50%)', width: 16, height: 16, borderRadius: '50%', background: WF.paper, border: `2px solid ${WF.ink}`, pointerEvents: 'none', zIndex: 3 }} />
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>0%</span>
-                      <span style={{ fontFamily: WF.mono, fontSize: 9.5, color: WF.ink3 }}>10%</span>
+                      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>0%</span>
+                      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(9.5), color: WF.ink3 }}>10%</span>
                     </div>
-                    <div style={{ fontFamily: WF.mono, fontSize: 10, color: WF.ink3, letterSpacing: '0.04em' }}>APPLIED TO ALL ITEMS WITH INFLATION.</div>
+                    <div style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3, letterSpacing: '0.04em' }}>APPLIED TO ALL ITEMS WITH INFLATION.</div>
                   </div>
                 </div>}
             </div>
@@ -639,8 +639,8 @@ function App() {
             <button onClick={() => setIntakeOpen((o) => !o)}
               style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', border: `1px solid ${intakeOpen ? WF.ink : WF.line}`, borderRadius: 0, background: WF.fill, cursor: 'pointer' }}>
               <Sparkle size={12} color={WF.ink2} />
-              <span style={{ fontFamily: WF.sans, fontSize: 12.5, fontWeight: 600, color: WF.ink, flexShrink: 0 }}>Your situation</span>
-              <span style={{ fontFamily: WF.mono, fontSize: 10.5, color: WF.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{intakeSummary}</span>
+              <span style={{ fontFamily: WF.sans, fontSize: WF.fs(12.5), fontWeight: 600, color: WF.ink, flexShrink: 0 }}>Your situation</span>
+              <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10.5), color: WF.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{intakeSummary}</span>
               <svg width="12" height="8" viewBox="0 0 12 8" fill="none" stroke={WF.ink2} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: intakeOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="M1 1.5L6 6.5L11 1.5" /></svg>
             </button>
           </div>
@@ -671,7 +671,7 @@ function App() {
           }
 
           {!empty && displaySeries &&
-          <p style={{ margin: '2px 0 0', fontFamily: WF.mono, fontSize: 10, lineHeight: 1.5, color: WF.ink3, textAlign: 'center' }}>ILLUSTRATIVE PROJECTION ONLY — NOT FINANCIAL ADVICE. AI CAN MAKE MISTAKES. ALWAYS CHECK IMPORTANT INFO.
+          <p style={{ margin: '2px 0 0', fontFamily: WF.mono, fontSize: WF.fs(10), lineHeight: 1.5, color: WF.ink3, textAlign: 'center' }}>ILLUSTRATIVE PROJECTION ONLY — NOT FINANCIAL ADVICE. AI CAN MAKE MISTAKES. ALWAYS CHECK IMPORTANT INFO.
 
           </p>
           }
