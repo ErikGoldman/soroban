@@ -41,7 +41,7 @@ function usePlanState(onMutate, horizonAge) {
 
   // series comes ONLY from the real Soroban engine (Monte Carlo median).
   // Until the first result lands, series is null and the UI shows a loading state.
-  const planKey = JSON.stringify([st.items, st.events, plan.horizonAge, plan.inflation]);
+  const planKey = JSON.stringify([st.items, st.events, plan.horizonAge, plan.startAge, plan.inflation]);
   const [eng, setEng] = React.useState(null);
   const [engineErr, setEngineErr] = React.useState(false);
   const [engineTick, setEngineTick] = React.useState(0);

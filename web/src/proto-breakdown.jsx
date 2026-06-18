@@ -179,13 +179,11 @@ function BreakdownModal({ pctKey, rows, onClose, initialYear }) {
               </BkSection>
             </div>
 
-            {/* tax + assets sold */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {/* tax by source */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
               <BkSection title="Tax paid">
+                {(d.taxSources || []).map((it) => <BkRow key={it.name} label={it.name} value={fmtMoney(it.amount)} />)}
                 <BkRow label="Total tax this year" value={d.taxPaid > 0.5 ? fmtMoney(d.taxPaid) : '$0'} strong={d.taxPaid > 0.5} dim={d.taxPaid <= 0.5} />
-              </BkSection>
-              <BkSection title="Assets sold to raise cash" count={d.sales.length || null} empty={d.sales.length ? null : 'nothing sold — cash flow covered spending'}>
-                {d.sales.map((it) => <BkRow key={it.name} label={it.name} value={fmtMoney(it.amount)} sub="proceeds" />)}
               </BkSection>
             </div>
           </div>

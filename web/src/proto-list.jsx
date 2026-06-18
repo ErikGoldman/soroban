@@ -70,6 +70,8 @@ function PItemRow({ plan, item, open, onToggle, onDelete, onSetChange, onToggleH
         } else {
           sub = `one-time in ${first.year}`;
         }
+      } else if (item.section === 'expense' && first.year > START_YEAR) {
+        sub = `starts in ${first.year}`;
       } else if (item.section === 'expense' && cs.length > 1) {
         const shown = cs.slice(0, 3);
         const parts = shown.map(c => `${fmtShort(c.amount)}${unit} in ${c.year}`);
@@ -139,31 +141,11 @@ function PItemRow({ plan, item, open, onToggle, onDelete, onSetChange, onToggleH
     onDrop={(e) => {e.preventDefault();const rect = e.currentTarget.getBoundingClientRect();const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';if (onDrop) onDrop(item.id, pos);}}
     onDragEnd={onDragEnd}
     onClick={(e) => {if (dragId) return;onToggle();}}
-    style={{ display: 'grid', gridTemplateColumns: '1fr 120px 26px 26px 16px', gap: 14, alignItems: 'center', padding: '12px 6px',
+    style={{ display: 'grid', gridTemplateColumns: '118px minmax(0, 1fr) 26px 26px 16px', gap: 14, alignItems: 'center', padding: '12px 6px',
       borderTop: dragOverId === item.id && dragOverPos === 'before' && dragId !== item.id ? `2px solid ${WF.ink}` : '2px solid transparent',
       borderBottom: dragOverId === item.id && dragOverPos === 'after' && dragId !== item.id ? `2px solid ${WF.ink}` : `1px solid ${WF.line2}`,
       cursor: rowHovered ? 'grab' : 'pointer', background: open ? '#f7f7f8' : undefined,
       opacity: item.hidden ? 0.38 : 1, transition: 'opacity .2s' }}>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-        {rowHovered && !dragId ?
-        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', opacity: 0.4 }}>
-            <svg width="8" height="12" viewBox="0 0 8 12" fill={WF.ink}>
-              <circle cx="2" cy="2" r="1.2" /><circle cx="6" cy="2" r="1.2" />
-              <circle cx="2" cy="6" r="1.2" /><circle cx="6" cy="6" r="1.2" />
-              <circle cx="2" cy="10" r="1.2" /><circle cx="6" cy="10" r="1.2" />
-            </svg>
-          </span> :
-
-        <span style={{ width: 7, height: 7, flexShrink: 0, borderRadius: isAsset ? 1 : '50%', transform: isAsset ? 'rotate(45deg)' : 'none', background: item.section === 'income' ? WF.ink : WF.paper, border: `1.5px solid ${WF.ink}` }} />
-        }
-        <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-            <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), fontWeight: 600, color: item.label.trim() ? WF.ink : WF.ink3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: 1 }}>{label}</span>
-            <span style={{ flexShrink: 0 }}><ItemTags item={item} /></span>
-          </span>
-          {linked ? <LinkChip plan={plan} item={item} /> : sub ? <span style={{ fontFamily: WF.mono, color: WF.ink3, fontSize: WF.fs(12) }}>{sub}</span> : null}
-        </span>
-      </span>
       {editing ?
       <input
         ref={inlineInputRef}
@@ -183,11 +165,20 @@ function PItemRow({ plan, item, open, onToggle, onDelete, onSetChange, onToggleH
             setEditing(false);
           } else if (e.key === 'Escape') { e.stopPropagation(); setEditing(false); }
         }}
-        style={{ justifySelf: 'end', width: 100, textAlign: 'right', fontFamily: WF.mono, fontSize: WF.fs(13.5), fontWeight: 600, color: WF.ink, border: 'none', borderBottom: `2px solid ${WF.ink}`, background: 'transparent', outline: 'none', fontVariantNumeric: 'tabular-nums', padding: '0 2px' }} /> :
+        style={{ justifySelf: 'stretch', width: '100%', textAlign: 'left', fontFamily: WF.mono, fontSize: WF.fs(13.5), fontWeight: 600, color: WF.ink, border: 'none', borderBottom: `2px solid ${WF.ink}`, background: 'transparent', outline: 'none', fontVariantNumeric: 'tabular-nums', padding: '0 2px' }} /> :
 
 
-      <span onClick={startEdit} style={{ justifySelf: 'end', fontFamily: WF.mono, fontSize: WF.fs(13.5), fontWeight: 600, color: WF.ink, fontVariantNumeric: 'tabular-nums', cursor: linked ? 'default' : 'text', borderBottom: linked ? 'none' : `1px dashed ${WF.line}` }}>{amountStr}</span>
+      <span onClick={startEdit} style={{ justifySelf: 'start', fontFamily: WF.mono, fontSize: WF.fs(13.5), fontWeight: 600, color: WF.ink, fontVariantNumeric: 'tabular-nums', cursor: linked ? 'default' : 'text', borderBottom: linked ? 'none' : `1px dashed ${WF.line}`, whiteSpace: 'nowrap' }}>{amountStr}</span>
       }
+      <span style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <span style={{ fontFamily: WF.sans, fontSize: WF.fs(13), fontWeight: 600, color: item.label.trim() ? WF.ink : WF.ink3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: 1 }}>{label}</span>
+            <span style={{ flexShrink: 0 }}><ItemTags item={item} /></span>
+          </span>
+          {linked ? <LinkChip plan={plan} item={item} /> : sub ? <span style={{ fontFamily: WF.mono, color: WF.ink3, fontSize: WF.fs(12) }}>{sub}</span> : null}
+        </span>
+      </span>
       <button className="pr-del" title={item.hidden ? 'show item' : 'hide item'} onClick={(e) => { e.stopPropagation(); onToggleHidden && onToggleHidden(); }} style={{ width: 22, height: 22, border: 'none', borderRadius: 0, background: 'transparent', color: WF.ink, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: item.hidden ? 0.7 : undefined }}>
         {item.hidden
           ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>

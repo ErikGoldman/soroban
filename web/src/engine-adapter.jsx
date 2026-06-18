@@ -43,6 +43,14 @@ function taxTreatmentOf(item) {
   return item.recurring === 'one-time' ? 'long-term-capital-gains' : 'wages';
 }
 
+function isCapitalGainTaxTreatment(taxTreatment) {
+  return taxTreatment === 'long-term-capital-gains' || taxTreatment === 'short-term-capital-gains';
+}
+
+function costBasisForIncomeAmount(item, amount) {
+  return Math.max(0, Math.min(amount, item.costBasis != null ? item.costBasis : amount * 0.8));
+}
+
 // seeded RNG so the simulation is stable across edits/re-renders
 function pMulberry32(seed) {
   let a = seed >>> 0;
@@ -81,10 +89,34 @@ function planToEngineInput(plan) {
       if (it.section === 'asset') continue;
       const amt = annualOf(plan, it, year);
       if (!amt) continue;
+      const taxTreatment = taxTreatmentOf(it);
+      if (it.section === 'income' && isCapitalGainTaxTreatment(taxTreatment)) {
+        const costBasis = costBasisForIncomeAmount(it, amt);
+        if (costBasis > 0.5) {
+          flows.push({
+            name: it.label || it.id,
+            type: it.section,
+            taxTreatment: 'not-taxable',
+            inflationAdjusted: false,
+            baseSignedAmount: costBasis,
+          });
+        }
+        const taxableGain = Math.max(0, amt - costBasis);
+        if (taxableGain > 0.5) {
+          flows.push({
+            name: it.label || it.id,
+            type: it.section,
+            taxTreatment,
+            inflationAdjusted: false,
+            baseSignedAmount: taxableGain,
+          });
+        }
+        continue;
+      }
       flows.push({
         name: it.label || it.id,
         type: it.section,
-        taxTreatment: taxTreatmentOf(it),
+        taxTreatment,
         inflationAdjusted: false,
         baseSignedAmount: it.section === 'expense' ? -amt : amt,
       });
@@ -175,6 +207,12 @@ function planToEngineInput(plan) {
         expectedReturn: isBond ? 0 : priceReturn * 100,
         volatility:     isBond ? 0 : volOf(it) * 100,
         sellProportion: 1,
+        ...(!RETIREMENT_TYPES.includes(it.assetType) ? {
+          saleTax: {
+            costBasis: it.costBasis != null ? Math.max(0, Math.min(sv, it.costBasis)) : sv * 0.8,
+            taxTreatment: 'long-term-capital-gains',
+          },
+        } : {}),
         ...(isBond && it.growth ? {
           cashGeneration: {
             name: 'interest',
@@ -245,7 +283,7 @@ function planToEngineInput(plan) {
 
 // turn ONE representative detail scenario into a clean year-by-year breakdown
 // (starting $ per asset, expenses by category, inflation, returns, tax, sales)
-function scenarioBreakdown(scenario, plan) {
+function scenarioBreakdown(scenario, plan, engine, taxProfile, taxes) {
   if (!scenario || !scenario.rows || !scenario.rows.length) return null;
   const get = (m, k) => (m && typeof m.get === 'function' ? m.get(k) : undefined);
   return scenario.rows.map((row) => {
@@ -265,17 +303,42 @@ function scenarioBreakdown(scenario, plan) {
       };
     }).filter((a) => Math.abs(a.start) > 0.5 || Math.abs(a.end) > 0.5);
 
-    const income = [], expenses = [], sales = [];
+    const income = [], expenses = [], sales = [], taxSourceInputs = [];
     (row.flowTotals || new Map()).forEach((v, k) => {
       if (k === 'Taxes paid') return;                       // shown separately
-      if (/ realized gain$/.test(k)) return;                // tax detail, not a flow
       if (/ contribution$/.test(k)) return;                 // internal reinvestment
-      if (/ sale proceeds$/.test(k)) { if (Math.abs(v) > 0.5) sales.push({ name: k.replace(/ sale proceeds$/, ''), amount: v }); return; }
+      if (/ sale proceeds$/.test(k)) {
+        if (Math.abs(v) > 0.5) sales.push({ name: k.replace(/ sale proceeds$/, ''), amount: v });
+        return;
+      }
+      if (/ realized gain$/.test(k)) {
+        if (v > 0.5) taxSourceInputs.push({ name: `Asset sale: ${k.replace(/ realized gain$/, '')}`, amount: v, taxTreatment: 'long-term-capital-gains' });
+        return;
+      }
       if (Math.abs(v) <= 0.5) return;
-      if (v >= 0) income.push({ name: k, amount: v });
-      else expenses.push({ name: k, amount: -v });
+      if (v >= 0) {
+        income.push({ name: k, amount: v });
+        const taxTreatment = taxTreatmentForBreakdownEntry(k, plan);
+        const taxableAmount = taxableAmountForBreakdownEntry(k, v, taxTreatment, plan);
+        if (isTaxableBreakdownTreatment(taxTreatment) && taxableAmount > 0.5) {
+          taxSourceInputs.push({ name: k, amount: taxableAmount, taxTreatment });
+        }
+      } else {
+        expenses.push({ name: k, amount: -v });
+      }
     });
-    income.sort((a, b) => b.amount - a.amount);
+    const incomeWithSales = [
+      ...income,
+      ...sales.map((sale) => ({ name: `Asset sale: ${sale.name}`, amount: sale.amount })),
+    ];
+    const taxSources = buildAttributedTaxSources({
+      sources: taxSourceInputs,
+      totalTax: row.taxAmount || 0,
+      engine,
+      taxProfile,
+      taxes,
+    });
+    incomeWithSales.sort((a, b) => b.amount - a.amount);
     expenses.sort((a, b) => b.amount - a.amount);
     sales.sort((a, b) => b.amount - a.amount);
 
@@ -286,9 +349,88 @@ function scenarioBreakdown(scenario, plan) {
       endAssets: row.endingAssets != null ? row.endingAssets : (row.totalAssets || 0),
       inflation: row.inflationRateApplied || 0,
       taxPaid: row.taxAmount || 0,
-      assets, income, expenses, sales,
+      assets, income: incomeWithSales, expenses, sales, taxSources,
     };
   });
+}
+
+function taxTreatmentForBreakdownEntry(entryName, plan) {
+  const item = (plan.items || []).find((candidate) => candidate && !candidate.hidden && candidate.label === entryName);
+  if (item) return taxTreatmentOf(item);
+  if (/ qualified dividends$/.test(entryName)) return 'qualified-dividends';
+  if (/ ordinary dividends$/.test(entryName)) return 'ordinary-income';
+  if (/ interest$/.test(entryName)) return 'ordinary-income';
+  return 'ordinary-income';
+}
+
+function taxableAmountForBreakdownEntry(entryName, amount, taxTreatment, plan) {
+  const item = (plan.items || []).find((candidate) => candidate && !candidate.hidden && candidate.label === entryName);
+  if (item && item.section === 'income' && isCapitalGainTaxTreatment(taxTreatment)) {
+    return Math.max(0, amount - costBasisForIncomeAmount(item, amount));
+  }
+  return amount;
+}
+
+function isTaxableBreakdownTreatment(taxTreatment) {
+  return !['tax-exempt-income', 'triple-exempt', 'nondeductible-expense', 'deductible-expense', 'not-taxable'].includes(taxTreatment);
+}
+
+function buildAttributedTaxSources({ sources, totalTax, engine, taxProfile, taxes }) {
+  if (!sources.length || totalTax <= 0.5) return [];
+  const weights = sources.map((source) => ({
+    name: source.name,
+    amount: source.amount,
+    weight: calculateStandaloneSourceTax(source, engine, taxProfile, taxes),
+  }));
+  const totalWeight = weights.reduce((sum, source) => sum + source.weight, 0);
+  const fallbackWeight = weights.reduce((sum, source) => sum + Math.max(0, source.amount), 0);
+  return weights
+    .map((source) => {
+      const share =
+        totalWeight > 0.5
+          ? source.weight / totalWeight
+          : Math.max(0, source.amount) / Math.max(fallbackWeight, 1);
+      return { name: source.name, amount: totalTax * share };
+    })
+    .filter((source) => source.amount > 0.5)
+    .sort((a, b) => b.amount - a.amount);
+}
+
+function calculateStandaloneSourceTax(source, engine, taxProfile, taxes) {
+  if (!engine || !taxProfile || !taxes) return 0;
+  const input = createBreakdownTaxInput();
+  applyBreakdownTaxTreatment(input, source.taxTreatment, source.amount);
+  return engine.computeHouseholdTaxes(input, taxProfile, taxes).totalTax || 0;
+}
+
+function createBreakdownTaxInput() {
+  return {
+    wages: 0,
+    ordinaryIncome: 0,
+    qualifiedDividends: 0,
+    shortTermCapitalGains: 0,
+    longTermCapitalGains: 0,
+    capitalLossDeduction: 0,
+    taxExemptIncome: 0,
+    stateLocalExemptIncome: 0,
+    tripleExemptIncome: 0,
+    deductibleExpenses: 0,
+    saltTaxesPaid: 0,
+    homeMortgageInterestPaid: 0,
+    homeMortgageAverageBalance: 0,
+    homeMortgageInterestDebtLimit: 0,
+  };
+}
+
+function applyBreakdownTaxTreatment(input, taxTreatment, amount) {
+  if (taxTreatment === 'wages') input.wages += amount;
+  else if (taxTreatment === 'ordinary-income') input.ordinaryIncome += amount;
+  else if (taxTreatment === 'qualified-dividends') input.qualifiedDividends += amount;
+  else if (taxTreatment === 'short-term-capital-gains') input.shortTermCapitalGains += amount;
+  else if (taxTreatment === 'long-term-capital-gains') input.longTermCapitalGains += amount;
+  else if (taxTreatment === 'state-local-exempt') input.stateLocalExemptIncome += amount;
+  else if (taxTreatment === 'tax-exempt-income') input.taxExemptIncome += amount;
+  else if (taxTreatment === 'triple-exempt') input.tripleExemptIncome += amount;
 }
 
 // run the real engine; returns a chart-ready series (array) with a `.breakdowns`
@@ -298,10 +440,11 @@ function runEngineProjection(plan) {
   if (!E) return null;
   const { years, input } = planToEngineInput(plan);
   const nyc = E.createDefaultNYCHouseholdTaxes('individual');
+  const taxes = nyc.taxes.map((t) => new E.Tax(t));
   const res = E.buildSimulationExecution(
     {
       ...input,
-      taxes: nyc.taxes.map((t) => new E.Tax(t)),
+      taxes,
       householdTaxProfile: nyc.profile,
       nextStandardNormal: pSeededNormal(0xC0FFEE),
       nextRandom: pMulberry32(0xBEEF),
@@ -328,11 +471,11 @@ function runEngineProjection(plan) {
       return sc ? E.selectRepresentativeSimulationScenario(details, sc.rows) : null;
     };
     breakdowns = {
-      p10: scenarioBreakdown(repFor(10), plan),
-      p25: scenarioBreakdown(repFor(25), plan),
-      nw:  scenarioBreakdown(repFor(50), plan),
-      p75: scenarioBreakdown(repFor(75), plan),
-      p90: scenarioBreakdown(repFor(90), plan),
+      p10: scenarioBreakdown(repFor(10), plan, E, nyc.profile, taxes),
+      p25: scenarioBreakdown(repFor(25), plan, E, nyc.profile, taxes),
+      nw:  scenarioBreakdown(repFor(50), plan, E, nyc.profile, taxes),
+      p75: scenarioBreakdown(repFor(75), plan, E, nyc.profile, taxes),
+      p90: scenarioBreakdown(repFor(90), plan, E, nyc.profile, taxes),
     };
   } catch (e) {
     console.warn('Soroban: could not build percentile breakdowns', e);

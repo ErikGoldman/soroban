@@ -302,6 +302,9 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
   const refs = plan.items.filter((i) => i.section === 'asset' && i.id !== item.id);
   const refItem = linked ? plan.items.find((i) => i.id === item.link.ref) : null;
   const refBy = referencedBy(plan, item.id);
+  const incomeTaxTreatment = item.taxAs || (item.recurring === 'one-time' ? 'long-term-capital-gains' : 'wages');
+  const incomeTaxedAsCapitalGain = incomeTaxTreatment === 'long-term-capital-gains' || incomeTaxTreatment === 'short-term-capital-gains';
+  const incomeBasisDefaultYear = (item.changes || []).find((change) => change && change.amount > 0)?.year ?? START_YEAR;
 
   // ─ ASSET editor ─
   if (isAsset) {
@@ -418,6 +421,17 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
                 <React.Fragment>
                   <div style={{ width: '100%', height: 1, background: WF.line2 }} />
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Eyebrow>cost basis</Eyebrow>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <NumCell
+                        value={item.costBasis != null ? item.costBasis : valueAt(item, START_YEAR) * 0.8}
+                        onChange={(v) => p.update(item.id, { costBasis: Math.max(0, v) })}
+                        w={104}
+                        strong />
+                      <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>tax basis</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <Eyebrow>qualified dividends</Eyebrow>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <PctCell
@@ -435,7 +449,7 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
                       <span style={{ fontFamily: WF.mono, fontSize: WF.fs(10), color: WF.ink3 }}>per year</span>
                     </div>
                   </div>
-                  <Anno style={{ width: '100%', marginTop: 2 }}>Qualified dividends taxed at preferential rates (20% + NIIT); ordinary at income rates. Both are generated on top of price appreciation.</Anno>
+                  <Anno style={{ width: '100%', marginTop: 2 }}>Sales are taxed on realized gain above cost basis. Qualified dividends use preferential rates; ordinary dividends use income rates.</Anno>
                 </React.Fragment>
               )}
             </div>
@@ -530,7 +544,17 @@ function ItemEditor({ p, item, onNavigate, onDelete }) {
             {item.section === 'income' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <Eyebrow>Taxed as</Eyebrow>
-                <Seg size="sm" options={[{ value: 'wages', label: 'Salary' }, { value: 'long-term-capital-gains', label: 'Capital gain' }, { value: 'tax-exempt-income', label: 'Untaxed' }]} value={item.taxAs || (item.recurring === 'one-time' ? 'long-term-capital-gains' : 'wages')} onChange={(v) => p.update(item.id, { taxAs: v })} />
+                <Seg size="sm" options={[{ value: 'wages', label: 'Salary' }, { value: 'long-term-capital-gains', label: 'Capital gain' }, { value: 'tax-exempt-income', label: 'Untaxed' }]} value={incomeTaxTreatment} onChange={(v) => p.update(item.id, { taxAs: v })} />
+              </div>
+            )}
+            {item.section === 'income' && incomeTaxedAsCapitalGain && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <Eyebrow>Cost basis</Eyebrow>
+                <NumCell
+                  value={item.costBasis != null ? item.costBasis : annualOf(plan, item, incomeBasisDefaultYear) * 0.8}
+                  onChange={(v) => p.update(item.id, { costBasis: Math.max(0, v) })}
+                  w={104}
+                  strong />
               </div>
             )}
             {item.section !== 'income' && (
